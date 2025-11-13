@@ -15,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+#try push 1 alaa
 @app.get("/")
 def read_root():
     return {"message": "Wejhetna backend is alive 🚀"}
