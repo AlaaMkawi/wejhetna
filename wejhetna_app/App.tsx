@@ -1,7 +1,7 @@
 /**
  * Wejhetna App - React Native + FastAPI test connection \
  * try 2 
- * try 2 
+ * try 2 567
  */
 
 import React, {useEffect, useState} from 'react';
