@@ -8,5 +8,5 @@
     "strict": false
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["**/node_modules", "**/Pods"]
+  "exclude": ["node_modules", "Pods"]
 }
