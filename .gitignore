@@ -1,0 +1,6 @@
+wejhetna_backend/venv/
+wejhetna_backend/.venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
