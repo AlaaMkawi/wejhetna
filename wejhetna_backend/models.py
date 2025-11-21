@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, Boolean
 from geoalchemy2 import Geography
 from db import Base
 
@@ -9,8 +9,8 @@ class Business(Base):
     name = Column(String, nullable=False)
     category = Column(String, nullable=True)
 
-    # מיקום גיאוגרפי: נקודת lat/lon
     location = Column(
         Geography(geometry_type="POINT", srid=4326),
         nullable=True
     )
+

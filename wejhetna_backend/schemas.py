@@ -1,6 +1,7 @@
 # schemas.py
 from pydantic import BaseModel
 
+
 # סכימה להצגת עסק (GET)
 class BusinessRead(BaseModel):
     id: int

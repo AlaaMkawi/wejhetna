@@ -1,4 +1,6 @@
 import os
+from typing import Generator
+
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -19,3 +21,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # בסיס לכל המודלים
 Base = declarative_base()
+
+
+# פונקציית get_db לשימוש ב-Depends ב-FastAPI
+def get_db() -> Generator:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
