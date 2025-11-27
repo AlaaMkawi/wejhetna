@@ -1,3 +1,5 @@
+import { MapView, Camera } from "@maplibre/maplibre-react-native";
+
 import React, { useState } from "react";
 import {
   SafeAreaView,
@@ -11,8 +13,15 @@ import {
 
 const API_BASE_URL = "http://10.0.2.2:8000"; // backend on your laptop
 
+const MAP_STYLE_URL =
+  "https://api.maptiler.com/maps/streets-v2/style.json?key=Js2mV1WY15ayeXH6ceQP";
+
+// [lon, lat] – around Be'er Sheva
+const INITIAL_CENTER: [number, number] = [34.8, 31.25];
+const INITIAL_ZOOM = 10;
+
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<"home" | "regular" | "driver">("home");
+const [currentScreen, setCurrentScreen] = useState<"home" | "regular" | "driver" | "map">("home");
 
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -32,14 +41,17 @@ export default function App() {
       setError("Network error: " + e.message);
     }
   };
-
+////////////////////
   const goHome = () => {
     resetMessages();
     setCurrentScreen("home");
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+  <SafeAreaView style={styles.container}>
+    {currentScreen === "map" ? (
+      <MapScreen onBack={goHome} />
+    ) : (
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Wejhetna – Auth Test</Text>
 
@@ -70,6 +82,17 @@ export default function App() {
                 />
               </View>
             </View>
+
+            <View style={styles.separator} />
+
+            {/* 🔹 NEW: button to open map */}
+            <Button
+              title="Open map"
+              onPress={() => {
+                resetMessages();
+                setCurrentScreen("map");
+              }}
+            />
           </>
         )}
 
@@ -99,8 +122,10 @@ export default function App() {
 
         {error && <Text style={styles.error}>ERROR: {error}</Text>}
       </ScrollView>
-    </SafeAreaView>
-  );
+    )}
+  </SafeAreaView>
+);
+
 }
 
 // ---------- Regular user signup form ----------
@@ -309,10 +334,48 @@ function DriverSignupForm({ onBack, setResult, setError }) {
     </View>
   );
 }
+function MapScreen({ onBack }) {
+  return (
+    <View style={styles.mapScreenContainer}>
+      <MapView
+        style={styles.mapFull}
+        mapStyle={MAP_STYLE_URL}
+        zoomEnabled={true}
+        scrollEnabled={true}
+        rotateEnabled={true}
+        pitchEnabled={true}
+      >
+        <Camera
+          centerCoordinate={INITIAL_CENTER}
+          zoomLevel={INITIAL_ZOOM}
+          minZoomLevel={8}   // don't zoom out to whole world
+          maxZoomLevel={17}  // don't zoom to stone level
+        />
+      </MapView>
+
+      <View style={styles.mapBackButton}>
+        <Button title="Back" onPress={onBack} />
+      </View>
+    </View>
+  );
+}
+
 
 // ---------- Styles ----------
 
 const styles = StyleSheet.create({
+    mapScreenContainer: {
+    flex: 1,
+  },
+  mapFull: {
+    flex: 1,
+  },
+  mapBackButton: {
+    position: "absolute",
+    top: 16,
+    left: 16,
+  },
+
   container: {
     flex: 1,
   },
