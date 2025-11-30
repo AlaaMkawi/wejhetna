@@ -6,8 +6,9 @@ import { RootStackParamList } from "./types";
 import AdminLoginScreen from "../screens/AdminLoginScreen";
 import AdminDriversScreen from "../screens/AdminDriversScreen";
 import UserLoginScreen from "../screens/UserLoginScreen";
-
-
+import AdminTabNavigator from "./AdminTabNavigator";
+import AdminCitiesScreen from "../screens/AdminCitiesScreen";
+import AdminCategoriesScreen from "../screens/AdminCategoriesScreen";
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
@@ -43,6 +44,29 @@ export default function AppNavigator() {
         name="UserLogin"
         component={UserLoginScreen}
         options={{ title: "User Login" }}
+      />
+
+{/* --- שינוי 2: הוספת ה-Tab Navigator המותאם אישית --- */}
+      <Stack.Screen
+        name="AdminPanel" // שם חדש שמייצג את כל פאנל הניהול עם הטאבים
+        component={AdminTabNavigator} // משתמשים בקומפוננטה המכילה את סרגל הניווט התחתון
+        options={{ 
+            headerShown: false, // חשוב להסתיר את ה-Header הרגיל של ה-Stack
+            title: "Admin Panel" 
+        }}
+      />
+            {/* 🔹 מסך ניהול ערים */}
+      <Stack.Screen
+        name="AdminCities"
+        component={AdminCitiesScreen}
+        options={{ title: "Manage Cities" }}
+      />
+
+      {/* 🔹 מסך ניהול קטגוריות */}
+      <Stack.Screen
+        name="AdminCategories"
+        component={AdminCategoriesScreen}
+        options={{ title: "Manage Categories" }}
       />
     </Stack.Navigator>
        

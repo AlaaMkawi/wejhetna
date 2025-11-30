@@ -2,6 +2,9 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy import func
+from models import Location
+from schemas import LocationCreate, LocationResponse
 
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
@@ -14,7 +17,6 @@ from uuid import uuid4
 import shutil
 from typing import List
 
-
 from db import Base, engine, SessionLocal
 import models
 from models import (
@@ -25,6 +27,14 @@ from models import (
     DriverVehicle,
     DriverStatus,
     VehicleStatus,
+    City,
+    Category,
+)
+from schemas import (
+    CityCreate,
+    CityResponse,
+    CategoryCreate,
+    CategoryResponse,
 )
 app = FastAPI(
     title="Wejhetna Backend",
@@ -505,3 +515,170 @@ def list_pending_drivers(db: Session = Depends(get_db)):
             )
         )
     return result
+
+# =========================
+# ADMIN – CATEGORIES
+# =========================
+
+from typing import List  # אם עדיין לא קיים למעלה
+
+@app.get("/admin/categories", response_model=List[CategoryResponse])
+def list_categories(db: Session = Depends(get_db)):
+    """
+    מחזיר את כל הקטגוריות הקיימות.
+    זה מה שהמסך של האדמין יציג ברשימה.
+    """
+    categories = db.query(Category).order_by(Category.id).all()
+    return categories
+
+
+@app.post("/admin/categories", response_model=CategoryResponse, status_code=201)
+def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
+    """
+    יצירת קטגוריה חדשה.
+    ברגע שהאדמין לוחץ "הוסף" – זה נקרא.
+    """
+    category = Category(**data.model_dump())
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@app.put("/admin/categories/{category_id}", response_model=CategoryResponse)
+def update_category(
+    category_id: int,
+    data: CategoryCreate,   # משתמשים באותם שדות (name_ar, name_he, name_en, icon_name, is_active)
+    db: Session = Depends(get_db),
+):
+    """
+    עדכון קטגוריה קיימת.
+    במסך האדמין תערכי את השם (ואפשר גם icon/is_active בעתיד).
+    """
+    category = db.query(Category).filter(Category.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    category.name_ar = data.name_ar
+    category.name_he = data.name_he
+    category.name_en = data.name_en
+    category.icon_name = data.icon_name
+    category.is_active = data.is_active
+
+    db.commit()
+    db.refresh(category)
+    return category
+# =========================
+# ADMIN – CITIES
+# =========================
+
+@app.get("/admin/cities", response_model=List[CityResponse])
+def list_cities(db: Session = Depends(get_db)):
+    """
+    מחזיר את כל הערים.
+    המסך של האדמין יציג אותן ברשימה.
+    """
+    cities = db.query(City).order_by(City.id).all()
+    return cities
+
+
+@app.post("/admin/cities", response_model=CityResponse, status_code=201)
+def create_city(data: CityCreate, db: Session = Depends(get_db)):
+    """
+    יצירת עיר חדשה.
+    """
+    city = City(**data.model_dump())
+    db.add(city)
+    db.commit()
+    db.refresh(city)
+    return city
+
+
+@app.put("/admin/cities/{city_id}", response_model=CityResponse)
+def update_city(
+    city_id: int,
+    data: CityCreate,   # אותם שדות name_ar / name_he / name_en
+    db: Session = Depends(get_db),
+):
+    """
+    עדכון שם עיר קיימת.
+    (כרגע שמות בלבד – כמו שביקשת.)
+    """
+    city = db.query(City).filter(City.id == city_id).first()
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+
+    city.name_ar = data.name_ar
+    city.name_he = data.name_he
+    city.name_en = data.name_en
+
+    db.commit()
+    db.refresh(city)
+    return city
+
+# =========================
+# LOCATIONS – POSTGIS POINT
+# =========================
+
+@app.post("/locations", response_model=LocationResponse, status_code=201)
+def create_location(data: LocationCreate, db: Session = Depends(get_db)):
+    """
+    יצירת לוקיישן חדש:
+    - מקבל lat, lon, source, osm_id
+    - שומר ב-PostGIS בתור POINT (lon, lat) עם SRID 4326
+    """
+
+    # בונים את ה-geom בעזרת PostGIS:
+    # ST_SetSRID(ST_MakePoint(lon, lat), 4326)
+    location = Location(
+        geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
+        source=data.source,
+        osm_id=data.osm_id,
+    )
+
+    db.add(location)
+    db.commit()
+    db.refresh(location)
+
+    # אנחנו יודעים כבר מה ה-lat/lon כי הגיעו מהפרונט
+    return LocationResponse(
+        id=location.id,
+        lat=data.lat,
+        lon=data.lon,
+        source=location.source,
+        osm_id=location.osm_id,
+        created_at=location.created_at,
+        updated_at=location.updated_at,
+    )
+@app.get("/locations/{location_id}", response_model=LocationResponse)
+def get_location(location_id: int, db: Session = Depends(get_db)):
+    """
+    שליפת לוקיישן לפי ID, כולל המרה מ-geom ל-lat/lon.
+    """
+
+    row = (
+        db.query(
+            Location.id,
+            func.ST_Y(Location.geom).label("lat"),   # latitude
+            func.ST_X(Location.geom).label("lon"),   # longitude
+            Location.source,
+            Location.osm_id,
+            Location.created_at,
+            Location.updated_at,
+        )
+        .filter(Location.id == location_id)
+        .first()
+    )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    return LocationResponse(
+        id=row.id,
+        lat=row.lat,
+        lon=row.lon,
+        source=row.source,
+        osm_id=row.osm_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )

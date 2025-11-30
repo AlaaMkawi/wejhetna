@@ -51,8 +51,8 @@ export default function AdminLoginScreen({ navigation }: Props) {
         return;
       }
 
-      // go to admin driver list, pass adminUserId
-      navigation.navigate("AdminDrivers", { adminUserId: json.id });
+      // ✅ לוגין מוצלח – מעבר לדף הבית של האדמין
+      navigation.navigate("AdminPanel");
     } catch (e: any) {
       setError("Network error: " + (e?.message || "unknown error"));
     } finally {
