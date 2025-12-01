@@ -7,6 +7,10 @@ export type RootStackParamList = {
   AdminDrivers: { adminUserId: number };
   UserLogin: { mode: "REGULAR" | "DRIVER" };
   AdminPanel: undefined;
+  AdminHomeScreen: undefined;
+  Login: undefined;
+  RegularHome: undefined;
+
 
   // 🔹 מסכי ניהול חדשים
   AdminCities: undefined;
