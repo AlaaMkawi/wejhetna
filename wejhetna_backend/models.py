@@ -9,9 +9,9 @@ from sqlalchemy import (
     Boolean,
 )
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.dialects.postgresql import ARRAY
-from geoalchemy2 import Geography          # will be used later for map/location
+from geoalchemy2 import Geography
 from db import Base
 import enum
 
@@ -147,6 +147,9 @@ class Location(Base):
         Geography(geometry_type="POINT", srid=4326),
         nullable=False,
     )
+    # שדות מחושבים מ-geom (לא באמת עמודות בטבלה)
+    lat = column_property(func.ST_Y(geom))  # latitude
+    lon = column_property(func.ST_X(geom))  # longitude
 
     # אם הלוקיישן קשור ל-OSM: למשל "node:123456789"
     osm_id = Column(String, nullable=True)
@@ -254,3 +257,4 @@ class Place(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+

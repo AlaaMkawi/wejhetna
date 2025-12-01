@@ -55,6 +55,27 @@ export default function AdminHomeScreen() {
       >
         <Text style={styles.buttonText}>Categories</Text>
       </TouchableOpacity>
+
+      {/* BUTTON: ADD PLACE FORM */}
+      <TouchableOpacity
+        style={styles.addPlaceButton}
+        onPress={() => navigation.navigate("AdminPlaceForm")}
+      >
+        <Text style={styles.buttonText}>+ Add Place</Text>
+      </TouchableOpacity>
+
+      {/* BUTTON: PICK LOCATION ON MAP */}
+      <TouchableOpacity
+        style={styles.pickLocationButton}
+        onPress={() =>
+          navigation.navigate("AdminPlaceMapPicker", {
+            initialLat: INITIAL_CENTER[1],
+            initialLon: INITIAL_CENTER[0],
+          })
+        }
+      >
+        <Text style={styles.buttonText}>📍 Pick Location</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -79,7 +100,7 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 
-  /* BUTTONS */
+  /* TOP BUTTONS */
   cityButton: {
     position: "absolute",
     top: 100,
@@ -89,7 +110,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 8,
   },
-
   categoryButton: {
     position: "absolute",
     top: 100,
@@ -97,6 +117,26 @@ const styles = StyleSheet.create({
     backgroundColor: "#FF3B70",
     paddingVertical: 10,
     paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+
+  /* BOTTOM BUTTONS */
+  addPlaceButton: {
+    position: "absolute",
+    bottom: 90,
+    left: 20,
+    backgroundColor: "#00897B",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  pickLocationButton: {
+    position: "absolute",
+    bottom: 90,
+    right: 20,
+    backgroundColor: "#6A1B9A",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 8,
   },
 

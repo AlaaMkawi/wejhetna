@@ -9,6 +9,9 @@ import UserLoginScreen from "../screens/UserLoginScreen";
 import AdminTabNavigator from "./AdminTabNavigator";
 import AdminCitiesScreen from "../screens/AdminCitiesScreen";
 import AdminCategoriesScreen from "../screens/AdminCategoriesScreen";
+import AdminPlaceFormScreen from "../screens/Admin/AdminPlaceFormScreen";
+import AdminPlaceMapPickerScreen from "../screens/Admin/AdminPlaceMapPickerScreen";
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
@@ -68,6 +71,17 @@ export default function AppNavigator() {
         component={AdminCategoriesScreen}
         options={{ title: "Manage Categories" }}
       />
+      <Stack.Screen
+        name="AdminPlaceForm"
+        component={AdminPlaceFormScreen}
+        options={{ title: "הוספת מקום חדש" }}
+      />
+      <Stack.Screen
+        name="AdminPlaceMapPicker"
+        component={AdminPlaceMapPickerScreen}
+        options={{ title: "בחירת מיקום על המפה" }}
+      />
+
     </Stack.Navigator>
        
   );
