@@ -1,4 +1,6 @@
 // src/screens/AdminPlaceFormScreen.tsx
+import { useTranslation } from "react-i18next";
+
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 
@@ -30,6 +32,7 @@ type AdminPlaceFormRouteParams = {
 };
 
 export default function AdminPlaceFormScreen() {
+  const { t } = useTranslation();
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const params = route.params as AdminPlaceFormRouteParams | undefined;
