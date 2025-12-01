@@ -7,11 +7,12 @@ from sqlalchemy import (
     ForeignKey,
     Enum,
     Boolean,
+    cast,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, column_property
 from sqlalchemy.dialects.postgresql import ARRAY
-from geoalchemy2 import Geography
+from geoalchemy2 import Geography, Geometry
 from db import Base
 import enum
 
@@ -148,8 +149,8 @@ class Location(Base):
         nullable=False,
     )
     # שדות מחושבים מ-geom (לא באמת עמודות בטבלה)
-    lat = column_property(func.ST_Y(geom))  # latitude
-    lon = column_property(func.ST_X(geom))  # longitude
+    lat = column_property(func.ST_Y(cast(geom, Geometry(srid=4326))))
+    lon = column_property(func.ST_X(cast(geom, Geometry(srid=4326))))
 
     # אם הלוקיישן קשור ל-OSM: למשל "node:123456789"
     osm_id = Column(String, nullable=True)
