@@ -657,6 +657,9 @@ def get_location(location_id: int, db: Session = Depends(get_db)):
 
     return location
 
+from sqlalchemy import func, or_, cast   # cast חדש
+from geoalchemy2 import Geography        # כדי לקסט ל-Geography
+
 @app.get("/places/map", response_model=List[PlaceResponse])
 def get_places_in_bbox(
     north: float,
@@ -665,23 +668,16 @@ def get_places_in_bbox(
     west: float,
     db: Session = Depends(get_db),
 ):
-    """
-    מחזיר את כל ה-places שהמיקום שלהם (Location.geom)
-    נמצא בתוך ה-bounding box שנשלח:
-    - north (lat)
-    - south (lat)
-    - east  (lon)
-    - west  (lon)
-    """
+    # envelope כ-geometry
+    envelope_geom = func.ST_MakeEnvelope(west, south, east, north, 4326)
 
-    # בונים מלבן גיאומטרי: ST_MakeEnvelope(west, south, east, north, 4326)
-    envelope = func.ST_MakeEnvelope(west, south, east, north, 4326)
+    # הקסטה ל-Geography (פוליגון גאוגרפי)
+    envelope_geog = cast(envelope_geom, Geography(geometry_type="POLYGON", srid=4326))
 
-    # מצטרפים ל-Location ומחזירים רק מקומות שהנקודה שלהם בתוך המלבן
     places = (
         db.query(Place)
         .join(Location, Place.location_id == Location.id)
-        .filter(func.ST_Intersects(Location.geom, envelope))
+        .filter(func.ST_Intersects(Location.geom, envelope_geog))
         .all()
     )
 
