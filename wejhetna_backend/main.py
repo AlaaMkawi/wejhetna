@@ -3,9 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from sqlalchemy import func
-from models import Location
 from schemas import LocationCreate, LocationResponse
-
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from typing import Optional, List
@@ -16,7 +14,7 @@ from pathlib import Path
 from uuid import uuid4
 import shutil
 from typing import List
-
+from models import Location, Place
 from db import Base, engine, SessionLocal
 import models
 from models import (
@@ -29,12 +27,20 @@ from models import (
     VehicleStatus,
     City,
     Category,
+    Location,
+    Place,
+    PlaceType,
 )
 from schemas import (
     CityCreate,
     CityResponse,
     CategoryCreate,
     CategoryResponse,
+    LocationCreate,
+    LocationResponse,
+    PlaceCreate,
+    PlaceResponse,
+    AdminPlaceCreate,
 )
 app = FastAPI(
     title="Wejhetna Backend",
@@ -627,9 +633,6 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
     - מקבל lat, lon, source, osm_id
     - שומר ב-PostGIS בתור POINT (lon, lat) עם SRID 4326
     """
-
-    # בונים את ה-geom בעזרת PostGIS:
-    # ST_SetSRID(ST_MakePoint(lon, lat), 4326)
     location = Location(
         geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
         source=data.source,
@@ -640,45 +643,193 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(location)
 
-    # אנחנו יודעים כבר מה ה-lat/lon כי הגיעו מהפרונט
-    return LocationResponse(
-        id=location.id,
-        lat=data.lat,
-        lon=data.lon,
-        source=location.source,
-        osm_id=location.osm_id,
-        created_at=location.created_at,
-        updated_at=location.updated_at,
-    )
+    # עכשיו יש ל-location גם lat וגם lon מתוך column_property
+    return location
+
 @app.get("/locations/{location_id}", response_model=LocationResponse)
 def get_location(location_id: int, db: Session = Depends(get_db)):
     """
-    שליפת לוקיישן לפי ID, כולל המרה מ-geom ל-lat/lon.
+    שליפת לוקיישן לפי ID.
     """
-
-    row = (
-        db.query(
-            Location.id,
-            func.ST_Y(Location.geom).label("lat"),   # latitude
-            func.ST_X(Location.geom).label("lon"),   # longitude
-            Location.source,
-            Location.osm_id,
-            Location.created_at,
-            Location.updated_at,
-        )
-        .filter(Location.id == location_id)
-        .first()
-    )
-
-    if not row:
+    location = db.query(Location).filter(Location.id == location_id).first()
+    if not location:
         raise HTTPException(status_code=404, detail="Location not found")
 
-    return LocationResponse(
-        id=row.id,
-        lat=row.lat,
-        lon=row.lon,
-        source=row.source,
-        osm_id=row.osm_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+    return location
+
+@app.get("/places/map", response_model=List[PlaceResponse])
+def get_places_in_bbox(
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+    db: Session = Depends(get_db),
+):
+    """
+    מחזיר את כל ה-places שהמיקום שלהם (Location.geom)
+    נמצא בתוך ה-bounding box שנשלח:
+    - north (lat)
+    - south (lat)
+    - east  (lon)
+    - west  (lon)
+    """
+
+    # בונים מלבן גיאומטרי: ST_MakeEnvelope(west, south, east, north, 4326)
+    envelope = func.ST_MakeEnvelope(west, south, east, north, 4326)
+
+    # מצטרפים ל-Location ומחזירים רק מקומות שהנקודה שלהם בתוך המלבן
+    places = (
+        db.query(Place)
+        .join(Location, Place.location_id == Location.id)
+        .filter(func.ST_Intersects(Location.geom, envelope))
+        .all()
     )
+
+    return places
+
+# =========================
+# PLACES API
+# =========================
+
+@app.post("/places", response_model=PlaceResponse, status_code=201)
+def create_place(data: PlaceCreate, db: Session = Depends(get_db)):
+    """
+    יצירת מקום חדש.
+    מקבל:
+    - location_id (חובה)
+    - city_id
+    - category_id (רק אם זה BUSINESS)
+    - place_type
+    - name
+    - ועוד שדות אופציונלים
+    """
+
+    # בדיקה שה-location קיים
+    location = db.query(Location).filter(Location.id == data.location_id).first()
+    if not location:
+        raise HTTPException(status_code=404, detail="Location not found")
+
+    # בדיקה שהעיר קיימת
+    city = db.query(City).filter(City.id == data.city_id).first()
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+
+    # אם זה BUSINESS — חייב category
+    if data.place_type == PlaceType.BUSINESS and not data.category_id:
+        raise HTTPException(status_code=400, detail="Business must have a category")
+
+    # בדיקת קטגוריה (אם יש)
+    category = None
+    if data.category_id:
+        category = db.query(Category).filter(Category.id == data.category_id).first()
+        if not category:
+            raise HTTPException(status_code=404, detail="Category not found")
+
+    # אם יש בעל עסק — לבדוק שקיים ושהוא באמת BUSINESS_OWNER
+    owner = None
+    if data.owner_user_id:
+        owner = db.query(User).filter(User.id == data.owner_user_id).first()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Owner user not found")
+
+        if owner.role != UserRole.BUSINESS_OWNER:
+            raise HTTPException(status_code=400, detail="User is not a business owner")
+
+    # יוצרים את המקום
+    place = Place(**data.model_dump())
+    db.add(place)
+    db.commit()
+    db.refresh(place)
+
+    # מחזירים FULL RESPONSE
+    return place
+@app.get("/places/{place_id}", response_model=PlaceResponse)
+def get_place(place_id: int, db: Session = Depends(get_db)):
+    """
+    שליפת מקום כולל:
+    - location (lat/lon)
+    - city
+    - category
+    - owner (אם קיים)
+    """
+
+    place = db.query(Place).filter(Place.id == place_id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    return place
+
+from typing import List
+@app.post("/admin/places", response_model=PlaceResponse, status_code=201)
+def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
+    """
+    אדמין יוצר מקום חדש:
+    - יוצר Location (geom) מתוך lat/lon
+    - בודק city / category / owner
+    - יוצר Place
+    """
+
+    # 1) ליצור Location מ-lat/lon
+    location = Location(
+        geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
+        source=data.source,
+        osm_id=data.osm_id,
+    )
+    db.add(location)
+    db.flush()  # כדי לקבל location.id בלי commit עדיין
+
+    # 2) בדיקה שהעיר קיימת
+    city = db.query(City).filter(City.id == data.city_id).first()
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+
+    # 3) אם זה BUSINESS – חייב category_id
+    if data.place_type == PlaceType.BUSINESS and not data.category_id:
+        raise HTTPException(status_code=400, detail="Business must have a category")
+
+    # 4) אם יש category_id – לבדוק שקיימת
+    category = None
+    if data.category_id:
+        category = db.query(Category).filter(Category.id == data.category_id).first()
+        if not category:
+            raise HTTPException(status_code=404, detail="Category not found")
+
+    # 5) אם owner_user_id קיים – לבדוק שהוא BUSINESS_OWNER
+    owner = None
+    if data.owner_user_id:
+        owner = db.query(User).filter(User.id == data.owner_user_id).first()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Owner user not found")
+        if owner.role != UserRole.BUSINESS_OWNER:
+            raise HTTPException(status_code=400, detail="User is not a business owner")
+
+    # 6) ליצור את ה-Place עצמו
+    place = Place(
+        location_id=location.id,
+        city_id=data.city_id,
+        category_id=data.category_id,
+        place_type=data.place_type,
+        name=data.name,
+        can_be_claimed=data.can_be_claimed,
+        description=data.description,
+        phone=data.phone,
+        opening_hours=data.opening_hours,
+        main_image_url=data.main_image_url,
+        social_links=data.social_links,
+        owner_user_id=data.owner_user_id,
+    )
+    db.add(place)
+    db.commit()
+
+    db.refresh(place)
+    db.refresh(location)
+
+    return place
+@app.get("/admin/places", response_model=List[PlaceResponse])
+def admin_list_places(db: Session = Depends(get_db)):
+    """
+    מחזיר את כל המקומות (כולל city + category + location).
+    ישמש לרשימה בטבלת האדמין.
+    """
+    places = db.query(Place).order_by(Place.id).all()
+    return places

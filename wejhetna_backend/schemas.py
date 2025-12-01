@@ -126,3 +126,31 @@ class PlaceResponse(PlaceBase):
 
     class Config:
         orm_mode = True
+
+class AdminPlaceCreate(BaseModel):
+    """
+    מה שטופס האדמין ישלח כדי ליצור מקום חדש + לוקיישן.
+    """
+
+    # ---------- שדות של PLACE ----------
+    name: str
+    place_type: PlaceType          # BUSINESS / PUBLIC_SERVICE
+
+    city_id: int                   # חובה – לכל מקום יש עיר
+    category_id: Optional[int] = None  # חובה רק אם זה BUSINESS (נבדוק בלוגיקה)
+
+    can_be_claimed: bool = True
+
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    opening_hours: Optional[str] = None
+    main_image_url: Optional[str] = None
+    social_links: Optional[str] = None
+
+    owner_user_id: Optional[int] = None  # אם זה עסק משויך לבעלים
+
+    # ---------- שדות של LOCATION ----------
+    lat: float = Field(..., description="Latitude")
+    lon: float = Field(..., description="Longitude")
+    source: str = Field("MAP_PICK", description="MAP_PICK / GPS / OSM_SEARCH")
+    osm_id: Optional[str] = Field(None, description="OSM feature id like 'node:123456789'")
