@@ -11,6 +11,9 @@ import AdminCitiesScreen from "../screens/AdminCitiesScreen";
 import AdminCategoriesScreen from "../screens/AdminCategoriesScreen";
 import AdminPlaceFormScreen from "../screens/Admin/AdminPlaceFormScreen";
 import AdminPlaceMapPickerScreen from "../screens/Admin/AdminPlaceMapPickerScreen";
+import LoginScreen from "../screens/LoginScreen";
+import AdminHomeScreen from "../screens/AdminHomeScreen";
+import RegularHomeScreen from "../screens/RegularAccount/RegularHomeScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -23,7 +26,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="Home"
         component={HomeScreen}
-        options={{ title: "Wejhetna Map" }}
+        options={{ headerShown: false }}
       />
 
       <Stack.Screen
@@ -81,8 +84,30 @@ export default function AppNavigator() {
         component={AdminPlaceMapPickerScreen}
         options={{ title: "בחירת מיקום על המפה" }}
       />
+      <Stack.Screen
+        name="Login"
+        component={LoginScreen}
+        options={{ title: "Login" }}
+      />
 
-    </Stack.Navigator>
+     <Stack.Screen
+        name="AdminHomeScreen"
+        component={AdminHomeScreen}
+        options={{ title: "Admin Home" }}
+      />
+      <Stack.Screen
+  name="RegularHome"
+  component={RegularHomeScreen}
+  options={{ title: "User Home" }}
+/>
+
+
+
+
+      </Stack.Navigator>
+
+
+
        
   );
 }
