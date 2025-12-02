@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Linking,
-  I18nManager,
 } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
@@ -23,8 +22,6 @@ const DARK_TEAL = "#0f5b63";
 
 export default function LoginScreen({ navigation }: Props) {
   const { t } = useTranslation();
-  const isRTL = I18nManager.isRTL;
-
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -32,7 +29,7 @@ export default function LoginScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async () => {
-    setError(null);
+  setError(null);
 
     if (!usernameOrEmail.trim() || !password.trim()) {
       setError(t("login_missing_fields"));
@@ -46,13 +43,13 @@ export default function LoginScreen({ navigation }: Props) {
         password: password.trim(),
       };
 
-      const res = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
       if (!res.ok) {
         let message = t("invalid_credentials");
@@ -71,13 +68,39 @@ export default function LoginScreen({ navigation }: Props) {
         return;
       }
 
-      const lower = usernameOrEmail.trim().toLowerCase();
-      const isAdmin = lower === "admin" || lower.startsWith("admin@");
+// 👇 use the REAL role + id from backend
+    const role = data.role;
+    const status = data.status;
+    const userId = data.id;
+
+    if (role === "ADMIN") {
+      if (status !== "ACTIVE") {
+        setError("Admin account is not active.");
+        return;
+      }
+
+      // Go into AdminTabs WITH adminUserId
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: "AdminTabs",
+            params: { adminUserId: userId }, // 👈 this is what approve/reject will use
+          },
+        ],
+      });
+    } else {
+      // Non-admin (regular / driver) – for now send to RegularHome
+      if (status !== "ACTIVE") {
+        setError("Your account is not active yet.");
+        return;
+      }
 
       navigation.reset({
         index: 0,
-        routes: [{ name: isAdmin ? "AdminTabs" : "RegularHome" }],
+        routes: [{ name: "RegularHome" }],
       });
+    }
     } catch (e: any) {
       setError("Network error: " + e.message);
     } finally {
@@ -103,10 +126,7 @@ export default function LoginScreen({ navigation }: Props) {
 
         {/* Username input */}
         <TextInput
-          style={[
-            styles.input,
-            { textAlign: "right" },
-          ]}
+          style={[styles.input, styles.inputRight]}
           placeholder={t("username_or_email")}
           value={usernameOrEmail}
           onChangeText={setUsernameOrEmail}
@@ -117,10 +137,7 @@ export default function LoginScreen({ navigation }: Props) {
         {/* Password container */}
         <View style={styles.passwordContainer}>
           <TextInput
-            style={[
-              styles.passwordInput,
-              { textAlign: "right" },
-            ]}
+            style={styles.passwordInput}
             placeholder={t("password")}
             secureTextEntry={!showPassword}
             value={password}
@@ -156,24 +173,21 @@ export default function LoginScreen({ navigation }: Props) {
         </TouchableOpacity>
 
         {/* New user? */}
-        <View style={{
-        marginTop: 14,
-        flexDirection: "row",
-        justifyContent: "center",
-        alignItems: "center",
-      }}>
-        <Text style={styles.newUserText}>{t("new_user_question_")}</Text>
-        <TouchableOpacity onPress={() => navigation.navigate("SignUp")}>
-          <Text style={styles.signUpText}>{t("sign_up")}</Text>
-        </TouchableOpacity>
-      </View>
-
+        <View style={styles.newUserRow}>
+          <Text style={styles.newUserText}>{t("new_user_question_")}</Text>
+          <TouchableOpacity onPress={() => navigation.navigate("SignUp")}>
+            <Text style={styles.signUpText}>{t("sign_up")}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.contactText}>{t("contact_us")}</Text>
-        <TouchableOpacity onPress={handleContactEmail} style={styles.gmailIconBtn}>
+        <TouchableOpacity
+          onPress={handleContactEmail}
+          style={styles.gmailIconBtn}
+        >
           <Ionicons name="mail" size={24} color={DARK_TEAL} />
         </TouchableOpacity>
       </View>
@@ -232,38 +246,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#234348",
   },
+  inputRight: {
+    textAlign: "right",
+  },
   passwordContainer: {
-  flexDirection: "row-reverse",   // RTL: icon left, text right
-  justifyContent: "space-between",
-  alignItems: "center",
-  backgroundColor: "#f5fdff",
-  borderRadius: 20,
-  borderWidth: 1,
-  borderColor: "#d6ebee",
-  paddingHorizontal: 14,
-  marginBottom: 8,
-},
-
-
+    flexDirection: "row-reverse", // RTL: icon left, text right
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#f5fdff",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
   passwordInput: {
-  flex: 1,
-  textAlign: "right",
-  paddingVertical: 10,
-  fontSize: 14,
-  color: "#234348",
-  marginRight: 10,   // extra spacing from eye icon
-},
-
-
- eyeButton: {
-  paddingHorizontal: 8,
-  paddingVertical: 4,
-  justifyContent: "center",
-  alignItems: "center",
-},
-
-
-
+    flex: 1,
+    textAlign: "right",
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#234348",
+    marginRight: 10, // extra spacing from eye icon
+  },
+  eyeButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   error: {
     color: "#d7263d",
     textAlign: "center",
@@ -285,8 +295,9 @@ const styles = StyleSheet.create({
   },
   newUserRow: {
     marginTop: 14,
-    alignItems: "center",
+    flexDirection: "row",
     justifyContent: "center",
+    alignItems: "center",
   },
   newUserText: {
     fontSize: 13,

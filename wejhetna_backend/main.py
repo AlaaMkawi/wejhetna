@@ -17,6 +17,9 @@ from typing import List
 from models import Location, Place
 from db import Base, engine, SessionLocal
 import models
+import smtplib
+from email.message import EmailMessage
+import os
 from models import (
     User,
     UserRole,
@@ -42,11 +45,46 @@ from schemas import (
     PlaceResponse,
     AdminPlaceCreate,
 )
+import requests
+
+def find_osm_poi(lat: float, lon: float):
+    """
+    מחפש אובייקט OSM ליד הנקודה.
+    מחזיר מספר osm_id אם נמצא – אחרת None.
+    """
+
+    overpass_url = "https://overpass-api.de/api/interpreter"
+
+    query = f"""
+    [out:json];
+    (
+      node(around:25,{lat},{lon})["name"];
+      way(around:25,{lat},{lon})["name"];
+      relation(around:25,{lat},{lon})["name"];
+    );
+    out center;
+    """
+
+    try:
+        res = requests.post(overpass_url, data={"data": query}, timeout=4)
+        data = res.json()
+
+        if "elements" in data and len(data["elements"]) > 0:
+            # לוקחים את הראשון
+            elem = data["elements"][0]
+            return str(elem.get("id"))
+    except Exception as e:
+        print("OSM lookup failed:", e)
+
+    return None
+
 app = FastAPI(
     title="Wejhetna Backend",
     version="0.1.0"
 )
 Base.metadata.create_all(bind=engine)
+EMAIL_USER = "wejhetna@gmail.com"   # <– put the sender email here
+EMAIL_PASS = "cdoj zsjt xpqf uelp"   # <– app password from Gmail
 
 # CORS (לאפליקציית React Native)
 app.add_middleware(
@@ -64,14 +102,40 @@ def get_db():
     finally:
         db.close()
 
-
 def send_email(to_email: str, subject: str, body: str):
-    # TODO: replace with real email sending (SMTP, SendGrid, etc.)
-    print("=== EMAIL ===")
-    print("To:", to_email)
-    print("Subject:", subject)
-    print("Body:", body)
-    print("=============")
+    """
+    Send a simple email using Gmail SMTP.
+    Uses EMAIL_USER and EMAIL_PASS defined above.
+    """
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("Email config missing, skipping real send.")
+        print("=== EMAIL (FAKE) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print("Email sent to", to_email)
+    except Exception as e:
+        print("Error sending email:", e)
+        # still print for debugging
+        print("=== EMAIL (FAILED TO SEND) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
+
 
 # ----- File uploads (local for now) -----
 UPLOAD_DIR = Path("uploads")
@@ -630,20 +694,38 @@ def update_city(
 def create_location(data: LocationCreate, db: Session = Depends(get_db)):
     """
     יצירת לוקיישן חדש:
-    - מקבל lat, lon, source, osm_id
+    - מקבל lat, lon (והפרונט רשאי לשלוח גם source / osm_id אבל לא חייב)
+    - מנסה לזהות אוטומטית OSM לפי lat/lon
     - שומר ב-PostGIS בתור POINT (lon, lat) עם SRID 4326
     """
+
+    # 🔍 1. ניסיון לזהות OSM לפי הקואורדינטות
+    print(">>> TRYING OSM LOOKUP FOR:", data.lat, data.lon)
+    detected_osm_id = find_osm_feature(data.lat, data.lon)
+    print(">>> OSM RESULT:", detected_osm_id)
+
+    # 2. קובעים מה לשמור בפועל
+    if data.osm_id:                       # אם האדמין הכניס ידנית – נעדיף את זה
+        final_osm_id = data.osm_id
+        final_source = data.source or "MAP_PICK"
+    elif detected_osm_id:                 # אם זיהינו אוטומטית
+        final_osm_id = detected_osm_id
+        final_source = "MAP_PICK"
+    else:                                 # לא מצאנו כלום
+        final_osm_id = None
+        final_source = data.source or "MAP_PICK"
+
+    # 3. יצירת ה־Location עם ה־OSM ID (אם נמצא)
     location = Location(
         geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
-        source=data.source,
-        osm_id=data.osm_id,
+        source=final_source,
+        osm_id=final_osm_id,
     )
 
     db.add(location)
     db.commit()
     db.refresh(location)
 
-    # עכשיו יש ל-location גם lat וגם lon מתוך column_property
     return location
 
 @app.get("/locations/{location_id}", response_model=LocationResponse)
@@ -756,41 +838,111 @@ def get_place(place_id: int, db: Session = Depends(get_db)):
     return place
 
 from typing import List
+
+@app.get("/admin/places", response_model=List[PlaceResponse])
+def admin_list_places(db: Session = Depends(get_db)):
+    """
+    מחזיר את כל המקומות (כולל city + category + location).
+    ישמש לרשימה בטבלת האדמין.
+    """
+    places = db.query(Place).order_by(Place.id).all()
+    return places
+
+import httpx
+
+import httpx
+
+import httpx
+
+def find_osm_feature(lat: float, lon: float, radius: int = 50):
+    """
+    מזהה את האובייקט הקרוב ביותר ב־OSM
+    lat = קו רוחב
+    lon = קו אורך
+    radius = רדיוס במטרים לחיפוש סביב הנקודה
+    """
+    query = f"""
+    [out:json][timeout:10];
+    (
+      node(around:{radius},{lat},{lon});
+      way(around:{radius},{lat},{lon});
+      relation(around:{radius},{lat},{lon});
+    );
+    out center;
+    """
+
+    try:
+        r = httpx.post(
+            "https://overpass-api.de/api/interpreter",
+            data=query,
+            timeout=10.0
+        )
+
+        data = r.json()
+        print(">>> OVERPASS RAW ELEMENTS COUNT:", len(data.get("elements", [])))
+
+        if "elements" not in data or len(data["elements"]) == 0:
+            return None
+
+        el = data["elements"][0]
+        return f"{el['type']}:{el['id']}"
+
+    except Exception as e:
+        print("OVERPASS ERROR:", e)
+        return None
+
+
 @app.post("/admin/places", response_model=PlaceResponse, status_code=201)
 def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
     """
-    אדמין יוצר מקום חדש:
-    - יוצר Location (geom) מתוך lat/lon
-    - בודק city / category / owner
-    - יוצר Place
+    אדמין יוצר מקום חדש עם בדיקה אוטומטית מול OSM.
     """
 
-    # 1) ליצור Location מ-lat/lon
+    # -----------------------------------------
+    # 🔍 בדיקת OSM — לפני יצירת Location
+    # -----------------------------------------
+    detected_osm_id = find_osm_feature(data.lat, data.lon)
+
+    if detected_osm_id:
+        final_source = "MAP_PICK"
+        final_osm_id = detected_osm_id
+    else:
+        final_source = "MAP_PICK"
+        final_osm_id = None
+
+    # -----------------------------------------
+    # 1) יצירת לוקיישן
+    # -----------------------------------------
     location = Location(
         geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
-        source=data.source,
-        osm_id=data.osm_id,
+        source=final_source,
+        osm_id=final_osm_id,
     )
     db.add(location)
-    db.flush()  # כדי לקבל location.id בלי commit עדיין
+    db.flush()  # לקבל location_id
 
-    # 2) בדיקה שהעיר קיימת
+    # -----------------------------------------
+    # 2) בדיקת עיר
+    # -----------------------------------------
     city = db.query(City).filter(City.id == data.city_id).first()
     if not city:
         raise HTTPException(status_code=404, detail="City not found")
 
-    # 3) אם זה BUSINESS – חייב category_id
+    # -----------------------------------------
+    # 3) בדיקת קטגוריה (לעסק)
+    # -----------------------------------------
     if data.place_type == PlaceType.BUSINESS and not data.category_id:
         raise HTTPException(status_code=400, detail="Business must have a category")
 
-    # 4) אם יש category_id – לבדוק שקיימת
     category = None
     if data.category_id:
         category = db.query(Category).filter(Category.id == data.category_id).first()
         if not category:
             raise HTTPException(status_code=404, detail="Category not found")
 
-    # 5) אם owner_user_id קיים – לבדוק שהוא BUSINESS_OWNER
+    # -----------------------------------------
+    # 4) בדיקת בעל עסק
+    # -----------------------------------------
     owner = None
     if data.owner_user_id:
         owner = db.query(User).filter(User.id == data.owner_user_id).first()
@@ -799,7 +951,9 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
         if owner.role != UserRole.BUSINESS_OWNER:
             raise HTTPException(status_code=400, detail="User is not a business owner")
 
-    # 6) ליצור את ה-Place עצמו
+    # -----------------------------------------
+    # 5) יצירת Place
+    # -----------------------------------------
     place = Place(
         location_id=location.id,
         city_id=data.city_id,
@@ -819,13 +973,4 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
 
     db.refresh(place)
     db.refresh(location)
-
     return place
-@app.get("/admin/places", response_model=List[PlaceResponse])
-def admin_list_places(db: Session = Depends(get_db)):
-    """
-    מחזיר את כל המקומות (כולל city + category + location).
-    ישמש לרשימה בטבלת האדמין.
-    """
-    places = db.query(Place).order_by(Place.id).all()
-    return places
