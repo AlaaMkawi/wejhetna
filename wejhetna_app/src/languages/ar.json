@@ -1,4 +1,11 @@
 {
   "login": "تسجيل الدخول",
-  "create_account": "إنشاء حساب"
+  "create_account": "إنشاء حساب",
+  "login_missing_fields": "يرجى إدخال اسم المستخدم/البريد الإلكتروني وكلمة المرور.",
+  "welcome_back": "مرحباً بعودتك!",
+  "username_or_email": "اسم المستخدم أو البريد الإلكتروني",
+  "password": "كلمة المرور",
+  "new_user_question_": " مستخدم جديد؟",
+  "sign_up": "تسجيل",
+  "contact_us": "اتصل بنا"
 }
