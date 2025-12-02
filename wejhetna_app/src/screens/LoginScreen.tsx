@@ -23,8 +23,7 @@ const DARK_TEAL = "#0f5b63";
 
 export default function LoginScreen({ navigation }: Props) {
   const { t } = useTranslation();
-  const isRTL = I18nManager.isRTL;
-
+  const isRTL = I18nManager.isRTL; 
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
