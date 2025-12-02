@@ -17,6 +17,9 @@ from typing import List
 from models import Location, Place
 from db import Base, engine, SessionLocal
 import models
+import smtplib
+from email.message import EmailMessage
+import os
 from models import (
     User,
     UserRole,
@@ -47,6 +50,8 @@ app = FastAPI(
     version="0.1.0"
 )
 Base.metadata.create_all(bind=engine)
+EMAIL_USER = "wejhetna@gmail.com"   # <– put the sender email here
+EMAIL_PASS = "cdoj zsjt xpqf uelp"   # <– app password from Gmail
 
 # CORS (לאפליקציית React Native)
 app.add_middleware(
@@ -64,14 +69,40 @@ def get_db():
     finally:
         db.close()
 
-
 def send_email(to_email: str, subject: str, body: str):
-    # TODO: replace with real email sending (SMTP, SendGrid, etc.)
-    print("=== EMAIL ===")
-    print("To:", to_email)
-    print("Subject:", subject)
-    print("Body:", body)
-    print("=============")
+    """
+    Send a simple email using Gmail SMTP.
+    Uses EMAIL_USER and EMAIL_PASS defined above.
+    """
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("Email config missing, skipping real send.")
+        print("=== EMAIL (FAKE) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print("Email sent to", to_email)
+    except Exception as e:
+        print("Error sending email:", e)
+        # still print for debugging
+        print("=== EMAIL (FAILED TO SEND) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
+
 
 # ----- File uploads (local for now) -----
 UPLOAD_DIR = Path("uploads")

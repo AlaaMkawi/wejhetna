@@ -1,4 +1,5 @@
 // src/navigation/types.ts
+import type { DriverApplication } from "../screens/AdminDriversScreen";
 
 export type RootStackParamList = {
   Home: undefined;
@@ -10,7 +11,8 @@ export type RootStackParamList = {
   AdminHomeScreen: undefined;
   Login: undefined;
   RegularHome: undefined;
-
+  AdminTabs: { adminUserId: number };  // 👈 instead of undefined
+  AdminDriverDetails: { adminUserId: number; driver: DriverApplication };
 
   // 🔹 מסכי ניהול חדשים
   AdminCities: undefined;
