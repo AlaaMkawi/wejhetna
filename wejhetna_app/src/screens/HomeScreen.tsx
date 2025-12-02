@@ -1,5 +1,8 @@
 // wejhetna_app/src/screens/HomeScreen.tsx
 import React from "react";
+import { useTranslation } from "react-i18next";
+import LanguageSwitcher from "../components/LanguageSwitcher";
+
 import {
   View,
   Text,
@@ -12,20 +15,24 @@ type Props = {
   navigation: any;
 };
 
-const BASE_COLOR = "#9bd3d8";      // your main color
+const BASE_COLOR = "#9bd3d8";      
 const DARK_TEAL = "#2b6f73";
 const LIGHT_BG = "#f4fbfc";
 
 export default function HomeScreen({ navigation }: Props) {
+  const { t } = useTranslation();
+
   return (
+    
     <View style={styles.container}>
+       <LanguageSwitcher />
       {/* Top colored header like the inspiration */}
       <View style={styles.header}>
         <View style={styles.logoWrapper}>
           <Image
-            source={require("../../assets/wejhetna-logo.png")} // adjust path if needed
-            style={styles.logo}
-            resizeMode="contain"
+                source={require("../../assets/wejhetna-logo.png")}
+                style={styles.logo}
+                resizeMode="contain"
           />
         </View>
 
@@ -40,14 +47,14 @@ export default function HomeScreen({ navigation }: Props) {
             style={styles.primaryButton}
             onPress={() => navigation.navigate("Login")}
           >
-            <Text style={styles.primaryButtonText}>Log in</Text>
+            <Text style={styles.primaryButtonText}>{t("login")}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.secondaryButton}
             onPress={() => navigation.navigate("SignUp")}
           >
-            <Text style={styles.secondaryButtonText}>Create account</Text>
+            <Text style={styles.secondaryButtonText}>{t("create_account")}</Text>
           </TouchableOpacity>
         </View>
       </View>
