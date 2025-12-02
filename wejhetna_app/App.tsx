@@ -1,12 +1,10 @@
-import "./src/i18n";
+// App.tsx
 import { I18nextProvider } from "react-i18next";
-import i18n from "./src/i18n";
+import i18n, { loadAppLanguage } from "./src/i18n";
 
-import React, { useEffect, useState} from "react";
+import React, { useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import AppNavigator from "./src/navigation/AppNavigator";
-
-import { loadAppLanguage, changeAppLanguage } from "./src/i18n";
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -20,12 +18,12 @@ export default function App() {
     };
     initLang();
   }, []);
-  
+
   if (!ready) {
-    return null; // Or return a splash screen if you have one
+    return null; // פה אפשר לשים Splash אם תרצי
   }
 
-    return (
+  return (
     <I18nextProvider i18n={i18n}>
       <NavigationContainer>
         <AppNavigator />
