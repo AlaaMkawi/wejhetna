@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 wejhetna_backend\uploads
 node_modules/
+wejhetna_backend/uploads/

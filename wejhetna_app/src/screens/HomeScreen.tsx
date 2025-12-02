@@ -1,148 +1,144 @@
+// wejhetna_app/src/screens/HomeScreen.tsx
 import React from "react";
-import { View, StyleSheet, TouchableOpacity, Text } from "react-native";
-import { MapView, Camera } from "@maplibre/maplibre-react-native";
-import { useNavigation } from "@react-navigation/native";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { useTranslation } from "react-i18next";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 
-import { RootStackParamList } from "../navigation/types";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+} from "react-native";
 
-// טיפוס ניווט למסך ה־Home
-type HomeScreenNavProp = NativeStackNavigationProp<RootStackParamList, "Home">;
+type Props = {
+  navigation: any;
+};
 
-const MAP_STYLE_URL =
-  "https://api.maptiler.com/maps/streets-v2/style.json?key=Js2mV1WY15ayeXH6ceQP";
+const BASE_COLOR = "#9bd3d8";      
+const DARK_TEAL = "#2b6f73";
+const LIGHT_BG = "#f4fbfc";
 
-const INITIAL_CENTER: [number, number] = [34.8, 31.25]; // [lon, lat]
-const INITIAL_ZOOM = 10;
-
-export default function HomeScreen() {
-  const navigation = useNavigation<HomeScreenNavProp>();
-
-  const handleSignUp = () => {
-    navigation.navigate("SignUp");
-  };
-
-  const handleAdminLogin = () => {
-    navigation.navigate("AdminLogin");
-  };
-
-  const handleRegularLogin = () => {
-    navigation.navigate("UserLogin", { mode: "REGULAR" });
-  };
-
-  const handleDriverLogin = () => {
-    navigation.navigate("UserLogin", { mode: "DRIVER" });
-  };
+export default function HomeScreen({ navigation }: Props) {
+  const { t } = useTranslation();
 
   return (
+    
     <View style={styles.container}>
-      {/* MAP */}
-      <MapView
-        style={styles.map}
-        mapStyle={MAP_STYLE_URL}
-        zoomEnabled
-        scrollEnabled
-        rotateEnabled
-        pitchEnabled
-      >
-        <Camera
-          centerCoordinate={INITIAL_CENTER}
-          zoomLevel={INITIAL_ZOOM}
-          minZoomLevel={8}
-          maxZoomLevel={17}
-        />
-      </MapView>
+       <LanguageSwitcher />
+      {/* Top colored header like the inspiration */}
+      <View style={styles.header}>
+        <View style={styles.logoWrapper}>
+          <Image
+                source={require("../../assets/wejhetna-logo.png")}
+                style={styles.logo}
+                resizeMode="contain"
+          />
+        </View>
 
-      {/* SIGN UP BUTTON */}
-      <TouchableOpacity style={styles.signupButton} onPress={handleSignUp}>
-        <Text style={styles.signupText}>Sign Up</Text>
-      </TouchableOpacity>
+        <Text style={styles.appName}>Wejhetna</Text>
+      </View>
 
-      {/* ADMIN LOGIN BUTTON */}
-      <TouchableOpacity style={styles.adminButton} onPress={handleAdminLogin}>
-        <Text style={styles.adminText}>Admin</Text>
-      </TouchableOpacity>
+      {/* Floating white card */}
+      <View style={styles.card}>
+        {/* no “Rides and connections …” here anymore */}
+        <View style={styles.buttonsContainer}>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => navigation.navigate("Login")}
+          >
+            <Text style={styles.primaryButtonText}>{t("login")}</Text>
+          </TouchableOpacity>
 
-      {/* REGULAR LOGIN BUTTON */}
-      <TouchableOpacity
-        style={styles.regularLoginButton}
-        onPress={handleRegularLogin}
-      >
-        <Text style={styles.regularLoginText}>Regular Login</Text>
-      </TouchableOpacity>
-
-      {/* DRIVER LOGIN BUTTON */}
-      <TouchableOpacity
-        style={styles.driverLoginButton}
-        onPress={handleDriverLogin}
-      >
-        <Text style={styles.driverLoginText}>Driver Login</Text>
-      </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => navigation.navigate("SignUp")}
+          >
+            <Text style={styles.secondaryButtonText}>{t("create_account")}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-
-  signupButton: {
-    position: "absolute",
-    bottom: 30,
-    right: 20,
-    backgroundColor: "#007AFF",
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 8,
+  container: {
+    flex: 1,
+    backgroundColor: LIGHT_BG,
   },
-  signupText: {
+  header: {
+    backgroundColor: BASE_COLOR,
+    paddingTop: 80,
+    paddingBottom: 60,
+    paddingHorizontal: 24,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    alignItems: "center",
+  },
+  logoWrapper: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+    // soft shadow
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  logo: {
+    width: 70,
+    height: 70,
+  },
+  appName: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: DARK_TEAL,
+  },
+  card: {
+    marginTop: -30, // make the card float over the header
+    marginHorizontal: 24,
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    // shadow
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  buttonsContainer: {
+    gap: 12,
+  },
+  primaryButton: {
+    backgroundColor: DARK_TEAL,
+    paddingVertical: 14,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  primaryButtonText: {
     color: "#fff",
-    fontWeight: "bold",
     fontSize: 16,
+    fontWeight: "600",
   },
-
-  adminButton: {
-    position: "absolute",
-    bottom: 30,
-    left: 20,
-    backgroundColor: "#555",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+  secondaryButton: {
+    paddingVertical: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: DARK_TEAL,
+    alignItems: "center",
+    backgroundColor: "#fff",
   },
-  adminText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
-
-  regularLoginButton: {
-    position: "absolute",
-    bottom: 80,
-    right: 20,
-    backgroundColor: "#34C759",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-  },
-  regularLoginText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 14,
-  },
-
-  driverLoginButton: {
-    position: "absolute",
-    bottom: 130,
-    right: 20,
-    backgroundColor: "#FF9500",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-  },
-  driverLoginText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 14,
+  secondaryButtonText: {
+    color: DARK_TEAL,
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

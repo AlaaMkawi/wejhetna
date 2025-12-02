@@ -1,0 +1,14 @@
+{
+  "login": "התחברות",
+  "create_account": "יצירת חשבון",
+  "login_missing_fields": "אנא הזן שם משתמש/אימייל וסיסמה.",
+  "welcome_back": "ברוך שחזרת!",
+  "username_or_email": "שם משתמש או אימייל",
+  "password": "סיסמה",
+  "new_user_question_": " משתמש חדש?",
+  "sign_up": "הרשמה",
+  "contact_us": "צור קשר"
+
+
+
+}
