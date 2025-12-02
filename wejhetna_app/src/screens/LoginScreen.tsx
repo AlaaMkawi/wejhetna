@@ -29,7 +29,7 @@ export default function LoginScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async () => {
-    setError(null);
+  setError(null);
 
     if (!usernameOrEmail.trim() || !password.trim()) {
       setError(t("login_missing_fields"));
@@ -43,13 +43,13 @@ export default function LoginScreen({ navigation }: Props) {
         password: password.trim(),
       };
 
-      const res = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
       if (!res.ok) {
         let message = "Invalid credentials.";
