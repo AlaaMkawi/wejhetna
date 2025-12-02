@@ -55,7 +55,7 @@ export default function LoginScreen({ navigation }: Props) {
       const data = await res.json();
 
       if (!res.ok) {
-        let message = "Invalid credentials.";
+        let message = t("invalid_credentials");
         if (typeof data === "string") message = data;
         else if (typeof data?.detail === "string") message = data.detail;
         else if (Array.isArray(data?.detail)) {
