@@ -56,14 +56,6 @@ export default function AdminHomeScreen() {
         <Text style={styles.buttonText}>Categories</Text>
       </TouchableOpacity>
 
-      {/* BUTTON: ADD PLACE FORM */}
-      <TouchableOpacity
-        style={styles.addPlaceButton}
-        onPress={() => navigation.navigate("AdminPlaceForm")}
-      >
-        <Text style={styles.buttonText}>+ Add Place</Text>
-      </TouchableOpacity>
-
       {/* BUTTON: PICK LOCATION ON MAP */}
       <TouchableOpacity
         style={styles.pickLocationButton}
@@ -120,16 +112,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
 
-  /* BOTTOM BUTTONS */
-  addPlaceButton: {
-    position: "absolute",
-    bottom: 90,
-    left: 20,
-    backgroundColor: "#00897B",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
   pickLocationButton: {
     position: "absolute",
     bottom: 90,
