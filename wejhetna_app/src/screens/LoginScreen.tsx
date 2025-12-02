@@ -1,12 +1,14 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   View,
   Text,
   TextInput,
-  Button,
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
+  Linking,
+  I18nManager,
 } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
@@ -16,10 +18,16 @@ type Props = {
   navigation: any;
 };
 
+const MINT = "#9bd3d8";
+const DARK_TEAL = "#0f5b63";
+
 export default function LoginScreen({ navigation }: Props) {
+  const { t } = useTranslation();
+  const isRTL = I18nManager.isRTL;
+
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false); // 👈 NEW
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,18 +35,15 @@ export default function LoginScreen({ navigation }: Props) {
     setError(null);
 
     if (!usernameOrEmail.trim() || !password.trim()) {
-      setError("Please enter username/email and password.");
+      setError(t("login_missing_fields"));
       return;
     }
 
     setLoading(true);
     try {
-      const value = usernameOrEmail.trim();
-      const pwd = password.trim();
-
       const body = {
-        username_or_email: value,
-        password: pwd,
+        username_or_email: usernameOrEmail.trim(),
+        password: password.trim(),
       };
 
       const res = await fetch(`${API_BASE_URL}/auth/login`, {
@@ -51,39 +56,28 @@ export default function LoginScreen({ navigation }: Props) {
 
       if (!res.ok) {
         let message = "Invalid credentials.";
-        if (typeof data === "string") {
-          message = data;
-        } else if (typeof data?.detail === "string") {
-          message = data.detail;
-        } else if (Array.isArray(data?.detail)) {
+        if (typeof data === "string") message = data;
+        else if (typeof data?.detail === "string") message = data.detail;
+        else if (Array.isArray(data?.detail)) {
           message = data.detail
             .map((e: any) => {
               const loc = Array.isArray(e.loc) ? e.loc.join(" → ") : "";
-              if (loc) return `${loc}: ${e.msg}`;
-              return e.msg || "";
+              return loc ? `${loc}: ${e.msg}` : e.msg || "";
             })
-            .filter(Boolean)
             .join("\n");
         }
+
         setError(message);
         return;
       }
 
-      const lower = value.toLowerCase();
-      const isAdminUser =
-        lower === "admin" || lower.startsWith("admin@");
+      const lower = usernameOrEmail.trim().toLowerCase();
+      const isAdmin = lower === "admin" || lower.startsWith("admin@");
 
-      if (isAdminUser) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: "AdminHomeScreen" }],
-        });
-      } else {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: "RegularHome" }],
-        });
-      }
+      navigation.reset({
+        index: 0,
+        routes: [{ name: isAdmin ? "AdminTabs" : "RegularHome" }],
+      });
     } catch (e: any) {
       setError("Network error: " + e.message);
     } finally {
@@ -91,100 +85,232 @@ export default function LoginScreen({ navigation }: Props) {
     }
   };
 
+  const handleContactEmail = () => {
+    Linking.openURL("mailto:wejhetna.app@gmail.com").catch(() => {});
+  };
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Login</Text>
-      <Text style={styles.subtitle}>
-        One login for admin, drivers and residents
-      </Text>
+    <View style={styles.screen}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.logoText}>Wejhetna</Text>
+        <Text style={styles.welcome}>{t("welcome_back")}</Text>
+      </View>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Username or email"
-        value={usernameOrEmail}
-        onChangeText={setUsernameOrEmail}
-        autoCapitalize="none"
-      />
+      {/* Card */}
+      <View style={styles.card}>
+        <Text style={styles.title}>{t("login")}</Text>
 
-      {/* 🔐 Password with show/hide eye icon */}
-      <View style={styles.passwordContainer}>
+        {/* Username input */}
         <TextInput
-          style={styles.passwordInput}
-          placeholder="Password"
-          secureTextEntry={!showPassword}   // 👈 toggle here
-          value={password}
-          onChangeText={setPassword}
+          style={[
+            styles.input,
+            { textAlign: "right" },
+          ]}
+          placeholder={t("username_or_email")}
+          value={usernameOrEmail}
+          onChangeText={setUsernameOrEmail}
+          autoCapitalize="none"
+          placeholderTextColor="#9ab8bd"
         />
-        <TouchableOpacity
-          onPress={() => setShowPassword((prev) => !prev)}
-          style={styles.eyeButton}
-        >
-          <Ionicons
-            name={showPassword ? "eye-off" : "eye"}
-            size={20}
-            color="#666"
+
+        {/* Password container */}
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={[
+              styles.passwordInput,
+              { textAlign: "right" },
+            ]}
+            placeholder={t("password")}
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+            placeholderTextColor="#9ab8bd"
           />
+
+          <TouchableOpacity
+            onPress={() => setShowPassword((prev) => !prev)}
+            style={styles.eyeButton}
+          >
+            <Ionicons
+              name={showPassword ? "eye-off" : "eye"}
+              size={20}
+              color="#66838a"
+            />
+          </TouchableOpacity>
+        </View>
+
+        {error && <Text style={styles.error}>{error}</Text>}
+
+        {/* Login button */}
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={handleLogin}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryButtonText}>{t("login")}</Text>
+          )}
+        </TouchableOpacity>
+
+        {/* New user? */}
+        <View style={{
+        marginTop: 14,
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+      }}>
+        <Text style={styles.newUserText}>{t("new_user_question_")}</Text>
+        <TouchableOpacity onPress={() => navigation.navigate("SignUp")}>
+          <Text style={styles.signUpText}>{t("sign_up")}</Text>
         </TouchableOpacity>
       </View>
 
-      {error && <Text style={styles.error}>{error}</Text>}
+      </View>
 
-      {loading ? (
-        <ActivityIndicator style={{ marginTop: 12 }} />
-      ) : (
-        <Button title="Log in" onPress={handleLogin} />
-      )}
+      {/* Footer */}
+      <View style={styles.footer}>
+        <Text style={styles.contactText}>{t("contact_us")}</Text>
+        <TouchableOpacity onPress={handleContactEmail} style={styles.gmailIconBtn}>
+          <Ionicons name="mail" size={24} color={DARK_TEAL} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    padding: 16,
-    justifyContent: "center",
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
+  },
+  header: {
+    backgroundColor: MINT,
+    paddingTop: 60,
+    paddingBottom: 40,
+    paddingHorizontal: 24,
+    alignItems: "center",
+    borderBottomLeftRadius: 40,
+    borderBottomRightRadius: 40,
+  },
+  logoText: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: "#ffffff",
+    marginBottom: 6,
+  },
+  welcome: {
+    fontSize: 16,
+    color: "#eafcff",
+  },
+  card: {
+    marginTop: -30,
+    marginHorizontal: 24,
+    backgroundColor: "#ffffff",
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    elevation: 5,
   },
   title: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "700",
-    marginBottom: 4,
+    color: DARK_TEAL,
     textAlign: "center",
-  },
-  subtitle: {
-    fontSize: 14,
-    color: "#666",
-    marginBottom: 16,
-    textAlign: "center",
+    marginBottom: 18,
   },
   input: {
+    backgroundColor: "#f5fdff",
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#ccc",
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  // 🔽 NEW styles for password + eye
-  passwordContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    marginBottom: 12,
-  },
-  passwordInput: {
-    flex: 1,
+    borderColor: "#d6ebee",
+    paddingHorizontal: 14,
     paddingVertical: 10,
+    marginBottom: 12,
+    fontSize: 14,
+    color: "#234348",
   },
-  eyeButton: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-  },
+  passwordContainer: {
+  flexDirection: "row-reverse",   // RTL: icon left, text right
+  justifyContent: "space-between",
+  alignItems: "center",
+  backgroundColor: "#f5fdff",
+  borderRadius: 20,
+  borderWidth: 1,
+  borderColor: "#d6ebee",
+  paddingHorizontal: 14,
+  marginBottom: 8,
+},
+
+
+  passwordInput: {
+  flex: 1,
+  textAlign: "right",
+  paddingVertical: 10,
+  fontSize: 14,
+  color: "#234348",
+  marginRight: 10,   // extra spacing from eye icon
+},
+
+
+ eyeButton: {
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  justifyContent: "center",
+  alignItems: "center",
+},
+
+
+
   error: {
-    color: "red",
-    marginBottom: 8,
+    color: "#d7263d",
     textAlign: "center",
+    marginTop: 6,
+    marginBottom: 10,
+    fontSize: 13,
+  },
+  primaryButton: {
+    marginTop: 4,
+    backgroundColor: DARK_TEAL,
+    borderRadius: 24,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  primaryButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  newUserRow: {
+    marginTop: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  newUserText: {
+    fontSize: 13,
+    color: "#7a98a0",
+  },
+  signUpText: {
+    fontSize: 13,
+    color: DARK_TEAL,
+    fontWeight: "700",
+    marginHorizontal: 4,
+  },
+  footer: {
+    marginTop: 24,
+    alignItems: "center",
+  },
+  contactText: {
+    fontSize: 13,
+    color: "#8aa4aa",
+    marginBottom: 6,
+  },
+  gmailIconBtn: {
+    padding: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d2e5e9",
   },
 });

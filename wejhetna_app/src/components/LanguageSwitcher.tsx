@@ -1,14 +1,15 @@
 import React, { useState } from "react";
-import { Image } from "react-native";
-
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   Animated,
+  Image,
+  I18nManager,
 } from "react-native";
-import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
+import RNRestart from "react-native-restart";
+
 import { changeAppLanguage } from "../i18n";
 
 export default function LanguageSwitcher() {
@@ -26,6 +27,15 @@ export default function LanguageSwitcher() {
 
   const selectLanguage = async (lang: string) => {
     await changeAppLanguage(lang);
+
+    const isRTL = lang === "ar" || lang === "he";
+
+    if (I18nManager.isRTL !== isRTL) {
+      I18nManager.allowRTL(isRTL);
+      I18nManager.forceRTL(isRTL);
+      RNRestart.restart(); // restart app to apply layout changes
+    }
+
     setOpen(false);
   };
 
@@ -38,7 +48,6 @@ export default function LanguageSwitcher() {
           style={{ width: 30, height: 30 }}
           resizeMode="contain"
         />
-
       </TouchableOpacity>
 
       {/* Dropdown */}

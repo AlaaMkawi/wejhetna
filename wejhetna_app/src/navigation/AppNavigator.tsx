@@ -32,7 +32,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="SignUp"
         component={SignUpScreen}
-        options={{ title: "Sign Up" }}
+  options={{ headerShown: false }}
       />
       <Stack.Screen
         name="AdminLogin"
@@ -49,7 +49,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="UserLogin"
         component={UserLoginScreen}
-        options={{ title: "User Login" }}
+        options={{ headerShown: false }}
       />
 
 {/* --- שינוי 2: הוספת ה-Tab Navigator המותאם אישית --- */}
@@ -87,7 +87,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="Login"
         component={LoginScreen}
-        options={{ title: "Login" }}
+        options={{ headerShown: false }}
       />
 
      <Stack.Screen
@@ -98,7 +98,7 @@ export default function AppNavigator() {
       <Stack.Screen
   name="RegularHome"
   component={RegularHomeScreen}
-  options={{ title: "User Home" }}
+  options={{ headerShown: false }}
 />
 
 
