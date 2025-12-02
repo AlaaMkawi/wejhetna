@@ -2,8 +2,9 @@
 
 import React, { useEffect, useCallback } from 'react';
 import { View, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
-import { createBottomTabNavigator, BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { AdminTabParamList } from './types';
+import { createBottomTabNavigator, BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import { AdminTabParamList, RootStackParamList } from "./types";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
 // Reanimated
 import Animated, {
@@ -25,6 +26,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+type AdminTabsProps = NativeStackScreenProps<RootStackParamList, "AdminTabs">;
 
 const Tab = createBottomTabNavigator<AdminTabParamList>();
 
@@ -126,7 +128,9 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
 // Navigator
 // -------------------------------------------------
 
-export default function AdminTabNavigator() {
+export default function AdminTabNavigator({ route }: AdminTabsProps) {
+  const { adminUserId } = route.params;
+
   return (
   <Tab.Navigator
     id="AdminTabs"
@@ -140,7 +144,11 @@ export default function AdminTabNavigator() {
     <Tab.Screen name="fitnessDummy" component={AlreadyUsersScreen} />
     <Tab.Screen name="alreadyUsers" component={AlreadyUsersScreen} />
     <Tab.Screen name="AdminHome" component={AdminHomeScreen} />
-    <Tab.Screen name="newUsers" component={NewUsersScreen} />
+<Tab.Screen
+  name="newUsers"
+  component={NewUsersScreen}
+  initialParams={{ adminUserId }}   // 👈 pass the id into the tab
+/>
     <Tab.Screen name="profileDummy" component={NewUsersScreen} />
   </Tab.Navigator>
   );

@@ -14,6 +14,7 @@ import AdminPlaceMapPickerScreen from "../screens/Admin/AdminPlaceMapPickerScree
 import LoginScreen from "../screens/LoginScreen";
 import AdminHomeScreen from "../screens/AdminHomeScreen";
 import RegularHomeScreen from "../screens/RegularAccount/RegularHomeScreen";
+import AdminDriverDetailsScreen from "../screens/AdminDriverDetailsScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -54,7 +55,7 @@ export default function AppNavigator() {
 
 {/* --- שינוי 2: הוספת ה-Tab Navigator המותאם אישית --- */}
       <Stack.Screen
-        name="AdminPanel" // שם חדש שמייצג את כל פאנל הניהול עם הטאבים
+        name="AdminTabs" // שם חדש שמייצג את כל פאנל הניהול עם הטאבים
         component={AdminTabNavigator} // משתמשים בקומפוננטה המכילה את סרגל הניווט התחתון
         options={{ 
             headerShown: false, // חשוב להסתיר את ה-Header הרגיל של ה-Stack
@@ -99,6 +100,11 @@ export default function AppNavigator() {
   name="RegularHome"
   component={RegularHomeScreen}
   options={{ headerShown: false }}
+/>
+      <Stack.Screen
+  name="AdminDriverDetails"
+  component={AdminDriverDetailsScreen}
+  options={{ title: "Driver details" }}
 />
 
 

@@ -1,22 +1,20 @@
+// src/screens/AdminDriversScreen.tsx
 import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
-  Button,
   FlatList,
   ActivityIndicator,
   StyleSheet,
   TextInput,
-  
+  TouchableOpacity,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
-type Props = NativeStackScreenProps<RootStackParamList, "AdminDrivers">;
-
-type DriverApplication = {
+export type DriverApplication = {
   user_id: number;
   driver_profile_id: number;
   vehicle_id: number;
@@ -35,14 +33,17 @@ type DriverApplication = {
   car_photos_urls?: string[] | null;
 };
 
-export default function AdminDriversScreen({ route }: Props) {
+type Props = NativeStackScreenProps<RootStackParamList, "AdminDrivers">;
+
+export default function AdminDriversScreen({ route, navigation }: Props) {
   const { adminUserId } = route.params;
 
   const [drivers, setDrivers] = useState<DriverApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // reasons per driver_profile_id
-  const [reasons, setReasons] = useState<Record<number, string>>({});
+
+  const [search, setSearch] = useState("");
+  const [sortOrder, setSortOrder] = useState<"oldest" | "newest">("oldest");
 
   const loadPending = async () => {
     setLoading(true);
@@ -66,88 +67,43 @@ export default function AdminDriversScreen({ route }: Props) {
     loadPending();
   }, []);
 
-  const handleApprove = async (driverProfileId: number) => {
-    setError(null);
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/admin/drivers/${driverProfileId}/approve`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            admin_user_id: adminUserId,
-            reason: reasons[driverProfileId] || null,
-          }),
-        }
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.detail || "Approve failed");
-      } else {
-        // reload list
-        loadPending();
-      }
-    } catch (e: any) {
-      setError("Network error: " + e.message);
-    }
-  };
-
-  const handleReject = async (driverProfileId: number) => {
-    setError(null);
-    try {
-      const res = await fetch(
-        `${API_BASE_URL}/admin/drivers/${driverProfileId}/reject`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            admin_user_id: adminUserId,
-            reason: reasons[driverProfileId] || null,
-          }),
-        }
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.detail || "Reject failed");
-      } else {
-        loadPending();
-      }
-    } catch (e: any) {
-      setError("Network error: " + e.message);
-    }
-  };
-
-  const renderItem = ({ item }: { item: DriverApplication }) => {
-    const reason = reasons[item.driver_profile_id] || "";
-
-    return (
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>{item.full_name}</Text>
-        <Text>{item.email}</Text>
-        <Text>{item.phone}</Text>
-        <Text style={styles.cardSubtitle}>
-          Car: {item.car_type} • {item.plate_number} • {item.production_year}
-        </Text>
-        <Text>Status: driver {item.driver_status} / vehicle {item.vehicle_status}</Text>
-
-        <Text style={styles.label}>Reject reason (optional):</Text>
-        <TextInput
-          style={styles.reasonInput}
-          value={reason}
-          onChangeText={(text) =>
-            setReasons((prev) => ({ ...prev, [item.driver_profile_id]: text }))
-          }
-          placeholder="Reason for rejection..."
-        />
-
-        <View style={styles.buttonRow}>
-          <Button title="Approve" onPress={() => handleApprove(item.driver_profile_id)} />
-          <View style={{ width: 8 }} />
-          <Button title="Reject" onPress={() => handleReject(item.driver_profile_id)} />
-        </View>
-      </View>
+  const getVisibleDrivers = () => {
+    let list = drivers.filter((d) =>
+      d.full_name.toLowerCase().includes(search.toLowerCase())
     );
+
+    // we don't have created_at, so oldest = original order, newest = reversed
+    if (sortOrder === "newest") {
+      list = [...list].reverse();
+    }
+    return list;
   };
+
+  const handleOpenDetails = (driver: DriverApplication) => {
+    navigation.navigate("AdminDriverDetails", {
+      adminUserId,
+      driver,
+    });
+  };
+
+  const renderItem = ({ item }: { item: DriverApplication }) => (
+    <TouchableOpacity
+      onPress={() => handleOpenDetails(item)}
+      style={styles.card}
+      activeOpacity={0.8}
+    >
+      <Text style={styles.cardTitle}>{item.full_name}</Text>
+      <Text>{item.email}</Text>
+      <Text>{item.phone}</Text>
+      <Text style={styles.cardSubtitle}>
+        Car: {item.car_type} • {item.plate_number} • {item.production_year}
+      </Text>
+      <Text style={styles.statusText}>
+        Status: driver {item.driver_status} / vehicle {item.vehicle_status}
+      </Text>
+      <Text style={styles.hint}>Tap to see full details</Text>
+    </TouchableOpacity>
+  );
 
   if (loading) {
     return (
@@ -157,19 +113,67 @@ export default function AdminDriversScreen({ route }: Props) {
     );
   }
 
+  const visibleDrivers = getVisibleDrivers();
+
   return (
     <View style={{ flex: 1 }}>
-      {error && (
-        <Text style={[styles.error, { margin: 8 }]}>{error}</Text>
-      )}
+      {error && <Text style={[styles.error, { margin: 8 }]}>{error}</Text>}
 
-      {drivers.length === 0 ? (
+      {/* Search + sort */}
+      <View style={styles.filtersContainer}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search by name..."
+          value={search}
+          onChangeText={setSearch}
+        />
+
+        <View style={styles.sortRow}>
+          <Text style={styles.sortLabel}>Order:</Text>
+
+          <TouchableOpacity
+            style={[
+              styles.sortButton,
+              sortOrder === "oldest" && styles.sortButtonActive,
+            ]}
+            onPress={() => setSortOrder("oldest")}
+          >
+            <Text
+              style={[
+                styles.sortButtonText,
+                sortOrder === "oldest" && styles.sortButtonTextActive,
+              ]}
+            >
+              Oldest
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.sortButton,
+              sortOrder === "newest" && styles.sortButtonActive,
+            ]}
+            onPress={() => setSortOrder("newest")}
+          >
+            <Text
+              style={[
+                styles.sortButtonText,
+                sortOrder === "newest" && styles.sortButtonTextActive,
+              ]}
+            >
+              Newest
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {visibleDrivers.length === 0 ? (
         <View style={styles.center}>
           <Text>No pending drivers.</Text>
         </View>
       ) : (
         <FlatList
-          data={drivers}
+          data={visibleDrivers}
           keyExtractor={(item) => String(item.driver_profile_id)}
           renderItem={renderItem}
           contentContainerStyle={{ padding: 12 }}
@@ -184,6 +188,48 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+  },
+  filtersContainer: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+    backgroundColor: "#fff",
+  },
+  sortRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  sortLabel: {
+    marginRight: 8,
+    fontWeight: "600",
+  },
+  sortButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    marginRight: 8,
+  },
+  sortButtonActive: {
+    backgroundColor: "#ED1C7B",
+    borderColor: "#ED1C7B",
+  },
+  sortButtonText: {
+    fontSize: 13,
+    color: "#333",
+  },
+  sortButtonTextActive: {
+    color: "#fff",
+    fontWeight: "700",
   },
   card: {
     backgroundColor: "#fff",
@@ -202,21 +248,13 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     fontStyle: "italic",
   },
-  label: {
-    marginTop: 8,
+  statusText: {
     marginBottom: 4,
-    fontWeight: "600",
   },
-  reasonInput: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 6,
-    padding: 6,
-    marginBottom: 8,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
+  hint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#777",
   },
   error: {
     color: "red",
