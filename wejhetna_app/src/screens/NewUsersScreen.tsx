@@ -1,36 +1,77 @@
-// src/screens/NewUsersScreen.tsx
+import React from "react";
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
 
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView } from 'react-native';
+type Props = {
+  route: any;
+  navigation: any;
+};
 
-export default function NewUsersScreen() {
+export default function NewUsersScreen({ route, navigation }: Props) {
+  const { adminUserId } = route.params || {};
+
+  const handleDriverRequestsPress = () => {
+    navigation.navigate("AdminDrivers", { adminUserId });
+  };
+
+  const handleBusinessRequestsPress = () => {
+    Alert.alert(
+      "Coming soon",
+      "Business owner requests are not implemented yet."
+    );
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>מסך משתמשים חדשים</Text>
-        <Text style={styles.subtitle}>כאן יוצג התוכן של משתמשים בהמתנה</Text>
-      </View>
-    </SafeAreaView>
+    <View style={styles.container}>
+      <Text style={styles.title}>Requests</Text>
+
+      <TouchableOpacity
+        style={[styles.button, styles.primaryButton]}
+        onPress={handleDriverRequestsPress}
+      >
+        <Text style={styles.buttonTextPrimary}>Drivers requests</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.button}
+        onPress={handleBusinessRequestsPress}
+      >
+        <Text style={styles.buttonText}>Business owner requests</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f0f0f0',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    padding: 24,
+    backgroundColor: "#F7F7FB",
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 10,
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 24,
+    color: "#1B1338",
   },
-  subtitle: {
+  button: {
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    borderRadius: 16,
+    backgroundColor: "#ECEBFF",
+    marginBottom: 16,
+    alignItems: "center",
+  },
+  primaryButton: {
+    backgroundColor: "#ED1C7B",
+  },
+  buttonText: {
+    color: "#1B1338",
+    fontWeight: "600",
     fontSize: 16,
-    color: '#666',
+  },
+  buttonTextPrimary: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 16,
   },
 });

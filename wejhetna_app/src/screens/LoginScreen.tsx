@@ -27,72 +27,91 @@ export default function LoginScreen({ navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async () => {
-    setError(null);
+  setError(null);
 
-    if (!usernameOrEmail.trim() || !password.trim()) {
-      setError("Please enter username/email and password.");
+  if (!usernameOrEmail.trim() || !password.trim()) {
+    setError("Please enter username/email and password.");
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const value = usernameOrEmail.trim();
+    const pwd = password.trim();
+
+    const body = {
+      username_or_email: value,
+      password: pwd,
+    };
+
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      let message = "Invalid credentials.";
+      if (typeof data === "string") {
+        message = data;
+      } else if (typeof data?.detail === "string") {
+        message = data.detail;
+      } else if (Array.isArray(data?.detail)) {
+        message = data.detail
+          .map((e: any) => {
+            const loc = Array.isArray(e.loc) ? e.loc.join(" → ") : "";
+            if (loc) return `${loc}: ${e.msg}`;
+            return e.msg || "";
+          })
+          .filter(Boolean)
+          .join("\n");
+      }
+      setError(message);
       return;
     }
 
-    setLoading(true);
-    try {
-      const value = usernameOrEmail.trim();
-      const pwd = password.trim();
+    // 👇 use the REAL role + id from backend
+    const role = data.role;
+    const status = data.status;
+    const userId = data.id;
 
-      const body = {
-        username_or_email: value,
-        password: pwd,
-      };
-
-      const res = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        let message = "Invalid credentials.";
-        if (typeof data === "string") {
-          message = data;
-        } else if (typeof data?.detail === "string") {
-          message = data.detail;
-        } else if (Array.isArray(data?.detail)) {
-          message = data.detail
-            .map((e: any) => {
-              const loc = Array.isArray(e.loc) ? e.loc.join(" → ") : "";
-              if (loc) return `${loc}: ${e.msg}`;
-              return e.msg || "";
-            })
-            .filter(Boolean)
-            .join("\n");
-        }
-        setError(message);
+    if (role === "ADMIN") {
+      if (status !== "ACTIVE") {
+        setError("Admin account is not active.");
         return;
       }
 
-      const lower = value.toLowerCase();
-      const isAdminUser =
-        lower === "admin" || lower.startsWith("admin@");
-
-      if (isAdminUser) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: "AdminTabs" }],
-        });
-      } else {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: "RegularHome" }],
-        });
+      // Go into AdminTabs WITH adminUserId
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: "AdminTabs",
+            params: { adminUserId: userId }, // 👈 this is what approve/reject will use
+          },
+        ],
+      });
+    } else {
+      // Non-admin (regular / driver) – for now send to RegularHome
+      if (status !== "ACTIVE") {
+        setError("Your account is not active yet.");
+        return;
       }
-    } catch (e: any) {
-      setError("Network error: " + e.message);
-    } finally {
-      setLoading(false);
+
+      navigation.reset({
+        index: 0,
+        routes: [{ name: "RegularHome" }],
+      });
     }
-  };
+  } catch (e: any) {
+    setError("Network error: " + e.message);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleContactEmail = () => {
     Linking.openURL("mailto:wejhetna.app@gmail.com").catch(() => {});
