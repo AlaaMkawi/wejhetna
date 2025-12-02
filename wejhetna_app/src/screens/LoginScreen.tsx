@@ -68,13 +68,39 @@ export default function LoginScreen({ navigation }: Props) {
         return;
       }
 
-      const lower = usernameOrEmail.trim().toLowerCase();
-      const isAdmin = lower === "admin" || lower.startsWith("admin@");
+// 👇 use the REAL role + id from backend
+    const role = data.role;
+    const status = data.status;
+    const userId = data.id;
+
+    if (role === "ADMIN") {
+      if (status !== "ACTIVE") {
+        setError("Admin account is not active.");
+        return;
+      }
+
+      // Go into AdminTabs WITH adminUserId
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: "AdminTabs",
+            params: { adminUserId: userId }, // 👈 this is what approve/reject will use
+          },
+        ],
+      });
+    } else {
+      // Non-admin (regular / driver) – for now send to RegularHome
+      if (status !== "ACTIVE") {
+        setError("Your account is not active yet.");
+        return;
+      }
 
       navigation.reset({
         index: 0,
-        routes: [{ name: isAdmin ? "AdminTabs" : "RegularHome" }],
+        routes: [{ name: "RegularHome" }],
       });
+    }
     } catch (e: any) {
       setError("Network error: " + e.message);
     } finally {
