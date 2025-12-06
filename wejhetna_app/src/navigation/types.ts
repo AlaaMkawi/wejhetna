@@ -22,6 +22,8 @@ export type RootStackParamList = {
   AdminPlaceForm: {
     pickedLat?: number;
     pickedLon?: number;
+    pickedSource?: string;          // 👈 חדש
+    pickedOsmId?: string | null;    // 👈 חדש
   } | undefined;
 
   // 🔹 מסך בחירת מיקום על המפה
@@ -35,6 +37,6 @@ export type AdminTabParamList = {
   fitnessDummy: undefined;
   alreadyUsers: undefined;
   AdminHome: undefined;
-  newUsers: undefined;
+  newUsers: { adminUserId: number };
   profileDummy: undefined;
 };
