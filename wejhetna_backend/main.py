@@ -695,27 +695,37 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
     """
     יצירת לוקיישן חדש:
     - מקבל lat, lon (והפרונט רשאי לשלוח גם source / osm_id אבל לא חייב)
-    - מנסה לזהות אוטומטית OSM לפי lat/lon
-    - שומר ב-PostGIS בתור POINT (lon, lat) עם SRID 4326
+    - אם source == 'GPS_NO_OSM' → לא מחפשים OSM בכלל (שומרים osm_id=None)
+    - אם יש data.osm_id → משתמשים בו (למשל אחרי שהמשתמש אישר שהמקום הוא שלו)
+    - אחרת → אותה לוגיקה כמו היום: חיפוש אוטומטי ב-OSM לפי lat/lon
     """
 
-    # 🔍 1. ניסיון לזהות OSM לפי הקואורדינטות
-    print(">>> TRYING OSM LOOKUP FOR:", data.lat, data.lon)
-    detected_osm_id = find_osm_feature(data.lat, data.lon)
-    print(">>> OSM RESULT:", detected_osm_id)
+    # 1) מקרה מיוחד: המשתמש הצהיר שזה עסק חדש → לא רוצים לקשר ל-OSM
+    if data.source == "GPS_NO_OSM":
+        print(">>> create_location: GPS_NO_OSM – לא מחפשים OSM בכלל")
+        final_osm_id = None
+        final_source = data.source or "GPS"
 
-    # 2. קובעים מה לשמור בפועל
-    if data.osm_id:                       # אם האדמין הכניס ידנית – נעדיף את זה
+    # 2) אם לקוח שלח osm_id (למשל מה-GPS CHECK / מהמפה / מהאדמין)
+    elif data.osm_id:
+        print(">>> create_location: using client-provided osm_id:", data.osm_id)
         final_osm_id = data.osm_id
         final_source = data.source or "MAP_PICK"
-    elif detected_osm_id:                 # אם זיהינו אוטומטית
-        final_osm_id = detected_osm_id
-        final_source = "MAP_PICK"
-    else:                                 # לא מצאנו כלום
-        final_osm_id = None
-        final_source = data.source or "MAP_PICK"
 
-    # 3. יצירת ה־Location עם ה־OSM ID (אם נמצא)
+    # 3) המצב הרגיל – כמו שהיה לך קודם (MAP_PICK / GPS כללי)
+    else:
+        print(">>> TRYING OSM LOOKUP FOR:", data.lat, data.lon)
+        detected_osm_id = find_osm_feature(data.lat, data.lon)
+        print(">>> OSM RESULT:", detected_osm_id)
+
+        if detected_osm_id:                 # אם זיהינו אוטומטית
+            final_osm_id = detected_osm_id
+            final_source = "MAP_PICK"
+        else:                               # לא מצאנו כלום
+            final_osm_id = None
+            final_source = data.source or "MAP_PICK"
+
+    # 4) יצירת ה־Location עם ה־OSM ID (אם נמצא)
     location = Location(
         geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
         source=final_source,
@@ -974,3 +984,29 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
     db.refresh(place)
     db.refresh(location)
     return place
+
+# ---------- GPS → OSM CHECK (לפני יצירת לוקיישן) ----------
+
+class GpsCheckRequest(BaseModel):
+    lat: float
+    lon: float
+
+
+class GpsCheckResponse(BaseModel):
+    match_found: bool
+    osm_id: Optional[str] = None
+
+
+@app.post("/gps/osm-check", response_model=GpsCheckResponse)
+def gps_osm_check(data: GpsCheckRequest):
+    """
+    בדיקת OSM לפי מיקום GPS:
+    - לא יוצרת Location ולא Place
+    - רק אומרת אם יש אובייקט OSM קרוב → ואם כן, מחזירה את ה-osm_id
+    """
+    osm_id = find_osm_feature(data.lat, data.lon)
+
+    if osm_id:
+        return GpsCheckResponse(match_found=True, osm_id=osm_id)
+
+    return GpsCheckResponse(match_found=False, osm_id=None)
