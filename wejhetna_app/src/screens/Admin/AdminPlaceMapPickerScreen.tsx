@@ -26,7 +26,7 @@ import {
 import Geolocation from "@react-native-community/geolocation";
 
 const MAP_STYLE_URL =
-  "https://api.maptiler.com/maps/streets-v2/style.json?key=Js2mV1WY15ayeXH6ceQP";
+  "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 type AdminPlaceMapPickerParams = {
   initialLat?: number;
