@@ -18,6 +18,37 @@ export type Category = {
 
 export type PlaceType = "PUBLIC_SERVICE" | "BUSINESS";
 
+export type Location = {
+  id: number;
+  lat: number;
+  lon: number;
+  source: string;
+  osm_id?: string | null;
+};
+
+export type PlaceForMap = {
+  id: number;
+  name: string;
+  place_type: PlaceType;
+
+  can_be_claimed: boolean;
+  description?: string | null;
+  phone?: string | null;
+  opening_hours?: string | null;
+  main_image_url?: string | null;
+  social_links?: string | null;
+
+  city: City;
+  category?: Category | null;
+  location: Location;
+
+  // created_at / updated_at קיימים ב־backend, אבל לא חובה שנשתמש פה כרגע
+};
+export type GpsOsmCheckResult = {
+  match_found: boolean;
+  osm_id?: string | null;
+};
+
 const BASE_URL = "http://10.0.2.2:8000"; // אנדרואיד אמולטור → FastAPI
 
 // =======================
@@ -82,4 +113,33 @@ export async function createAdminPlace(data: any) {
 
   if (!placeRes.ok) throw new Error("Failed to create place");
   return placeRes.json();
+}
+
+// =======================
+// FETCH ALL PLACES (admin)
+// =======================
+// נשתמש בזה כדי להציג את כל המקומות על המפה במסך AdminHomeScreen
+export async function fetchAllPlaces(): Promise<PlaceForMap[]> {
+  const res = await fetch(`${BASE_URL}/admin/places`);
+  if (!res.ok) throw new Error("Failed to fetch places");
+  return res.json();
+}
+// =======================
+// GPS → OSM CHECK
+// =======================
+export async function checkOsmForGps(
+  lat: number,
+  lon: number
+): Promise<GpsOsmCheckResult> {
+  const res = await fetch(`${BASE_URL}/gps/osm-check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lat, lon }),
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to check OSM for GPS");
+  }
+
+  return res.json();
 }
