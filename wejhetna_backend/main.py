@@ -85,7 +85,39 @@ app = FastAPI(
 Base.metadata.create_all(bind=engine)
 EMAIL_USER = "wejhetna@gmail.com"   # <– put the sender email here
 EMAIL_PASS = "cdoj zsjt xpqf uelp"   # <– app password from Gmail
+def send_email(to_email: str, subject: str, body: str):
+    """
+    Send a simple email using Gmail SMTP.
+    Uses EMAIL_USER and EMAIL_PASS defined above.
+    """
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("Email config missing, skipping real send.")
+        print("=== EMAIL (FAKE) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
+        return
 
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print("Email sent to", to_email)
+    except Exception as e:
+        print("Error sending email:", e)
+        # still print for debugging
+        print("=== EMAIL (FAILED TO SEND) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
 # CORS (לאפליקציית React Native)
 app.add_middleware(
     CORSMiddleware,
@@ -269,6 +301,101 @@ class DriverSignupOut(BaseModel):
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
+@app.post("/admin/drivers/{driver_profile_id}/approve")
+def approve_driver(
+    driver_profile_id: int,
+    data: DriverReviewRequest,
+    db: Session = Depends(get_db),
+):
+    # check admin exists and is ADMIN
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can approve")
+
+    profile = db.query(DriverProfile).filter(DriverProfile.id == driver_profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    user = profile.user
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == profile.id)
+        .first()
+    )
+
+    # update statuses
+    user.status = UserStatus.ACTIVE
+    profile.driver_status = DriverStatus.APPROVED
+    profile.driver_status_updated_at = datetime.now(timezone.utc)
+
+    if vehicle:
+        vehicle.status = VehicleStatus.APPROVED
+        vehicle.reviewed_at = datetime.now(timezone.utc)
+        vehicle.reviewed_by_admin_id = admin.id
+        vehicle.rejection_reason = None
+
+    db.commit()
+
+    # send email
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Driver application approved",
+        body="Your driver account has been approved. You can now use the app as a driver.",
+    )
+
+    return {"detail": "Driver approved"}
+@app.post("/admin/drivers/{driver_profile_id}/reject")
+def reject_driver(
+    driver_profile_id: int,
+    data: DriverReviewRequest,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can reject")
+
+    profile = db.query(DriverProfile).filter(DriverProfile.id == driver_profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    user = profile.user
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == profile.id)
+        .first()
+    )
+
+    # if no reason → use a default
+    reason = data.reason or "Your documents were not approved."
+
+    user.status = UserStatus.REJECTED
+    profile.driver_status = DriverStatus.REJECTED
+    profile.driver_status_updated_at = datetime.now(timezone.utc)
+
+    if vehicle:
+        vehicle.status = VehicleStatus.REJECTED
+        vehicle.reviewed_at = datetime.now(timezone.utc)
+        vehicle.reviewed_by_admin_id = admin.id
+        vehicle.rejection_reason = reason
+
+    db.commit()
+
+    # send email with reason
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Driver application rejected",
+        body=f"Your driver application was rejected. Reason: {reason}",
+    )
+
+    return {"detail": "Driver rejected"}
 
 
 # ---------- Regular user signup endpoint ----------
@@ -695,27 +822,37 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
     """
     יצירת לוקיישן חדש:
     - מקבל lat, lon (והפרונט רשאי לשלוח גם source / osm_id אבל לא חייב)
-    - מנסה לזהות אוטומטית OSM לפי lat/lon
-    - שומר ב-PostGIS בתור POINT (lon, lat) עם SRID 4326
+    - אם source == 'GPS_NO_OSM' → לא מחפשים OSM בכלל (שומרים osm_id=None)
+    - אם יש data.osm_id → משתמשים בו (למשל אחרי שהמשתמש אישר שהמקום הוא שלו)
+    - אחרת → אותה לוגיקה כמו היום: חיפוש אוטומטי ב-OSM לפי lat/lon
     """
 
-    # 🔍 1. ניסיון לזהות OSM לפי הקואורדינטות
-    print(">>> TRYING OSM LOOKUP FOR:", data.lat, data.lon)
-    detected_osm_id = find_osm_feature(data.lat, data.lon)
-    print(">>> OSM RESULT:", detected_osm_id)
+    # 1) מקרה מיוחד: המשתמש הצהיר שזה עסק חדש → לא רוצים לקשר ל-OSM
+    if data.source == "GPS_NO_OSM":
+        print(">>> create_location: GPS_NO_OSM – לא מחפשים OSM בכלל")
+        final_osm_id = None
+        final_source = data.source or "GPS"
 
-    # 2. קובעים מה לשמור בפועל
-    if data.osm_id:                       # אם האדמין הכניס ידנית – נעדיף את זה
+    # 2) אם לקוח שלח osm_id (למשל מה-GPS CHECK / מהמפה / מהאדמין)
+    elif data.osm_id:
+        print(">>> create_location: using client-provided osm_id:", data.osm_id)
         final_osm_id = data.osm_id
         final_source = data.source or "MAP_PICK"
-    elif detected_osm_id:                 # אם זיהינו אוטומטית
-        final_osm_id = detected_osm_id
-        final_source = "MAP_PICK"
-    else:                                 # לא מצאנו כלום
-        final_osm_id = None
-        final_source = data.source or "MAP_PICK"
 
-    # 3. יצירת ה־Location עם ה־OSM ID (אם נמצא)
+    # 3) המצב הרגיל – כמו שהיה לך קודם (MAP_PICK / GPS כללי)
+    else:
+        print(">>> TRYING OSM LOOKUP FOR:", data.lat, data.lon)
+        detected_osm_id = find_osm_feature(data.lat, data.lon)
+        print(">>> OSM RESULT:", detected_osm_id)
+
+        if detected_osm_id:                 # אם זיהינו אוטומטית
+            final_osm_id = detected_osm_id
+            final_source = "MAP_PICK"
+        else:                               # לא מצאנו כלום
+            final_osm_id = None
+            final_source = data.source or "MAP_PICK"
+
+    # 4) יצירת ה־Location עם ה־OSM ID (אם נמצא)
     location = Location(
         geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
         source=final_source,
@@ -974,3 +1111,29 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
     db.refresh(place)
     db.refresh(location)
     return place
+
+# ---------- GPS → OSM CHECK (לפני יצירת לוקיישן) ----------
+
+class GpsCheckRequest(BaseModel):
+    lat: float
+    lon: float
+
+
+class GpsCheckResponse(BaseModel):
+    match_found: bool
+    osm_id: Optional[str] = None
+
+
+@app.post("/gps/osm-check", response_model=GpsCheckResponse)
+def gps_osm_check(data: GpsCheckRequest):
+    """
+    בדיקת OSM לפי מיקום GPS:
+    - לא יוצרת Location ולא Place
+    - רק אומרת אם יש אובייקט OSM קרוב → ואם כן, מחזירה את ה-osm_id
+    """
+    osm_id = find_osm_feature(data.lat, data.lon)
+
+    if osm_id:
+        return GpsCheckResponse(match_found=True, osm_id=osm_id)
+
+    return GpsCheckResponse(match_found=False, osm_id=None)
