@@ -85,7 +85,39 @@ app = FastAPI(
 Base.metadata.create_all(bind=engine)
 EMAIL_USER = "wejhetna@gmail.com"   # <– put the sender email here
 EMAIL_PASS = "cdoj zsjt xpqf uelp"   # <– app password from Gmail
+def send_email(to_email: str, subject: str, body: str):
+    """
+    Send a simple email using Gmail SMTP.
+    Uses EMAIL_USER and EMAIL_PASS defined above.
+    """
+    if not EMAIL_USER or not EMAIL_PASS:
+        print("Email config missing, skipping real send.")
+        print("=== EMAIL (FAKE) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
+        return
 
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_USER, EMAIL_PASS)
+            smtp.send_message(msg)
+        print("Email sent to", to_email)
+    except Exception as e:
+        print("Error sending email:", e)
+        # still print for debugging
+        print("=== EMAIL (FAILED TO SEND) ===")
+        print("To:", to_email)
+        print("Subject:", subject)
+        print("Body:", body)
+        print("=============")
 # CORS (לאפליקציית React Native)
 app.add_middleware(
     CORSMiddleware,
@@ -269,6 +301,101 @@ class DriverSignupOut(BaseModel):
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
+@app.post("/admin/drivers/{driver_profile_id}/approve")
+def approve_driver(
+    driver_profile_id: int,
+    data: DriverReviewRequest,
+    db: Session = Depends(get_db),
+):
+    # check admin exists and is ADMIN
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can approve")
+
+    profile = db.query(DriverProfile).filter(DriverProfile.id == driver_profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    user = profile.user
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == profile.id)
+        .first()
+    )
+
+    # update statuses
+    user.status = UserStatus.ACTIVE
+    profile.driver_status = DriverStatus.APPROVED
+    profile.driver_status_updated_at = datetime.now(timezone.utc)
+
+    if vehicle:
+        vehicle.status = VehicleStatus.APPROVED
+        vehicle.reviewed_at = datetime.now(timezone.utc)
+        vehicle.reviewed_by_admin_id = admin.id
+        vehicle.rejection_reason = None
+
+    db.commit()
+
+    # send email
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Driver application approved",
+        body="Your driver account has been approved. You can now use the app as a driver.",
+    )
+
+    return {"detail": "Driver approved"}
+@app.post("/admin/drivers/{driver_profile_id}/reject")
+def reject_driver(
+    driver_profile_id: int,
+    data: DriverReviewRequest,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can reject")
+
+    profile = db.query(DriverProfile).filter(DriverProfile.id == driver_profile_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    user = profile.user
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == profile.id)
+        .first()
+    )
+
+    # if no reason → use a default
+    reason = data.reason or "Your documents were not approved."
+
+    user.status = UserStatus.REJECTED
+    profile.driver_status = DriverStatus.REJECTED
+    profile.driver_status_updated_at = datetime.now(timezone.utc)
+
+    if vehicle:
+        vehicle.status = VehicleStatus.REJECTED
+        vehicle.reviewed_at = datetime.now(timezone.utc)
+        vehicle.reviewed_by_admin_id = admin.id
+        vehicle.rejection_reason = reason
+
+    db.commit()
+
+    # send email with reason
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Driver application rejected",
+        body=f"Your driver application was rejected. Reason: {reason}",
+    )
+
+    return {"detail": "Driver rejected"}
 
 
 # ---------- Regular user signup endpoint ----------
