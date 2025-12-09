@@ -1,130 +1,331 @@
-import React from "react";
-import { View, StyleSheet, Text, TouchableOpacity } from "react-native";
-import { MapView, Camera } from "@maplibre/maplibre-react-native";
+// src/screens/AdminHomeScreen.tsx
+
+import React, { useEffect, useState, useRef } from "react";
+import {
+  View,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  Platform,
+  StatusBar,
+} from "react-native";
+import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
+import { fetchAllPlaces, PlaceForMap } from "../api/places";
 
+// --- שינוי קריטי: סגנון מפה נקי יותר ---
+// סגנון "Basic" מזכיר מאוד את המראה הנקי של גוגל (פחות צבעים רועשים)
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/streets-v2/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
-const INITIAL_CENTER: [number, number] = [34.8, 31.25]; // [lon, lat]
-const INITIAL_ZOOM = 10;
+const INITIAL_CENTER: [number, number] = [34.83, 31.24]; 
+const INITIAL_ZOOM = 12.5;
+
+// הטקסט יופיע רק בזום קרוב (כמו בגוגל שרואים שמות של חנויות רק כשמתקרבים)
+const LABEL_VISIBLE_ZOOM_THRESHOLD = 14; 
+
+const NEGEV_BOUNDS = {
+  ne: [35.10, 31.42],
+  sw: [34.72, 31.18],
+};
 
 type NavType = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AdminHomeScreen() {
   const navigation = useNavigation<NavType>();
+  const cameraRef = useRef<any>(null);
+
+  const [places, setPlaces] = useState<PlaceForMap[]>([]);
+  const [selectedPlace, setSelectedPlace] = useState<PlaceForMap | null>(null);
+  const [, setLoadingPlaces] = useState(false);
+  const [, setError] = useState<string | null>(null);
+
+  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        setLoadingPlaces(true);
+        setError(null);
+        const data = await fetchAllPlaces();
+        setPlaces(data);
+      } catch (e) {
+        console.error(e);
+        setError("Failed to load places");
+      } finally {
+        setLoadingPlaces(false);
+      }
+    }
+    load();
+  }, []);
+
+  const onRegionDidChange = async (feature: any) => {
+      const [lon, lat] = feature.geometry.coordinates;
+      const newZoom = feature.properties.zoomLevel;
+      setCurrentZoom(newZoom);
+      
+      // החזרה למרכז אם בורחים מהגבולות
+      if (lon < 34.72 || lat > 31.43) {
+          cameraRef.current?.setCamera({
+              centerCoordinate: [34.75, 31.39],
+              animationDuration: 600,
+          });
+      }
+  };
+
+  const resetCamera = () => {
+    cameraRef.current?.setCamera({
+      centerCoordinate: INITIAL_CENTER,
+      zoomLevel: INITIAL_ZOOM,
+      animationDuration: 1000,
+    });
+  };
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      
       {/* MAP */}
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
-        zoomEnabled
-        scrollEnabled
-        rotateEnabled
-        pitchEnabled
+        onRegionDidChange={onRegionDidChange} 
+        scrollEnabled={true}
+        rotateEnabled={false}
+        pitchEnabled={false}
+        logoEnabled={false} 
+        attributionEnabled={false} 
       >
         <Camera
-          centerCoordinate={INITIAL_CENTER}
-          zoomLevel={INITIAL_ZOOM}
-          minZoomLevel={8}
-          maxZoomLevel={17}
+          ref={cameraRef}
+          defaultSettings={{
+            centerCoordinate: INITIAL_CENTER,
+            zoomLevel: INITIAL_ZOOM,
+          }}
+          maxBounds={NEGEV_BOUNDS} 
+          minZoomLevel={10}
+          maxZoomLevel={18}
+          animationMode="flyTo"
         />
+
+        {/* CUSTOM MARKERS - Google Style */}
+        {places.map((place) => {
+          if (!place.location) return null;
+          const isSelected = selectedPlace?.id === place.id;
+          
+          // האם להציג את הטקסט?
+          const shouldShowLabel = currentZoom >= LABEL_VISIBLE_ZOOM_THRESHOLD || isSelected;
+
+          return (
+            <PointAnnotation
+              key={place.id}
+              id={String(place.id)}
+              coordinate={[place.location.lon, place.location.lat]}
+              onSelected={() => setSelectedPlace(place)}
+            >
+              <View style={styles.nativeMarkerContainer}>
+                
+                {/* האייקון עצמו - נקודה קטנה ונקייה */}
+                <View style={[styles.dotContainer, isSelected && styles.dotSelected]}>
+                    {/* אפשר להחליף את זה לאייקון של קטגוריה בעתיד */}
+                    <View style={styles.innerDot} />
+                </View>
+
+                {/* הטקסט - מופיע רק כשקרובים */}
+                {shouldShowLabel && (
+                    <View style={styles.labelWrapper}>
+                        <Text style={styles.nativeMapLabel} numberOfLines={1}>
+                            {place.name}
+                        </Text>
+                    </View>
+                )}
+
+              </View>
+            </PointAnnotation>
+          );
+        })}
       </MapView>
 
-      {/* TITLE OVERLAY */}
-      <View style={styles.adminOverlay}>
-        <Text style={styles.adminTitle}>Admin Panel – Map</Text>
+      {/* שאר הממשק (כפתורים, כרטיסיות) נשאר זהה ויפה */}
+      <View style={styles.topGlassBar}>
+        <View>
+          <Text style={styles.headerTitle}>Negev Community</Text>
+          <Text style={styles.headerSubtitle}>
+            {places.length} מקומות ביישובי הנגב
+          </Text>
+        </View>
+        <View style={styles.topButtonsRow}>
+          <TouchableOpacity style={styles.glassButtonSmall} onPress={() => navigation.navigate("AdminCities")}>
+            <Text style={styles.glassButtonText}>ערים</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.glassButtonSmall, { marginLeft: 8 }]} onPress={() => navigation.navigate("AdminCategories")}>
+            <Text style={styles.glassButtonText}>קטגוריות</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* BUTTON: CITIES */}
-      <TouchableOpacity
-        style={styles.cityButton}
-        onPress={() => navigation.navigate("AdminCities")}
-      >
-        <Text style={styles.buttonText}>Cities</Text>
-      </TouchableOpacity>
+      {!selectedPlace && (
+        <TouchableOpacity style={styles.fabButton} onPress={() => navigation.navigate("AdminPlaceMapPicker", { initialLat: INITIAL_CENTER[1], initialLon: INITIAL_CENTER[0] })}>
+          <Text style={styles.fabIcon}>+</Text>
+          <Text style={styles.fabText}>הוסף מקום</Text>
+        </TouchableOpacity>
+      )}
 
-      {/* BUTTON: CATEGORIES */}
-      <TouchableOpacity
-        style={styles.categoryButton}
-        onPress={() => navigation.navigate("AdminCategories")}
-      >
-        <Text style={styles.buttonText}>Categories</Text>
-      </TouchableOpacity>
+      {!selectedPlace && (
+         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
+             <Text style={{fontSize:20}}>🎯</Text>
+         </TouchableOpacity>
+      )}
 
-      {/* BUTTON: PICK LOCATION ON MAP */}
-      <TouchableOpacity
-        style={styles.pickLocationButton}
-        onPress={() =>
-          navigation.navigate("AdminPlaceMapPicker", {
-            initialLat: INITIAL_CENTER[1],
-            initialLon: INITIAL_CENTER[0],
-          })
-        }
-      >
-        <Text style={styles.buttonText}>📍 Pick Location</Text>
-      </TouchableOpacity>
+      {selectedPlace && (
+        <View style={styles.bottomSheetCard}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.cardHeader}>
+            <View style={{flex: 1}}>
+              <Text style={styles.cardTitle} numberOfLines={1}>{selectedPlace.name}</Text>
+              <Text style={styles.cardSubtitle}>
+                {selectedPlace.place_type === "BUSINESS" ? "עסק" : "ציבורי"} 
+                {selectedPlace.city?.name_he ? ` • ${selectedPlace.city.name_he}` : ""}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setSelectedPlace(null)}>
+                <Text style={styles.closeButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.cardContent}>
+             {selectedPlace.description && (
+               <Text style={styles.descriptionText} numberOfLines={3}>
+                 {selectedPlace.description}
+               </Text>
+            )}
+          </View>
+          <TouchableOpacity style={styles.editActionButton}>
+            <Text style={styles.editActionText}>ערוך פרטי מקום</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
 
+// --- סגנונות חדשים למראה של Google Maps ---
+
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: "#F2F2F7" },
   map: { flex: 1 },
 
-  adminOverlay: {
-    position: "absolute",
-    top: 40,
-    left: 20,
-    right: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    borderRadius: 8,
+  // מרקר בסגנון גוגל מפות
+  nativeMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible', // חשוב כדי שהטקסט לא ייחתך
   },
-  adminTitle: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
+  
+  // הנקודה על המפה
+  dotContainer: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+    zIndex: 2, // שהנקודה תהיה מעל הטקסט קצת
+  },
+  innerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#4285F4', // הצבע הכחול הקלאסי של גוגל (או הטורקיז שלך)
+  },
+  dotSelected: {
+    transform: [{ scale: 1.3 }],
+    borderWidth: 2,
+    borderColor: '#4285F4',
   },
 
-  /* TOP BUTTONS */
-  cityButton: {
-    position: "absolute",
-    top: 100,
-    left: 20,
-    backgroundColor: "#4C6FFF",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+  // מעטפת לטקסט
+  labelWrapper: {
+    marginTop: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)', // רקע חצי שקוף כמו בגוגל
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,0,0,0.1)',
+    zIndex: 1,
   },
-  categoryButton: {
-    position: "absolute",
-    top: 100,
-    right: 20,
-    backgroundColor: "#FF3B70",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+  nativeMapLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#333333',
+    textAlign: 'center',
   },
 
-  pickLocationButton: {
+  // --- שאר הסגנונות ללא שינוי ---
+  topGlassBar: {
     position: "absolute",
-    bottom: 90,
-    right: 20,
-    backgroundColor: "#6A1B9A",
+    top: Platform.OS === 'ios' ? 60 : 40,
+    left: 16,
+    right: 16,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.9)", 
+    borderRadius: 24,
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderRadius: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,1)",
   },
-
-  buttonText: {
-    color: "#FFF",
-    fontSize: 14,
-    fontWeight: "600",
+  headerTitle: { fontSize: 17, fontWeight: "800", color: "#1D1D1F", letterSpacing: -0.5 },
+  headerSubtitle: { fontSize: 12, color: "#86868B", marginTop: 2, fontWeight: "500" },
+  topButtonsRow: { flexDirection: "row" },
+  glassButtonSmall: {
+    backgroundColor: "#F2F2F7",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 0.5,
+    borderColor: "rgba(0,0,0,0.05)",
   },
+  glassButtonText: { fontSize: 13, fontWeight: "600", color: "#007AFF" },
+  fabButton: {
+    position: "absolute", bottom: 30, alignSelf: "center", backgroundColor: "#1D1D1F", 
+    flexDirection: "row", alignItems: "center", paddingVertical: 14, paddingHorizontal: 24, borderRadius: 32,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 16, elevation: 10,
+  },
+  fabIcon: { color: "#FFF", fontSize: 22, marginRight: 8, fontWeight: "300", marginTop: -2 },
+  fabText: { color: "#FFF", fontSize: 15, fontWeight: "600" },
+  recenterButton: {
+    position: "absolute", right: 20, bottom: 100, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFF",
+    alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
+  },
+  bottomSheetCard: {
+    position: "absolute", bottom: 24, left: 16, right: 16, backgroundColor: "#FFFFFF", borderRadius: 28, padding: 24,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 12, borderWidth: 1, borderColor: "rgba(0,0,0,0.03)",
+  },
+  sheetHandle: { width: 36, height: 5, backgroundColor: "#E5E5EA", borderRadius: 3, alignSelf: "center", marginBottom: 20 },
+  cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  cardTitle: { fontSize: 22, fontWeight: "800", color: "#1D1D1F", marginBottom: 4, letterSpacing: -0.5 },
+  cardSubtitle: { fontSize: 14, color: "#86868B", fontWeight: "500" },
+  closeButton: { padding: 8, backgroundColor: "#F2F2F7", borderRadius: 50, marginLeft: 10 },
+  closeButtonText: { fontSize: 12, color: "#8E8E93", fontWeight: "bold" },
+  divider: { height: 1, backgroundColor: "#F2F2F7", marginVertical: 18 },
+  cardContent: { marginBottom: 20 },
+  descriptionText: { marginTop: 8, fontSize: 14, color: "#636366", lineHeight: 20 },
+  editActionButton: { backgroundColor: "#007AFF", paddingVertical: 15, borderRadius: 20, alignItems: "center", shadowColor: "#007AFF", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8, elevation: 4 },
+  editActionText: { color: "#FFF", fontWeight: "600", fontSize: 16 },
 });
