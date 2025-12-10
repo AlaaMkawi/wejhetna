@@ -1182,6 +1182,11 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
         if owner.role != UserRole.BUSINESS_OWNER:
             raise HTTPException(status_code=400, detail="User is not a business owner")
 
+    if data.place_type == PlaceType.BUSINESS:
+        can_be_claimed_value = True
+    else:  # PUBLIC_SERVICE
+        can_be_claimed_value = False
+
     # -----------------------------------------
     # 5) יצירת Place
     # -----------------------------------------
@@ -1191,13 +1196,14 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
         category_id=data.category_id,
         place_type=data.place_type,
         name=data.name,
-        can_be_claimed=data.can_be_claimed,
+        can_be_claimed=can_be_claimed_value,
         description=data.description,
         phone=data.phone,
         opening_hours=data.opening_hours,
         main_image_url=data.main_image_url,
         social_links=data.social_links,
         owner_user_id=data.owner_user_id,
+        created_by_admin_id=data.created_by_admin_id,
     )
     db.add(place)
     db.commit()

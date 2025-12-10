@@ -6,21 +6,18 @@ import { createBottomTabNavigator, BottomTabBarProps } from "@react-navigation/b
 import { AdminTabParamList, RootStackParamList } from "./types";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-// Reanimated
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
   Easing,
-  SharedValue,   // ← תיקון חשוב
+  SharedValue,
 } from 'react-native-reanimated';
 
-// Screens
-import AdminHomeScreen from '../screens/AdminHomeScreen';
-import NewUsersScreen from '../screens/NewUsersScreen';
-import AlreadyUsersScreen from '../screens/AlreadyUsersScreen';
+import AdminHomeScreen from '../screens/Admin/AdminHomeScreen';
+import NewUsersScreen from '../screens/Admin/NewUsersScreen';
+import AlreadyUsersScreen from '../screens/Admin/AlreadyUsersScreen';
 
-// Icons
 import Feather from 'react-native-vector-icons/Feather';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
@@ -30,11 +27,9 @@ type AdminTabsProps = NativeStackScreenProps<RootStackParamList, "AdminTabs">;
 
 const Tab = createBottomTabNavigator<AdminTabParamList>();
 
-// ---- הגדרות ----
 const INDICATOR_SIZE = SCREEN_WIDTH / 6;
 const ANIMATION_DURATION = 350;
 
-// מפת אייקונים
 const ICONS_MAP: { [key: string]: { name: string; Library: any } } = {
   fitnessDummy: { name: 'tool', Library: Feather },
   alreadyUsers: { name: 'users', Library: Feather },
@@ -43,9 +38,6 @@ const ICONS_MAP: { [key: string]: { name: string; Library: any } } = {
   profileDummy: { name: 'bell', Library: Feather },
 };
 
-// -------------------------------------------------
-// Moving Indicator Component
-// -------------------------------------------------
 const MovingIndicator = ({ translateX }: { translateX: SharedValue<number> }) => {
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
@@ -58,9 +50,6 @@ const MovingIndicator = ({ translateX }: { translateX: SharedValue<number> }) =>
   );
 };
 
-// -------------------------------------------------
-// Custom Tab Bar
-// -------------------------------------------------
 const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
   const tabWidth = SCREEN_WIDTH / state.routes.length;
   const translateX = useSharedValue(0);
@@ -78,7 +67,6 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
       easing: Easing.out(Easing.back(0.9)),
     });
   }, [state.index, getTargetPosition, translateX]);
-
 
   return (
     <View style={styles.tabBarWrapper}>
@@ -124,39 +112,48 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
   );
 };
 
-// -------------------------------------------------
-// Navigator
-// -------------------------------------------------
-
 export default function AdminTabNavigator({ route }: AdminTabsProps) {
-  const { adminUserId } = route.params;
+  const { adminUserId, role } = route.params;
 
   return (
-  <Tab.Navigator
-    id="AdminTabs"
-    tabBar={(props) => <CustomAdminTabBar {...props} />}
-    screenOptions={{
-      headerShown: false,
-      tabBarHideOnKeyboard: true,
-    }}
-    initialRouteName="AdminHome"
-  >
-    <Tab.Screen name="fitnessDummy" component={AlreadyUsersScreen} />
-    <Tab.Screen name="alreadyUsers" component={AlreadyUsersScreen} />
-    <Tab.Screen name="AdminHome" component={AdminHomeScreen} />
-<Tab.Screen
-  name="newUsers"
-  component={NewUsersScreen}
-  initialParams={{ adminUserId }}   // 👈 pass the id into the tab
-/>
-    <Tab.Screen name="profileDummy" component={NewUsersScreen} />
-  </Tab.Navigator>
+    <Tab.Navigator
+      id="AdminTabs"
+      tabBar={(props) => <CustomAdminTabBar {...props} />}
+      screenOptions={{
+        headerShown: false,
+        tabBarHideOnKeyboard: true,
+      }}
+      initialRouteName="AdminHome"
+    >
+      <Tab.Screen
+        name="fitnessDummy"
+        component={AlreadyUsersScreen}
+        initialParams={{ adminUserId, role }}
+      />
+      <Tab.Screen
+        name="alreadyUsers"
+        component={AlreadyUsersScreen}
+        initialParams={{ adminUserId, role }}
+      />
+      <Tab.Screen
+        name="AdminHome"
+        component={AdminHomeScreen}
+        initialParams={{ adminUserId, role }}
+      />
+      <Tab.Screen
+        name="newUsers"
+        component={NewUsersScreen}
+        initialParams={{ adminUserId, role }}
+      />
+      <Tab.Screen
+        name="profileDummy"
+        component={NewUsersScreen}
+        initialParams={{ adminUserId, role }}
+      />
+    </Tab.Navigator>
   );
 }
 
-// -------------------------------------------------
-// Styles
-// -------------------------------------------------
 const styles = StyleSheet.create({
   tabBarWrapper: {
     position: 'absolute',
