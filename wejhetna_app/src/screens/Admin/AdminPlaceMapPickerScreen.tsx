@@ -8,60 +8,52 @@ import {
   PointAnnotation,
 } from "@maplibre/maplibre-react-native";
 
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
 import { RootStackParamList } from "../../navigation/types";
 
-// ייבוא פונקציית שליפת המקומות
 import {
   fetchAllPlaces,
   PlaceForMap,
-  checkOsmForGps,      // 👈 הוספנו
+  checkOsmForGps,
 } from "../../api/places";
 
-// 👇 צריך להתקין ולהגדיר ספרייה למיקום (לדוגמה):
-// npm install @react-native-community/geolocation
-// ואז:
 import Geolocation from "@react-native-community/geolocation";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
-type AdminPlaceMapPickerParams = {
-  initialLat?: number;
-  initialLon?: number;
-};
-
-type NavType = NativeStackNavigationProp<RootStackParamList>;
+type NavType = NativeStackNavigationProp<
+  RootStackParamList,
+  "AdminPlaceMapPicker"
+>;
+type AdminPlaceMapPickerRoute = RouteProp<
+  RootStackParamList,
+  "AdminPlaceMapPicker"
+>;
 
 type SourceType = "MAP_PICK" | "GPS_NO_OSM" | "GPS_WITH_OSM";
 
 export default function AdminPlaceMapPickerScreen() {
   const navigation = useNavigation<NavType>();
-  const route = useRoute();
-  const params = route.params as AdminPlaceMapPickerParams | undefined;
+  const route = useRoute<AdminPlaceMapPickerRoute>();
+
+  const { initialLat, initialLon, adminUserId, role } = route.params;
 
   const [selectedLat, setSelectedLat] = useState<number | null>(
-    params?.initialLat ?? 31.25
+    initialLat ?? 31.25
   );
   const [selectedLon, setSelectedLon] = useState<number | null>(
-    params?.initialLon ?? 34.8
+    initialLon ?? 34.8
   );
 
-  // סוג המקור: ברירת מחדל MAP_PICK
   const [selectedSource, setSelectedSource] =
     useState<SourceType>("MAP_PICK");
-
-  // osm_id אם יש התאמה
   const [selectedOsmId, setSelectedOsmId] = useState<string | null>(null);
-
   const [gpsLoading, setGpsLoading] = useState(false);
-
-  // משתנה למקומות הקיימים
   const [existingPlaces, setExistingPlaces] = useState<PlaceForMap[]>([]);
 
-  // טעינת המקומות בעליית המסך
   useEffect(() => {
     async function load() {
       try {
@@ -74,18 +66,16 @@ export default function AdminPlaceMapPickerScreen() {
     load();
   }, []);
 
-  // בחירה ידנית על המפה
   function handleMapPress(e: any) {
-    const coords = e?.geometry?.coordinates; // [lon, lat]
+    const coords = e?.geometry?.coordinates;
     if (Array.isArray(coords) && coords.length === 2) {
       setSelectedLon(coords[0]);
       setSelectedLat(coords[1]);
-      setSelectedSource("MAP_PICK"); // 👈 זה מפה
-      setSelectedOsmId(null);        // לא מקושר ל־OSM
+      setSelectedSource("MAP_PICK");
+      setSelectedOsmId(null);
     }
   }
 
-  // כפתור: "המיקום שלי" → GPS
   function handleUseMyLocation() {
     setGpsLoading(true);
 
@@ -93,10 +83,9 @@ export default function AdminPlaceMapPickerScreen() {
       async (position) => {
         const { latitude, longitude } = position.coords;
 
-        // שמים נקודה על המפה
         setSelectedLat(latitude);
         setSelectedLon(longitude);
-        setSelectedSource("GPS_NO_OSM"); // בהתחלה נניח שזה עסק חדש
+        setSelectedSource("GPS_NO_OSM");
         setSelectedOsmId(null);
 
         try {
@@ -153,15 +142,16 @@ export default function AdminPlaceMapPickerScreen() {
     );
   }
 
-  // כפתור: "אישור מיקום" → מעבר לטופס
   function handleConfirm() {
     if (selectedLat == null || selectedLon == null) return;
 
     navigation.navigate("AdminPlaceForm", {
       pickedLat: selectedLat,
       pickedLon: selectedLon,
-      pickedSource: selectedSource,    // 👈 חשוב ל־MAP_PICK / GPS_xxx
-      pickedOsmId: selectedOsmId,      // 👈 יכול להיות null
+      pickedSource: selectedSource,
+      pickedOsmId: selectedOsmId,
+      adminUserId,
+      role,
     });
   }
 
@@ -181,7 +171,6 @@ export default function AdminPlaceMapPickerScreen() {
             zoomLevel={13}
           />
 
-          {/* --- הצגת המקומות הקיימים עם שמות --- */}
           {existingPlaces.map((place) => {
             if (!place.location) return null;
             return (
@@ -197,13 +186,11 @@ export default function AdminPlaceMapPickerScreen() {
             );
           })}
 
-          {/* --- הנקודה שנבחרה (מפה או GPS) --- */}
           {selectedLat != null && selectedLon != null && (
             <PointAnnotation
               id="selected_point"
               coordinate={[selectedLon, selectedLat]}
             >
-              {/* אפשר לעצב פה נקודה אם תרצי */}
               <View style={styles.selectedDot} />
             </PointAnnotation>
           )}
@@ -213,7 +200,9 @@ export default function AdminPlaceMapPickerScreen() {
       <View style={styles.bottomPanel}>
         <Text style={styles.infoText}>
           {selectedLat != null && selectedLon != null
-            ? `lat: ${selectedLat.toFixed(5)}, lon: ${selectedLon.toFixed(5)} (${selectedSource})`
+            ? `lat: ${selectedLat.toFixed(5)}, lon: ${selectedLon.toFixed(
+                5
+              )} (${selectedSource})`
             : "הקישי על המפה או השתמשי במיקום שלי"}
         </Text>
 
@@ -234,7 +223,6 @@ export default function AdminPlaceMapPickerScreen() {
     </View>
   );
 }
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
   mapContainer: { flex: 1 },

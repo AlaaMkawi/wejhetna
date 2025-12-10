@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList } from "../navigation/types";
+import { RootStackParamList } from "../../navigation/types";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
@@ -36,7 +36,7 @@ export type DriverApplication = {
 type Props = NativeStackScreenProps<RootStackParamList, "AdminDrivers">;
 
 export default function AdminDriversScreen({ route, navigation }: Props) {
-  const { adminUserId } = route.params;
+  const { adminUserId, role } = route.params;
 
   const [drivers, setDrivers] = useState<DriverApplication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,7 +72,6 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
       d.full_name.toLowerCase().includes(search.toLowerCase())
     );
 
-    // we don't have created_at, so oldest = original order, newest = reversed
     if (sortOrder === "newest") {
       list = [...list].reverse();
     }
@@ -82,6 +81,7 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
   const handleOpenDetails = (driver: DriverApplication) => {
     navigation.navigate("AdminDriverDetails", {
       adminUserId,
+      role,
       driver,
     });
   };

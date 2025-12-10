@@ -4,17 +4,17 @@ import HomeScreen from "../screens/HomeScreen";
 import SignUpScreen from "../screens/SignUpScreen";
 import { RootStackParamList } from "./types";
 import AdminLoginScreen from "../screens/AdminLoginScreen";
-import AdminDriversScreen from "../screens/AdminDriversScreen";
+import AdminDriversScreen from "../screens/Admin/AdminDriversScreen";
 import UserLoginScreen from "../screens/UserLoginScreen";
 import AdminTabNavigator from "./AdminTabNavigator";
-import AdminCitiesScreen from "../screens/AdminCitiesScreen";
-import AdminCategoriesScreen from "../screens/AdminCategoriesScreen";
+import AdminCitiesScreen from "../screens//Admin/AdminCitiesScreen";
+import AdminCategoriesScreen from "../screens/Admin/AdminCategoriesScreen";
 import AdminPlaceFormScreen from "../screens/Admin/AdminPlaceFormScreen";
 import AdminPlaceMapPickerScreen from "../screens/Admin/AdminPlaceMapPickerScreen";
 import LoginScreen from "../screens/LoginScreen";
-import AdminHomeScreen from "../screens/AdminHomeScreen";
+import AdminHomeScreen from "../screens/Admin/AdminHomeScreen";
 import RegularHomeScreen from "../screens/RegularAccount/RegularHomeScreen";
-import AdminDriverDetailsScreen from "../screens/AdminDriverDetailsScreen";
+import AdminDriverDetailsScreen from "../screens/Admin/AdminDriverDetailsScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 

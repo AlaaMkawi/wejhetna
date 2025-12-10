@@ -12,6 +12,10 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { useRoute, RouteProp } from "@react-navigation/native";
+import { RootStackParamList } from "../../navigation/types";
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
 type City = {
   id: number;
@@ -23,14 +27,16 @@ type City = {
 };
 
 const API_BASE_URL = "http://10.0.2.2:8000";
+type AdminCitiesRoute = RouteProp<RootStackParamList, "AdminCities">;
 
 export default function AdminCitiesScreen() {
   const [cities, setCities] = useState<City[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
-
+  const route = useRoute<AdminCitiesRoute>();
+  const { adminUserId, role } = route.params;
   const [modalVisible, setModalVisible] = useState<boolean>(false);
   const [editingCity, setEditingCity] = useState<City | null>(null);
-
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [nameAr, setNameAr] = useState<string>("");
   const [nameHe, setNameHe] = useState<string>("");
   const [nameEn, setNameEn] = useState<string>("");
@@ -144,6 +150,21 @@ export default function AdminCitiesScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Cities</Text>
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={() =>
+          navigation.reset({              
+            routes: [
+                {
+                  name: "AdminTabs",
+                  params: { adminUserId, role },
+                },
+              ],
+          })
+        }
+      >
+        <Text style={styles.backButtonText}>← חזרה לבית</Text>
+      </TouchableOpacity>
 
       {loading ? (
         <ActivityIndicator style={{ marginTop: 20 }} />
@@ -281,6 +302,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   primaryButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  backButton: {
+    alignSelf: "flex-start",
+    marginLeft: 16,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "#E0E0E0",
+    borderRadius: 8,
+  },
+  backButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+  },
 
   cancelButton: {
     marginTop: 10,
