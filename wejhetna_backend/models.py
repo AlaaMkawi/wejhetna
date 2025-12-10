@@ -214,7 +214,6 @@ class Category(Base):
 
     # קשר 1–ל־הרבה: קטגוריה אחת → הרבה Places
     places = relationship("Place", back_populates="category")
-
 class Place(Base):
     __tablename__ = "places"
 
@@ -238,6 +237,9 @@ class Place(Base):
     # שם המקום – חובה
     name = Column(String, nullable=False)
 
+    # 🔹 שמות לפי שפה – לא חובה במסד (nullable=True)
+    name_ar = Column(String, nullable=True)
+    name_he = Column(String, nullable=True)
     # האם אפשר לקחת בעלות (claim)
     can_be_claimed = Column(Boolean, nullable=False, default=True)
 
@@ -258,4 +260,7 @@ class Place(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+
 
