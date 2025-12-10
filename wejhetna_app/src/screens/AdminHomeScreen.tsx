@@ -18,7 +18,7 @@ import { fetchAllPlaces, PlaceForMap } from "../api/places";
 // --- שינוי קריטי: סגנון מפה נקי יותר ---
 // סגנון "Basic" מזכיר מאוד את המראה הנקי של גוגל (פחות צבעים רועשים)
 const MAP_STYLE_URL =
-  "https://api.maptiler.com/maps/streets-v2/style.json?key=Js2mV1WY15ayeXH6ceQP";
+  "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 const INITIAL_CENTER: [number, number] = [34.83, 31.24]; 
 const INITIAL_ZOOM = 12.5;
