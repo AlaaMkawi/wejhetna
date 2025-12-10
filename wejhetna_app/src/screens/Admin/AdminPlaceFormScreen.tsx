@@ -1,6 +1,8 @@
 // src/screens/AdminPlaceFormScreen.tsx
 import { Picker } from "@react-native-picker/picker";
-import { useRoute } from "@react-navigation/native";
+import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { RootStackParamList } from "../../navigation/types";
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -22,16 +24,26 @@ import {
   PlaceType,
 } from "../../api/places";
 
-type AdminPlaceFormRouteParams = {
-  pickedLat?: number;
-  pickedLon?: number;
-};
+type AdminPlaceFormRoute = RouteProp<RootStackParamList, "AdminPlaceForm">;
 
 export default function AdminPlaceFormScreen() {
-  const route = useRoute();
-  const params = route.params as AdminPlaceFormRouteParams | undefined;
+  const route = useRoute<AdminPlaceFormRoute>();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
+  const {
+    pickedLat,
+    pickedLon,
+    pickedSource,
+    pickedOsmId,
+    adminUserId,
+    role,
+  } = route.params;
 
   const [name, setName] = useState("");
+  const [nameAr, setNameAr] = useState("");
+  const [nameHe, setNameHe] = useState("");
+
   const [placeType, setPlaceType] = useState<PlaceType>("PUBLIC_SERVICE");
   const [cityId, setCityId] = useState<number | undefined>(undefined);
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined);
@@ -52,11 +64,11 @@ export default function AdminPlaceFormScreen() {
   const [phoneBlurred, setPhoneBlurred] = useState(false);
 
   useEffect(() => {
-    if (params?.pickedLat && params?.pickedLon) {
-      setLat(params.pickedLat);
-      setLon(params.pickedLon);
+    if (pickedLat && pickedLon) {
+      setLat(pickedLat);
+      setLon(pickedLon);
     }
-  }, [params?.pickedLat, params?.pickedLon]);
+  }, [pickedLat, pickedLon]);
 
   useEffect(() => {
     let isActive = true;
@@ -110,19 +122,35 @@ export default function AdminPlaceFormScreen() {
     phoneTouched && (!phoneBlurred || !isPhoneValid);
 
   const isNameValid = name.trim().length > 0;
+  const isNameArValid = nameAr.trim().length > 0;
+  const isNameHeValid = nameHe.trim().length > 0;
   const isCityValid = !!cityId;
   const isLocationValid = lat !== undefined && lon !== undefined;
   const isCategoryValid =
     placeType !== "BUSINESS" || (placeType === "BUSINESS" && !!categoryId);
 
   const isFormValid =
-    isNameValid && isCityValid && isLocationValid && isCategoryValid && isPhoneValid;
+    isNameValid &&
+    isNameArValid &&
+    isNameHeValid &&
+    isCityValid &&
+    isLocationValid &&
+    isCategoryValid &&
+    isPhoneValid;
 
   const canSubmit = isFormValid && !creating;
 
   async function handleSubmit() {
     if (!isNameValid) {
       Alert.alert("שגיאה", "שם המקום חובה");
+      return;
+    }
+    if (!isNameArValid) {
+      Alert.alert("שגיאה", "שם המקום בערבית חובה");
+      return;
+    }
+    if (!isNameHeValid) {
+      Alert.alert("שגיאה", "שם המקום בעברית חובה");
       return;
     }
 
@@ -142,33 +170,60 @@ export default function AdminPlaceFormScreen() {
     }
 
     if (!isPhoneValid) {
-      Alert.alert("שגיאה", "מספר הטלפון (אם הוזן) חייב להיות באורך 9 או 10 ספרות");
+      Alert.alert(
+        "שגיאה",
+        "מספר הטלפון (אם הוזן) חייב להיות באורך 9 או 10 ספרות"
+      );
       return;
     }
+
+    const isFromGps =
+      pickedSource === "GPS_NO_OSM" || pickedSource === "GPS_WITH_OSM";
+    const locationSourceForBackend = isFromGps ? "GPS" : "MAP_PICK";
 
     try {
       setCreating(true);
 
       await createAdminPlace({
         name,
+        name_ar: nameAr,
+        name_he: nameHe,
         place_type: placeType,
         city_id: cityId!,
         category_id: categoryId ?? null,
-        can_be_claimed: true,
+        can_be_claimed: placeType === "BUSINESS",
         description: description || null,
         phone: hasPhone ? phone : null,
         opening_hours: openingHours || null,
         main_image_url: null,
         social_links: null,
         owner_user_id: null,
+        created_by_admin_id: adminUserId,
         lat: lat!,
         lon: lon!,
-        source: "MAP_PICK",
-        osm_id: null,
+        source: locationSourceForBackend,
+        osm_id: pickedOsmId ?? null,
       });
 
-      Alert.alert("הצלחה", "המקום נוצר בהצלחה 🎉");
+      Alert.alert("הצלחה", "המקום נוצר בהצלחה 🎉", [
+        {
+          text: "OK",
+          onPress: () =>
+            navigation.reset({
+              index: 0,
+              routes: [
+                {
+                  name: "AdminTabs",
+                  params: { adminUserId, role },
+                },
+              ],
+            }),
+        },
+      ]);
+
       setName("");
+      setNameAr("");
+      setNameHe("");
       setDescription("");
       setPhone("");
       setOpeningHours("");
@@ -176,9 +231,40 @@ export default function AdminPlaceFormScreen() {
       setLon(undefined);
       setPhoneTouched(false);
       setPhoneBlurred(false);
-    } catch (err) {
-      console.error(err);
-      Alert.alert("שגיאה", "נכשלה יצירת המקום, בדקי לוגים ב־backend");
+    } catch (err: any) {
+      // ⬅️ שינינו כאן – בלי console.error כדי שלא יופיע Toast אדום למשתמש
+      if (__DEV__) {
+        console.log("Create place error (dev log):", err);
+      }
+
+      const reason =
+        err?.message || "נכשלה יצירת המקום (שגיאה לא ידועה)";
+
+      Alert.alert(
+        "שגיאה בשמירת המקום",
+        `נכשלה יצירת המקום.\n\nסיבה אפשרית:\n${reason}\n\nהאם תרצי לנסות שוב?`,
+        [
+          {
+            text: "חזרה למסך הבית",
+            style: "destructive",
+            onPress: () =>
+              navigation.reset({
+                index: 0,
+                routes: [
+                  {
+                    name: "AdminTabs",
+                    params: { adminUserId, role },
+                  },
+                ],
+              }),
+          },
+          {
+            text: "לנסות שוב",
+            style: "cancel",
+            // לא עושים כלום → נשארים בדף והנתונים לא נמחקים
+          },
+        ]
+      );
     } finally {
       setCreating(false);
     }
@@ -196,12 +282,29 @@ export default function AdminPlaceFormScreen() {
   return (
     <ScrollView contentContainerStyle={{ padding: 16 }}>
       <View style={styles.container}>
-        <Text style={styles.label}>שם המקום *</Text>
+        <Text style={styles.label}>שם באנגלית *</Text>
         <TextInput
           style={styles.input}
           value={name}
-          onChangeText={setName}
-          placeholder="למשל: מרפאת אם וילד"
+          onChangeText={(text) => setName(text.replace(/[^A-Za-z0-9 _-]/g, ""))}
+          placeholder="Example: Mother and Child Clinic"
+        />
+        <Text style={styles.label}>שם בערבית *</Text>
+        <TextInput
+          style={styles.input}
+          value={nameAr}
+          onChangeText={(text) => setNameAr(text.replace(/[^\u0600-\u06FF\s]/g, ""))}
+          placeholder="مثال: عيادة الأم والطفل"
+          textAlign="right"
+        />
+
+        <Text style={styles.label}>שם בעברית *</Text>
+        <TextInput
+          style={styles.input}
+          value={nameHe}
+          onChangeText={(text) => setNameHe(text.replace(/[^\u0590-\u05FF\s]/g, ""))}
+          placeholder="לדוגמה: מרפאת אם וילד"
+          textAlign="right"
         />
 
         <Text style={styles.label}>סוג המקום</Text>
@@ -374,6 +477,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 6,
+    marginBottom: 4,
   },
   picker: {
     borderWidth: 1,

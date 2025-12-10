@@ -73,8 +73,6 @@ class User(Base):
 
     # relationships
     driver_profile = relationship("DriverProfile", back_populates="user", uselist=False)
-    # בעלויות על עסקים (places)
-    owned_places = relationship("Place", back_populates="owner")
 
 
 class DriverProfile(Base):
@@ -250,10 +248,16 @@ class Place(Base):
     main_image_url = Column(Text, nullable=True)
     social_links = Column(Text, nullable=True)
 
-    # 👇 בעל העסק – קשר MANY places → ONE user
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    owner = relationship("User", back_populates="owned_places")
-
+    created_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    owner = relationship(
+        "User",
+        foreign_keys=[owner_user_id]
+    )
+    created_by_admin = relationship(
+        "User",
+        foreign_keys=[created_by_admin_id]
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

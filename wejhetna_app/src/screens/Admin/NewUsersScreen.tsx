@@ -7,10 +7,10 @@ type Props = {
 };
 
 export default function NewUsersScreen({ route, navigation }: Props) {
-  const { adminUserId } = route.params || {};
+  const { adminUserId, role } = route.params || {};
 
   const handleDriverRequestsPress = () => {
-    navigation.navigate("AdminDrivers", { adminUserId });
+    navigation.navigate("AdminDrivers", { adminUserId, role });
   };
 
   const handleBusinessRequestsPress = () => {
