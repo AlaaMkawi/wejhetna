@@ -85,7 +85,7 @@ export default function LoginScreen({ navigation }: Props) {
         routes: [
           {
             name: "AdminTabs",
-            params: { adminUserId: userId }, // 👈 this is what approve/reject will use
+            params: { adminUserId: userId, role: "ADMIN" },
           },
         ],
       });

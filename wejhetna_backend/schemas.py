@@ -66,8 +66,15 @@ class CategoryResponse(CategoryBase):
 class LocationBase(BaseModel):
     lat: float = Field(..., description="Latitude")
     lon: float = Field(..., description="Longitude")
-    source: str = Field("MAP_PICK", description="MAP_PICK / GPS / OSM_SEARCH")
-    osm_id: Optional[str] = Field(None, description="OSM feature id like 'node:123456789'")
+    # נוסיף גם הערכים החדשים של GPS בתיאור
+    source: str = Field(
+        "MAP_PICK",
+        description="MAP_PICK / GPS_NO_OSM / GPS_WITH_OSM / OSM_SEARCH",
+    )
+    osm_id: Optional[str] = Field(
+        None,
+        description="OSM feature id like 'node:123456789'",
+    )
 
 
 class LocationCreate(LocationBase):
@@ -93,7 +100,10 @@ class LocationResponse(LocationBase):
 
 
 class PlaceBase(BaseModel):
+    # השם הכללי (למשל באנגלית או ברירת מחדל)
     name: str
+    name_ar: Optional[str] = None
+    name_he: Optional[str] = None
     place_type: PlaceType          # BUSINESS / PUBLIC_SERVICE
 
     city_id: int                   # לכל מקום יש עיר אחת
@@ -106,26 +116,40 @@ class PlaceBase(BaseModel):
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
     social_links: Optional[str] = None
-
+    created_by_admin_id: Optional[int] = None
     owner_user_id: Optional[int] = None  # אם זה עסק, אפשר לשייך לבעלים
 
 
 class PlaceCreate(PlaceBase):
+    """
+    יצירת מקום רגילה (לאדמין דרך /places) –
+    כאן נדרוש שמות בשתי השפות.
+    """
+    name_ar: str
+    name_he: str
+
     # כאן אנחנו מניחים שה-Location כבר נוצר, ויש לנו את ה-id שלו.
     location_id: int
 
 
 class PlaceResponse(PlaceBase):
     id: int
+
+    # בשכבת ה-Response מותר שלא יהיה ערך (למקומות ישנים)
+    name_ar: Optional[str] = None
+    name_he: Optional[str] = None
+
     location: LocationResponse
     city: CityResponse
     category: Optional[CategoryResponse] = None
+    created_by_admin_id: Optional[int] = None
 
     created_at: datetime
     updated_at: datetime
 
     class Config:
         orm_mode = True
+
 
 class AdminPlaceCreate(BaseModel):
     """
@@ -134,6 +158,10 @@ class AdminPlaceCreate(BaseModel):
 
     # ---------- שדות של PLACE ----------
     name: str
+    # כאן *חובה* למלא ערבית + עברית:
+    name_ar: str
+    name_he: str
+
     place_type: PlaceType          # BUSINESS / PUBLIC_SERVICE
 
     city_id: int                   # חובה – לכל מקום יש עיר
@@ -148,9 +176,15 @@ class AdminPlaceCreate(BaseModel):
     social_links: Optional[str] = None
 
     owner_user_id: Optional[int] = None  # אם זה עסק משויך לבעלים
-
+    created_by_admin_id: Optional[int] = None
     # ---------- שדות של LOCATION ----------
     lat: float = Field(..., description="Latitude")
     lon: float = Field(..., description="Longitude")
-    source: str = Field("MAP_PICK", description="MAP_PICK / GPS / OSM_SEARCH")
-    osm_id: Optional[str] = Field(None, description="OSM feature id like 'node:123456789'")
+    source: str = Field(
+        "MAP_PICK",
+        description="MAP_PICK / GPS_NO_OSM / GPS_WITH_OSM / OSM_SEARCH",
+    )
+    osm_id: Optional[str] = Field(
+        None,
+        description="OSM feature id like 'node:123456789'",
+    )
