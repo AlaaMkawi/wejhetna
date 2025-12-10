@@ -73,8 +73,6 @@ class User(Base):
 
     # relationships
     driver_profile = relationship("DriverProfile", back_populates="user", uselist=False)
-    # בעלויות על עסקים (places)
-    owned_places = relationship("Place", back_populates="owner")
 
 
 class DriverProfile(Base):
@@ -238,6 +236,9 @@ class Place(Base):
     # שם המקום – חובה
     name = Column(String, nullable=False)
 
+    # 🔹 שמות לפי שפה – לא חובה במסד (nullable=True)
+    name_ar = Column(String, nullable=True)
+    name_he = Column(String, nullable=True)
     # האם אפשר לקחת בעלות (claim)
     can_be_claimed = Column(Boolean, nullable=False, default=True)
 
@@ -248,10 +249,16 @@ class Place(Base):
     main_image_url = Column(Text, nullable=True)
     social_links = Column(Text, nullable=True)
 
-    # 👇 בעל העסק – קשר MANY places → ONE user
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    owner = relationship("User", back_populates="owned_places")
-
+    created_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    owner = relationship(
+        "User",
+        foreign_keys=[owner_user_id]
+    )
+    created_by_admin = relationship(
+        "User",
+        foreign_keys=[created_by_admin_id]
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),
