@@ -29,6 +29,8 @@ export type Location = {
 export type PlaceForMap = {
   id: number;
   name: string;
+  name_ar: string;
+  name_he: string;
   place_type: PlaceType;
 
   can_be_claimed: boolean;
@@ -73,10 +75,111 @@ export async function fetchCategories(): Promise<Category[]> {
 // CREATE PLACE (admin)
 // =======================
 export async function createAdminPlace(data: any) {
-  // data מכיל:
-  // name, place_type, city_id, category_id, lat, lon, source...
+  // 1) קודם נביא את כל המקומות כדי לבדוק כפילויות
+  let existingPlaces: PlaceForMap[] = [];
+  try {
+    existingPlaces = await fetchAllPlaces();
+  } catch (e) {
+    console.warn("Failed to fetch existing places for validation", e);
+    // אם לא הצלחנו להביא – לא חוסמים, ניתן לשרת לטפל
+  }
 
-  // קודם יוצרים LOCATION
+  // 2) בדיקות כפילות בצד לקוח
+
+  const duplicateErrors: string[] = [];
+
+  // 🔹 כפילות במיקום גיאוגרפי (lat+lon)
+  if (existingPlaces.length > 0) {
+    const sameLocation = existingPlaces.find(
+      (p) =>
+        p.location &&
+        p.location.lat === data.lat &&
+        p.location.lon === data.lon
+    );
+
+    if (sameLocation) {
+      duplicateErrors.push(
+        `קיים כבר מקום עם אותו מיקום גאוגרפי (lat=${data.lat}, lon=${data.lon}) בשם: ${sameLocation.name}`
+      );
+    }
+
+    // 🔹 כפילות בשם באנגלית
+    if (
+      data.name &&
+      existingPlaces.some(
+        (p) => p.name && p.name.trim() === String(data.name).trim()
+      )
+    ) {
+      duplicateErrors.push("שם המקום באנגלית כבר קיים במערכת");
+    }
+
+    // 🔹 כפילות בשם בערבית
+    if (
+      data.name_ar &&
+      existingPlaces.some(
+        (p) =>
+          p.name_ar &&
+          p.name_ar.trim() === String(data.name_ar).trim()
+      )
+    ) {
+      duplicateErrors.push("שם המקום בערבית כבר קיים במערכת");
+    }
+
+    // 🔹 כפילות בשם בעברית
+    if (
+      data.name_he &&
+      existingPlaces.some(
+        (p) =>
+          p.name_he &&
+          p.name_he.trim() === String(data.name_he).trim()
+      )
+    ) {
+      duplicateErrors.push("שם המקום בעברית כבר קיים במערכת");
+    }
+  }
+
+  // אם יש לפחות שגיאה אחת – נזרוק שגיאה מפורטת,
+  // והיא תיתפס ב־catch במסך ותוצג ל־admin
+  if (duplicateErrors.length > 0) {
+    throw new Error(duplicateErrors.join("\n"));
+  }
+
+  // 3) פונקציה פנימית לעזרה – להוציא הודעת שגיאה אמיתית מהשרת
+  async function buildErrorMessage(
+    res: Response,
+    defaultMessage: string
+  ): Promise<string> {
+    try {
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const body = await res.json();
+        if (typeof body?.detail === "string") {
+          return `${defaultMessage}: ${body.detail}`;
+        }
+        if (Array.isArray(body?.detail)) {
+          // FastAPI לפעמים מחזיר מערך של שגיאות
+          const msgs = body.detail
+            .map((d: any) => d?.msg || "")
+            .filter(Boolean);
+          if (msgs.length > 0) {
+            return `${defaultMessage}: ${msgs.join(", ")}`;
+          }
+        }
+        // fallback – ננסה שדה אחר אם יש
+        if (typeof body?.message === "string") {
+          return `${defaultMessage}: ${body.message}`;
+        }
+      } else {
+        const text = await res.text();
+        if (text) return `${defaultMessage}: ${text}`;
+      }
+    } catch (e) {
+      console.warn("Failed to parse error response", e);
+    }
+    return defaultMessage;
+  }
+
+  // 4) קודם יוצרים LOCATION
   const locRes = await fetch(`${BASE_URL}/locations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -88,19 +191,31 @@ export async function createAdminPlace(data: any) {
     }),
   });
 
-  if (!locRes.ok) throw new Error("Failed to create location");
+  if (!locRes.ok) {
+    const msg = await buildErrorMessage(
+      locRes,
+      "Failed to create location"
+    );
+    throw new Error(msg);
+  }
+
   const location = await locRes.json();
 
-  // עכשיו יוצרים PLACE
+  // 5) עכשיו יוצרים PLACE
+  const computedCanBeClaimed =
+    data.place_type === "BUSINESS" ? true : false;
+
   const placeRes = await fetch(`${BASE_URL}/places`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: data.name,
+      name_ar: data.name_ar,
+      name_he: data.name_he,
       place_type: data.place_type,
       city_id: data.city_id,
       category_id: data.category_id,
-      can_be_claimed: data.can_be_claimed,
+      can_be_claimed: computedCanBeClaimed,
       description: data.description,
       phone: data.phone,
       opening_hours: data.opening_hours,
@@ -108,10 +223,18 @@ export async function createAdminPlace(data: any) {
       social_links: data.social_links,
       owner_user_id: data.owner_user_id,
       location_id: location.id,
+      created_by_admin_id: data.created_by_admin_id,
     }),
   });
 
-  if (!placeRes.ok) throw new Error("Failed to create place");
+  if (!placeRes.ok) {
+    const msg = await buildErrorMessage(
+      placeRes,
+      "Failed to create place"
+    );
+    throw new Error(msg);
+  }
+
   return placeRes.json();
 }
 

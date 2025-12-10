@@ -1,5 +1,5 @@
 // src/screens/AdminHomeScreen.tsx
-import Geolocation from "@react-native-community/geolocation";
+
 import React, { useEffect, useState, useRef } from "react";
 import {
   View,
@@ -10,23 +10,17 @@ import {
   StatusBar,
 } from "react-native";
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { RootStackParamList } from "../navigation/types";
-import { fetchAllPlaces, PlaceForMap } from "../api/places";
-
-// --- שינוי קריטי: סגנון מפה נקי יותר ---
-// סגנון "Basic" מזכיר מאוד את המראה הנקי של גוגל (פחות צבעים רועשים)
-
+import { RootStackParamList, AdminTabParamList } from "../../navigation/types";
+import { fetchAllPlaces, PlaceForMap } from "../../api/places";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
-const INITIAL_CENTER: [number, number] = [34.83, 31.24]; 
+const INITIAL_CENTER: [number, number] = [34.83, 31.24];
 const INITIAL_ZOOM = 12.5;
-
-// הטקסט יופיע רק בזום קרוב (כמו בגוגל שרואים שמות של חנויות רק כשמתקרבים)
-const LABEL_VISIBLE_ZOOM_THRESHOLD = 14; 
+const LABEL_VISIBLE_ZOOM_THRESHOLD = 14;
 
 const NEGEV_BOUNDS = {
   ne: [35.10, 31.42],
@@ -34,9 +28,12 @@ const NEGEV_BOUNDS = {
 };
 
 type NavType = NativeStackNavigationProp<RootStackParamList>;
+type AdminHomeRoute = RouteProp<AdminTabParamList, "AdminHome">;
 
 export default function AdminHomeScreen() {
   const navigation = useNavigation<NavType>();
+  const route = useRoute<AdminHomeRoute>();
+  const { adminUserId, role } = route.params; // 👈 יש לנו את שניהם
   const cameraRef = useRef<any>(null);
 
   const [places, setPlaces] = useState<PlaceForMap[]>([]);
@@ -64,17 +61,16 @@ export default function AdminHomeScreen() {
   }, []);
 
   const onRegionDidChange = async (feature: any) => {
-      const [lon, lat] = feature.geometry.coordinates;
-      const newZoom = feature.properties.zoomLevel;
-      setCurrentZoom(newZoom);
-      
-      // החזרה למרכז אם בורחים מהגבולות
-      if (lon < 34.72 || lat > 31.43) {
-          cameraRef.current?.setCamera({
-              centerCoordinate: [34.75, 31.39],
-              animationDuration: 600,
-          });
-      }
+    const [lon, lat] = feature.geometry.coordinates;
+    const newZoom = feature.properties.zoomLevel;
+    setCurrentZoom(newZoom);
+
+    if (lon < 34.72 || lat > 31.43) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [34.75, 31.39],
+        animationDuration: 600,
+      });
+    }
   };
 
   const resetCamera = () => {
@@ -88,17 +84,16 @@ export default function AdminHomeScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      
-      {/* MAP */}
+
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
-        onRegionDidChange={onRegionDidChange} 
+        onRegionDidChange={onRegionDidChange}
         scrollEnabled={true}
         rotateEnabled={false}
         pitchEnabled={false}
-        logoEnabled={false} 
-        attributionEnabled={false} 
+        logoEnabled={false}
+        attributionEnabled={false}
       >
         <Camera
           ref={cameraRef}
@@ -106,19 +101,17 @@ export default function AdminHomeScreen() {
             centerCoordinate: INITIAL_CENTER,
             zoomLevel: INITIAL_ZOOM,
           }}
-          maxBounds={NEGEV_BOUNDS} 
+          maxBounds={NEGEV_BOUNDS}
           minZoomLevel={10}
           maxZoomLevel={18}
           animationMode="flyTo"
         />
 
-        {/* CUSTOM MARKERS - Google Style */}
         {places.map((place) => {
           if (!place.location) return null;
           const isSelected = selectedPlace?.id === place.id;
-          
-          // האם להציג את הטקסט?
-          const shouldShowLabel = currentZoom >= LABEL_VISIBLE_ZOOM_THRESHOLD || isSelected;
+          const shouldShowLabel =
+            currentZoom >= LABEL_VISIBLE_ZOOM_THRESHOLD || isSelected;
 
           return (
             <PointAnnotation
@@ -128,29 +121,28 @@ export default function AdminHomeScreen() {
               onSelected={() => setSelectedPlace(place)}
             >
               <View style={styles.nativeMarkerContainer}>
-                
-                {/* האייקון עצמו - נקודה קטנה ונקייה */}
-                <View style={[styles.dotContainer, isSelected && styles.dotSelected]}>
-                    {/* אפשר להחליף את זה לאייקון של קטגוריה בעתיד */}
-                    <View style={styles.innerDot} />
+                <View
+                  style={[
+                    styles.dotContainer,
+                    isSelected && styles.dotSelected,
+                  ]}
+                >
+                  <View style={styles.innerDot} />
                 </View>
 
-                {/* הטקסט - מופיע רק כשקרובים */}
                 {shouldShowLabel && (
-                    <View style={styles.labelWrapper}>
-                        <Text style={styles.nativeMapLabel} numberOfLines={1}>
-                            {place.name}
-                        </Text>
-                    </View>
+                  <View style={styles.labelWrapper}>
+                    <Text style={styles.nativeMapLabel} numberOfLines={1}>
+                      {place.name}
+                    </Text>
+                  </View>
                 )}
-
               </View>
             </PointAnnotation>
           );
         })}
       </MapView>
 
-      {/* שאר הממשק (כפתורים, כרטיסיות) נשאר זהה ויפה */}
       <View style={styles.topGlassBar}>
         <View>
           <Text style={styles.headerTitle}>Negev Community</Text>
@@ -159,49 +151,82 @@ export default function AdminHomeScreen() {
           </Text>
         </View>
         <View style={styles.topButtonsRow}>
-          <TouchableOpacity style={styles.glassButtonSmall} onPress={() => navigation.navigate("AdminCities")}>
-            <Text style={styles.glassButtonText}>ערים</Text>
+          <TouchableOpacity
+            style={styles.glassButtonSmall}
+            onPress={() =>     
+                navigation.navigate("AdminCities", {
+                adminUserId: adminUserId,
+                role: role,
+              })
+            }
+          >
+          <Text style={styles.glassButtonText}>ערים</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.glassButtonSmall, { marginLeft: 8 }]} onPress={() => navigation.navigate("AdminCategories")}>
+          <TouchableOpacity
+            style={[styles.glassButtonSmall, { marginLeft: 8 }]}
+            onPress={() =>
+              navigation.navigate("AdminCategories", {
+                adminUserId,
+                role,
+              })
+            }
+          >
             <Text style={styles.glassButtonText}>קטגוריות</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       {!selectedPlace && (
-        <TouchableOpacity style={styles.fabButton} onPress={() => navigation.navigate("AdminPlaceMapPicker", { initialLat: INITIAL_CENTER[1], initialLon: INITIAL_CENTER[0] })}>
+        <TouchableOpacity
+          style={styles.fabButton}
+          onPress={() =>
+            navigation.navigate("AdminPlaceMapPicker", {
+              initialLat: INITIAL_CENTER[1],
+              initialLon: INITIAL_CENTER[0],
+              adminUserId,
+              role,
+            })
+          }
+        >
           <Text style={styles.fabIcon}>+</Text>
           <Text style={styles.fabText}>הוסף מקום</Text>
         </TouchableOpacity>
       )}
 
       {!selectedPlace && (
-         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
-             <Text style={{fontSize:20}}>🎯</Text>
-         </TouchableOpacity>
+        <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
+          <Text style={{ fontSize: 20 }}>🎯</Text>
+        </TouchableOpacity>
       )}
 
       {selectedPlace && (
         <View style={styles.bottomSheetCard}>
           <View style={styles.sheetHandle} />
           <View style={styles.cardHeader}>
-            <View style={{flex: 1}}>
-              <Text style={styles.cardTitle} numberOfLines={1}>{selectedPlace.name}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {selectedPlace.name}
+              </Text>
               <Text style={styles.cardSubtitle}>
-                {selectedPlace.place_type === "BUSINESS" ? "עסק" : "ציבורי"} 
-                {selectedPlace.city?.name_he ? ` • ${selectedPlace.city.name_he}` : ""}
+                {selectedPlace.place_type === "BUSINESS" ? "עסק" : "ציבורי"}
+                {selectedPlace.city?.name_he
+                  ? ` • ${selectedPlace.city.name_he}`
+                  : ""}
               </Text>
             </View>
-            <TouchableOpacity style={styles.closeButton} onPress={() => setSelectedPlace(null)}>
-                <Text style={styles.closeButtonText}>✕</Text>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setSelectedPlace(null)}
+            >
+              <Text style={styles.closeButtonText}>✕</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.divider} />
           <View style={styles.cardContent}>
-             {selectedPlace.description && (
-               <Text style={styles.descriptionText} numberOfLines={3}>
-                 {selectedPlace.description}
-               </Text>
+            {selectedPlace.description && (
+              <Text style={styles.descriptionText} numberOfLines={3}>
+                {selectedPlace.description}
+              </Text>
             )}
           </View>
           <TouchableOpacity style={styles.editActionButton}>
