@@ -38,9 +38,9 @@ def create_place():
 
     payload = {
         "name": PLACE_NAME,
-        "place_type": "PUBLIC_SERVICE",   # כדי לא לדרוש category_id
+        "place_type": "PUBLIC_SERVICE",
         "city_id": city_id,
-        "category_id": None,              # כי זה לא BUSINESS
+        "category_id": None,
         "lat": PLACE_LAT,
         "lon": PLACE_LON,
         "can_be_claimed": True,
@@ -49,7 +49,7 @@ def create_place():
         "opening_hours": None,
         "main_image_url": None,
         "social_links": None,
-        "owner_user_id": None,            # אין בעל עסק כרגע
+        "owner_user_id": None,
     }
 
     url = f"{BASE_URL}/admin/places"
