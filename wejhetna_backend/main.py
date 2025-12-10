@@ -288,16 +288,19 @@ class DriverSignupRequest(BaseModel):
     car_photos_urls: Optional[List[str]] = None  # צילומים לרכב (לא חובה)
 
 
+from typing import Optional  # make sure this exists near the top
+
 class DriverSignupOut(BaseModel):
     user: UserOut
     driver_profile_id: int
     vehicle_id: int
     driver_status: str
     vehicle_status: str
+    message: Optional[str] = None  # NEW
 
     class Config:
         orm_mode = True
-        
+
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
@@ -375,6 +378,7 @@ def reject_driver(
 
     # if no reason → use a default
     reason = data.reason or "Your documents were not approved."
+    user.rejection_reason = reason
 
     user.status = UserStatus.REJECTED
     profile.driver_status = DriverStatus.REJECTED
@@ -432,21 +436,113 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
     db.refresh(user)
 
     return user
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 @app.post("/auth/signup/driver", response_model=DriverSignupOut)
 def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
-    # 1. Check username/email uniqueness
+    # 1. Check if there is already a user with this username/email
     existing_user = (
         db.query(User)
         .filter(or_(User.username == data.username, User.email == data.email))
         .first()
     )
 
+    # ============================
+    # CASE A – USER ALREADY EXISTS
+    # ============================
     if existing_user:
+        # Try to find their driver profile (if any)
+        driver_profile = (
+            db.query(DriverProfile)
+            .filter(DriverProfile.user_id == existing_user.id)
+            .first()
+        )
+
+        # Is this user a driver WITH a driver_profile that was REJECTED?
+        is_rejected_driver = (
+            driver_profile is not None
+            and driver_profile.driver_status == DriverStatus.REJECTED
+        )
+
+        # 👉 1) REJECTED DRIVER RE-APPLYING → ALLOW
+        if is_rejected_driver:
+            # hash new password
+            password_hash = hash_password(data.password)
+
+            # update basic user info
+            existing_user.full_name = data.full_name
+            existing_user.phone = data.phone
+            existing_user.password_hash = password_hash
+            existing_user.status = UserStatus.PENDING  # back to pending
+            # we KEEP existing_user.rejection_reason so admin can see old rejection
+
+            # update documents + status
+            driver_profile.driver_license_image_url = data.driver_license_image_url
+            driver_profile.id_card_image_url = data.id_card_image_url
+            driver_profile.driver_status = DriverStatus.PENDING
+            driver_profile.driver_status_updated_at = datetime.now(timezone.utc)
+
+            # get last vehicle for this driver (if exists)
+            vehicle = (
+                db.query(DriverVehicle)
+                .filter(DriverVehicle.driver_profile_id == driver_profile.id)
+                .order_by(DriverVehicle.id.desc())
+                .first()
+            )
+
+            if not vehicle:
+                # no vehicle yet → create new one
+                vehicle = DriverVehicle(
+                    driver_profile_id=driver_profile.id,
+                    car_type=data.car_type,
+                    plate_number=data.plate_number,
+                    production_year=data.production_year,
+                    car_license_image_url=data.car_license_image_url,
+                    car_insurance_image_url=data.car_insurance_image_url,
+                    car_photos_urls=data.car_photos_urls,
+                    status=VehicleStatus.SUBMITTED,
+                    submitted_at=datetime.now(timezone.utc),
+                )
+                db.add(vehicle)
+            else:
+                # update existing vehicle for the new application
+                vehicle.car_type = data.car_type
+                vehicle.plate_number = data.plate_number
+                vehicle.production_year = data.production_year
+                vehicle.car_license_image_url = data.car_license_image_url
+                vehicle.car_insurance_image_url = data.car_insurance_image_url
+                vehicle.car_photos_urls = data.car_photos_urls
+                vehicle.status = VehicleStatus.SUBMITTED
+                vehicle.submitted_at = datetime.now(timezone.utc)
+                vehicle.reviewed_at = None
+                vehicle.reviewed_by_admin_id = None
+                vehicle.rejection_reason = None
+
+            db.commit()
+            db.refresh(existing_user)
+            db.refresh(driver_profile)
+            db.refresh(vehicle)
+
+            return DriverSignupOut(
+                user=UserOut.model_validate(existing_user, from_attributes=True),
+                driver_profile_id=driver_profile.id,
+                vehicle_id=vehicle.id,
+                driver_status=driver_profile.driver_status.value,
+                vehicle_status=vehicle.status.value,
+                message="Your request has been sent again.",  # 👈 re-apply msg
+            )
+
+        # 👉 2) ANY OTHER EXISTING USER (approved driver / regular / admin / business owner)
+        # → BLOCK with 'already exists'
         raise HTTPException(
             status_code=400,
             detail="Username or email already exists",
         )
+
+    # ============================
+    # CASE B – FIRST TIME DRIVER SIGNUP (NO USER YET)
+    # ============================
 
     # 2. Hash password
     password_hash = hash_password(data.password)
@@ -504,10 +600,8 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         vehicle_id=vehicle.id,
         driver_status=driver_profile.driver_status.value,
         vehicle_status=vehicle.status.value,
+        message="Your request has been sent and is waiting for admin approval.",
     )
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
 
 class LoginRequest(BaseModel):
     username_or_email: str
