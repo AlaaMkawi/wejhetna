@@ -1204,6 +1204,8 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
         social_links=data.social_links,
         owner_user_id=data.owner_user_id,
         created_by_admin_id=data.created_by_admin_id,
+        name_ar=data.name_ar,
+        name_he=data.name_he,
     )
     db.add(place)
     db.commit()
