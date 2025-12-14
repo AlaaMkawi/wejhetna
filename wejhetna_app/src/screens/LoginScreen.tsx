@@ -23,9 +23,7 @@ type Props = {
   navigation: any;
 };
 
-const MINT = "#9bd3d8";
 const DARK_TEAL ="#0f5b63";
-const CALM_OCEAN = "#3a8d96";
 
 export default function LoginScreen({ navigation }: Props) {
   const { t } = useTranslation();

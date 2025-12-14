@@ -7,3 +7,6 @@ npm install react-native-restart /*lena*/
 npm install @react-native-picker/picker /*alaa*/
 GPS 
 npm install @react-native-community/geolocation
+npm install axios
+npm install @react-native-community/blur
+

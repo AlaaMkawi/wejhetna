@@ -7,7 +7,7 @@ def create_or_reset_admin():
     db = SessionLocal()
     try:
         username = "admin"
-        email = "admin@wejhetna.local"
+        email = "admin@wejhetna.com"
         phone = "0500000000"
         password = "Admin123!"  # <-- this will be the login password
 
