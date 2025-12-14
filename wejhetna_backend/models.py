@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     Boolean,
     cast,
+    Float,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, column_property
@@ -45,7 +46,12 @@ class VehicleStatus(str, enum.Enum):
 
 class PlaceType(str, enum.Enum):
     PUBLIC_SERVICE = "PUBLIC_SERVICE"   # בתי ספר, מרפאה, מסגד...
-    BUSINESS = "BUSINESS"               # עסקים רגילים
+    BUSINESS = "BUSINESS"        
+           # עסקים רגילים
+class OwnerPlaceRequestStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 # ========== TABLES ==========
 
@@ -267,4 +273,56 @@ class Place(Base):
 
 
 
+class BusinessOwnerPlaceRequest(Base):
+    __tablename__ = "business_owner_place_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # מי ביקש – משתמש עם role = BUSINESS_OWNER
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # אם זה קליים על מקום קיים → existing_place_id יהיה לא-null
+    existing_place_id = Column(Integer, ForeignKey("places.id"), nullable=True)
+
+    # מיקום שהבעלים בחר (שומרים גם אם יש already place, בשביל היסטוריה)
+    lat = Column(Float, nullable=False)
+    lon = Column(Float, nullable=False)
+    source = Column(String, nullable=False)
+    osm_id = Column(String, nullable=True)
+
+    # פרטי העסק כפי שהבעלים הציע
+    name = Column(String, nullable=False)
+    name_ar = Column(String, nullable=False)
+    name_he = Column(String, nullable=False)
+
+    city_id = Column(Integer, ForeignKey("cities.id"), nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+
+    description = Column(Text, nullable=True)
+    phone = Column(String, nullable=True)
+    opening_hours = Column(String, nullable=True)
+    main_image_url = Column(Text, nullable=True)
+    # NOTE: These fields are commented out until database migration is done
+    # business_license_image_url = Column(Text, nullable=True)  # רישיון עסק
+    # business_images_urls = Column(ARRAY(Text), nullable=True)  # תמונות העסק (מערך)
+    social_links = Column(Text, nullable=True)
+    # social_media_account_name = Column(String, nullable=True)  # שם חשבון רשתות חברתיות
+
+    status = Column(
+        Enum(OwnerPlaceRequestStatus),
+        nullable=False,
+        default=OwnerPlaceRequestStatus.PENDING,
+    )
+    rejection_reason = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # relationships
+    user = relationship("User", foreign_keys=[user_id])
+    existing_place = relationship("Place", foreign_keys=[existing_place_id])
+    city = relationship("City")
+    category = relationship("Category")
+    reviewed_by_admin = relationship("User", foreign_keys=[reviewed_by_admin_id])
 
