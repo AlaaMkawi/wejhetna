@@ -247,6 +247,27 @@ export async function fetchAllPlaces(): Promise<PlaceForMap[]> {
   if (!res.ok) throw new Error("Failed to fetch places");
   return res.json();
 }
+
+// =======================
+// FETCH PLACES BY BBOX (for regular users)
+// =======================
+// Fetches places within visible map area (bounding box)
+export async function fetchPlacesByBbox(
+  north: number,
+  south: number,
+  east: number,
+  west: number
+): Promise<PlaceForMap[]> {
+  const params = new URLSearchParams({
+    north: north.toString(),
+    south: south.toString(),
+    east: east.toString(),
+    west: west.toString(),
+  });
+  const res = await fetch(`${BASE_URL}/places/map?${params}`);
+  if (!res.ok) throw new Error("Failed to fetch places");
+  return res.json();
+}
 // =======================
 // GPS → OSM CHECK
 // =======================

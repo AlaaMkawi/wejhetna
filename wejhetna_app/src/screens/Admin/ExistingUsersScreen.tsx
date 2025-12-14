@@ -1,4 +1,4 @@
-// src/screens/Admin/AlreadyUsersScreen.tsx
+// src/screens/Admin/ExistingUsersScreen.tsx
 
 import React, { useEffect, useState } from "react";
 import {
@@ -27,11 +27,11 @@ export type UserListItem = {
   created_at: string;
 };
 
-type Props = NativeStackScreenProps<RootStackParamList, "AlreadyUsers">;
+type Props = NativeStackScreenProps<RootStackParamList, "ExistingUsers">;
 
 type UserRoleFilter = "ALL" | "REGULAR" | "BUSINESS_OWNER" | "DRIVER";
 
-export default function AlreadyUsersScreen({ route, navigation }: Props) {
+export default function ExistingUsersScreen({ route, navigation }: Props) {
   const { adminUserId, role } = route.params;
 
   const [users, setUsers] = useState<UserListItem[]>([]);
@@ -76,7 +76,11 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
       if (!res.ok) {
         setError(json.detail || json.message || "Failed to load users");
       } else {
-        setUsers(json);
+        // Filter out rejected users - only show ACTIVE and PENDING
+        const filteredUsers = json.filter((user: UserListItem) => 
+          user.status !== "REJECTED"
+        );
+        setUsers(filteredUsers);
       }
     } catch (e: any) {
       console.error("Error loading users:", e);
@@ -255,7 +259,7 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#ED1C7B" />
+        <ActivityIndicator size="large" color="#6366F1" />
         <Text style={styles.loadingText}>Loading users...</Text>
       </View>
     );
@@ -607,3 +611,5 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 });
+
+
