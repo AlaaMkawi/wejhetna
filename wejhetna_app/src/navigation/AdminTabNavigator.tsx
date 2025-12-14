@@ -16,7 +16,7 @@ import Animated, {
 
 import AdminHomeScreen from '../screens/Admin/AdminHomeScreen';
 import NewUsersScreen from '../screens/Admin/NewUsersScreen';
-import AlreadyUsersScreen from '../screens/Admin/AlreadyUsersScreen';
+import UsersSelectorScreen from '../screens/Admin/UsersSelectorScreen';
 
 import Feather from 'react-native-vector-icons/Feather';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -127,12 +127,12 @@ export default function AdminTabNavigator({ route }: AdminTabsProps) {
     >
       <Tab.Screen
         name="fitnessDummy"
-        component={AlreadyUsersScreen}
+        component={UsersSelectorScreen}
         initialParams={{ adminUserId, role }}
       />
       <Tab.Screen
         name="alreadyUsers"
-        component={AlreadyUsersScreen}
+        component={UsersSelectorScreen}
         initialParams={{ adminUserId, role }}
       />
       <Tab.Screen
