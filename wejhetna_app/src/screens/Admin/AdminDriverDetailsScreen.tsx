@@ -10,6 +10,7 @@ import {
   Alert,
   Modal,
   TextInput,
+  Image,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -107,14 +108,24 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
       </Text>
 
       <Text style={[styles.sectionTitle, { marginTop: 16 }]}>ID / license</Text>
-      <Text style={styles.row}>
-        <Text style={styles.label}>ID card image: </Text>
-        {driver.id_card_image_url || "-"}
-      </Text>
-      <Text style={styles.row}>
-        <Text style={styles.label}>Driver license image: </Text>
-        {driver.driver_license_image_url || "-"}
-      </Text>
+      {driver.id_card_image_url && (
+        <View style={styles.imageRow}>
+          <Text style={styles.label}>🆔 ID Card:</Text>
+          <Image
+            source={{ uri: driver.id_card_image_url }}
+            style={styles.documentImage}
+          />
+        </View>
+      )}
+      {driver.driver_license_image_url && (
+        <View style={styles.imageRow}>
+          <Text style={styles.label}>📜 Driver License:</Text>
+          <Image
+            source={{ uri: driver.driver_license_image_url }}
+            style={styles.documentImage}
+          />
+        </View>
+      )}
     </View>
   );
 
@@ -135,20 +146,39 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
       </Text>
 
       <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Car documents</Text>
-      <Text style={styles.row}>
-        <Text style={styles.label}>Car license: </Text>
-        {driver.car_license_image_url || "-"}
-      </Text>
-      <Text style={styles.row}>
-        <Text style={styles.label}>Car insurance: </Text>
-        {driver.car_insurance_image_url || "-"}
-      </Text>
-      <Text style={styles.row}>
-        <Text style={styles.label}>Car photos: </Text>
-        {driver.car_photos_urls && driver.car_photos_urls.length > 0
-          ? driver.car_photos_urls.join(", ")
-          : "-"}
-      </Text>
+      {driver.car_license_image_url && (
+        <View style={styles.imageRow}>
+          <Text style={styles.label}>🚗 Car License:</Text>
+          <Image
+            source={{ uri: driver.car_license_image_url }}
+            style={styles.documentImage}
+          />
+        </View>
+      )}
+      {driver.car_insurance_image_url && (
+        <View style={styles.imageRow}>
+          <Text style={styles.label}>🛡️ Car Insurance:</Text>
+          <Image
+            source={{ uri: driver.car_insurance_image_url }}
+            style={styles.documentImage}
+          />
+        </View>
+      )}
+      {driver.car_photos_urls && driver.car_photos_urls.length > 0 && (
+        <View style={styles.imageRow}>
+          <Text style={styles.label}>📷 Car Photos ({driver.car_photos_urls.length}):</Text>
+          <View style={styles.imagesGrid}>
+            {driver.car_photos_urls.map((url, index) => (
+              <View key={index} style={styles.imageWrapper}>
+                <Image
+                  source={{ uri: url }}
+                  style={styles.carPhotoImage}
+                />
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
     </View>
   );
 
@@ -360,5 +390,39 @@ const styles = StyleSheet.create({
   modalButtonText: {
     fontWeight: "600",
     color: "#1B1338",
+  },
+  imageRow: {
+    marginBottom: 16,
+  },
+  documentImage: {
+    width: "100%",
+    height: 250,
+    borderRadius: 12,
+    marginTop: 8,
+    resizeMode: "contain",
+    backgroundColor: "#F0F0F0",
+  },
+  imagesGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 12,
+    gap: 12,
+  },
+  imageWrapper: {
+    width: "48%",
+    aspectRatio: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#F0F0F0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  carPhotoImage: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "cover",
   },
 });

@@ -1,4 +1,4 @@
-// src/screens/Admin/AlreadyUsersScreen.tsx
+// src/screens/Admin/RejectedUsersScreen.tsx
 
 import React, { useEffect, useState } from "react";
 import {
@@ -9,14 +9,13 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  Alert,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
-export type UserListItem = {
+export type RejectedUserListItem = {
   id: number;
   full_name: string;
   username: string;
@@ -24,23 +23,23 @@ export type UserListItem = {
   phone: string;
   role: string;
   status: string;
+  rejection_reason: string | null;
   created_at: string;
 };
 
-type Props = NativeStackScreenProps<RootStackParamList, "AlreadyUsers">;
+type Props = NativeStackScreenProps<RootStackParamList, "RejectedUsers">;
 
 type UserRoleFilter = "ALL" | "REGULAR" | "BUSINESS_OWNER" | "DRIVER";
 
-export default function AlreadyUsersScreen({ route, navigation }: Props) {
+export default function RejectedUsersScreen({ route, navigation }: Props) {
   const { adminUserId, role } = route.params;
 
-  const [users, setUsers] = useState<UserListItem[]>([]);
+  const [users, setUsers] = useState<RejectedUserListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<UserRoleFilter>("ALL");
-  const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
 
   const loadUsers = async () => {
     setLoading(true);
@@ -52,10 +51,7 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
       
       const res = await fetch(url);
       
-      // Get response text first to check what we received
       const responseText = await res.text();
-      
-      // Check if response is JSON
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         console.error("Non-JSON response:", responseText.substring(0, 500));
@@ -63,7 +59,6 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
         return;
       }
       
-      // Try to parse as JSON
       let json;
       try {
         json = JSON.parse(responseText);
@@ -76,7 +71,9 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
       if (!res.ok) {
         setError(json.detail || json.message || "Failed to load users");
       } else {
-        setUsers(json);
+        // Filter to only show REJECTED users
+        const rejectedUsers = json.filter((user: any) => user.status === "REJECTED");
+        setUsers(rejectedUsers);
       }
     } catch (e: any) {
       console.error("Error loading users:", e);
@@ -100,68 +97,6 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
       user.username.toLowerCase().includes(search.toLowerCase()) ||
       user.email.toLowerCase().includes(search.toLowerCase())
     );
-  };
-
-  const handleDeleteUser = (user: UserListItem) => {
-    const isBusinessOwner = user.role === "BUSINESS_OWNER";
-    const message = isBusinessOwner
-      ? `Remove ${user.full_name}? Their account will be set to PENDING (cannot log in), but their business places will remain on the map.`
-      : `Are you sure you want to permanently delete ${user.full_name}? This action cannot be undone.`;
-
-    Alert.alert(
-      isBusinessOwner ? "Remove Business Owner" : "Delete User",
-      message,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: isBusinessOwner ? "Remove" : "Delete",
-          style: "destructive",
-          onPress: () => confirmDeleteUser(user),
-        },
-      ]
-    );
-  };
-
-  const confirmDeleteUser = async (user: UserListItem) => {
-    try {
-      setDeletingUserId(user.id);
-      const res = await fetch(
-        `${API_BASE_URL}/admin/users/${user.id}`,
-        {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            admin_user_id: adminUserId,
-          }),
-        }
-      );
-
-      const responseText = await res.text();
-      let json;
-      try {
-        json = JSON.parse(responseText);
-      } catch {
-        setError(`Server error: ${responseText.substring(0, 100)}`);
-        return;
-      }
-
-      if (!res.ok) {
-        setError(json.detail || "Failed to delete user");
-      } else {
-        // Reload users list
-        await loadUsers();
-        Alert.alert(
-          "Success",
-          user.role === "BUSINESS_OWNER"
-            ? "Business owner removed. Their places remain on the map."
-            : "User deleted successfully."
-        );
-      }
-    } catch (e: any) {
-      setError("Network error: " + e.message);
-    } finally {
-      setDeletingUserId(null);
-    }
   };
 
   const formatDate = (dateString: string) => {
@@ -188,20 +123,7 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "ACTIVE":
-        return "#4CAF50";
-      case "PENDING":
-        return "#FFA500";
-      case "REJECTED":
-        return "#F44336";
-      default:
-        return "#757575";
-    }
-  };
-
-  const renderItem = ({ item }: { item: UserListItem }) => (
+  const renderItem = ({ item }: { item: RejectedUserListItem }) => (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
         <View style={styles.cardHeaderLeft}>
@@ -225,38 +147,31 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
           <Text style={styles.infoValue}>{item.phone}</Text>
         </View>
 
+        {/* Rejection Reason */}
+        {item.rejection_reason && (
+          <View style={styles.rejectionContainer}>
+            <Text style={styles.rejectionLabel}>🚫 Rejection Reason:</Text>
+            <Text style={styles.rejectionText}>{item.rejection_reason}</Text>
+          </View>
+        )}
+
         <View style={styles.metaRow}>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + "20", borderColor: getStatusColor(item.status) }]}>
-            <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-              {item.status}
+          <View style={[styles.statusBadge, styles.rejectedBadge]}>
+            <Text style={[styles.statusText, { color: "#DC2626" }]}>
+              REJECTED
             </Text>
           </View>
           <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
         </View>
       </View>
-
-      {/* Delete Button */}
-      <TouchableOpacity
-        style={[styles.deleteButton, deletingUserId === item.id && styles.deleteButtonDisabled]}
-        onPress={() => handleDeleteUser(item)}
-        disabled={deletingUserId === item.id || item.role === "ADMIN"}
-      >
-        {deletingUserId === item.id ? (
-          <ActivityIndicator size="small" color="#fff" />
-        ) : (
-          <Text style={styles.deleteButtonText}>
-            {item.role === "BUSINESS_OWNER" ? "Remove" : "Delete"}
-          </Text>
-        )}
-      </TouchableOpacity>
     </View>
   );
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#ED1C7B" />
-        <Text style={styles.loadingText}>Loading users...</Text>
+        <ActivityIndicator size="large" color="#6366F1" />
+        <Text style={styles.loadingText}>Loading rejected users...</Text>
       </View>
     );
   }
@@ -324,7 +239,7 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
       {visibleUsers.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>
-            {search ? "No users found matching your search." : "No users found."}
+            {search ? "No rejected users found matching your search." : "No rejected users found."}
           </Text>
         </View>
       ) : (
@@ -539,6 +454,29 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.1,
   },
+  rejectionContainer: {
+    backgroundColor: "#FEF2F2",
+    padding: 16,
+    borderRadius: 16,
+    marginTop: 12,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: "#DC2626",
+  },
+  rejectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#DC2626",
+    marginBottom: 8,
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+  },
+  rejectionText: {
+    fontSize: 14,
+    color: "#991B1B",
+    fontWeight: "500",
+    lineHeight: 20,
+  },
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -558,6 +496,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 4,
     elevation: 2,
+  },
+  rejectedBadge: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#DC2626",
   },
   statusText: {
     fontSize: 11,
@@ -584,26 +526,6 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     lineHeight: 24,
   },
-  deleteButton: {
-    backgroundColor: "#EF4444",
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 16,
-    alignItems: "center",
-    marginTop: 16,
-    shadowColor: "#EF4444",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  deleteButtonDisabled: {
-    opacity: 0.6,
-  },
-  deleteButtonText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
 });
+
+

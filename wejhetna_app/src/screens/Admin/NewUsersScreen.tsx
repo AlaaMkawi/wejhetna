@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 
 type Props = {
   route: any;
@@ -14,10 +14,7 @@ export default function NewUsersScreen({ route, navigation }: Props) {
   };
 
   const handleBusinessRequestsPress = () => {
-    Alert.alert(
-      "Coming soon",
-      "Business owner requests are not implemented yet."
-    );
+    navigation.navigate("AdminBusinessOwnerRequests", { adminUserId, role });
   };
 
   return (
