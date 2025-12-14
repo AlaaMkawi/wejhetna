@@ -1,6 +1,6 @@
 // src/screens/Admin/RejectedUsersScreen.tsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -31,8 +31,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "RejectedUsers">;
 
 type UserRoleFilter = "ALL" | "REGULAR" | "BUSINESS_OWNER" | "DRIVER";
 
-export default function RejectedUsersScreen({ route, navigation }: Props) {
-  const { adminUserId, role } = route.params;
+export default function RejectedUsersScreen({ }: Props) {
 
   const [users, setUsers] = useState<RejectedUserListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,7 +40,7 @@ export default function RejectedUsersScreen({ route, navigation }: Props) {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<UserRoleFilter>("ALL");
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -85,11 +84,11 @@ export default function RejectedUsersScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [roleFilter]);
 
   useEffect(() => {
     loadUsers();
-  }, [roleFilter]);
+  }, [loadUsers]);
 
   const getVisibleUsers = () => {
     return users.filter((user) =>

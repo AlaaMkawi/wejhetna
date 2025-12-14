@@ -15,14 +15,13 @@ import {
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
-import { BusinessOwnerRequest } from "./AdminBusinessOwnerRequestsScreen";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminBusinessOwnerRequestDetails">;
 
 export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigation }: Props) {
-  const { adminUserId, role, request } = route.params;
+  const { adminUserId, request } = route.params;
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -164,14 +163,18 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
           {request.name_ar && (
             <View style={styles.infoRow}>
               <Text style={styles.label}>Business Name (Arabic):</Text>
-              <Text style={styles.value} textAlign="right">{request.name_ar}</Text>
+              <Text style={[styles.value, styles.rtlText]}>
+                {request.name_ar}
+              </Text>
             </View>
           )}
 
           {request.name_he && (
             <View style={styles.infoRow}>
               <Text style={styles.label}>Business Name (Hebrew):</Text>
-              <Text style={styles.value} textAlign="right">{request.name_he}</Text>
+              <Text style={[styles.value, styles.rtlText]}>
+                {request.name_he}
+              </Text>
             </View>
           )}
 
@@ -486,6 +489,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 4,
     elevation: 3,
+  },
+  rtlText: {
+    textAlign: "right",
   },
   approveButton: {
     backgroundColor: "#4CAF50",
