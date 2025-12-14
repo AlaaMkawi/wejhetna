@@ -33,6 +33,8 @@ from models import (
     Location,
     Place,
     PlaceType,
+    BusinessOwnerPlaceRequest,
+    OwnerPlaceRequestStatus,
 )
 from schemas import (
     CityCreate,
@@ -183,6 +185,166 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
+class RegularUserSignup(BaseModel):
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: int
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str
+    role: str
+    status: str
+
+    class Config:
+        orm_mode = True
+
+class UserListOut(BaseModel):
+    id: int
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str
+    role: str
+    status: str
+    rejection_reason: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+class DriverSignupRequest(BaseModel):
+    # basic user info
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str
+    password: str
+
+    # driver documents
+    driver_license_image_url: str   # רישיון נהיגה
+    id_card_image_url: str          # תעודת זהות
+
+    # car info + docs
+    car_type: str                   # סוג רכב
+    plate_number: str               # מספר רכב
+    production_year: int            # שנת יצור
+    car_license_image_url: str      # רישיון רכב
+    car_insurance_image_url: str    # ביטוח רכב
+
+    # optional photos
+    car_photos_urls: Optional[List[str]] = None  # צילומים לרכב (לא חובה)
+
+
+from typing import Optional  # make sure this exists near the top
+
+class DriverSignupOut(BaseModel):
+    user: UserOut
+    driver_profile_id: int
+    vehicle_id: int
+    driver_status: str
+    vehicle_status: str
+    message: Optional[str] = None  # NEW
+
+    class Config:
+        orm_mode = True
+
+class DriverReviewRequest(BaseModel):
+    admin_user_id: int
+    reason: Optional[str] = None
+
+
+
+
+class LoginRequest(BaseModel):
+    username_or_email: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    id: int
+    full_name: str
+    role: str
+    status: str
+
+    class Config:
+        orm_mode = True    
+
+class BusinessOwnerSignup(BaseModel):
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str
+    password: str
+
+class BusinessOwnerSignupOut(BaseModel):
+    user: UserOut
+    message: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+class NearbyPlaceInfo(BaseModel):
+    place_id: int
+    name: str
+    name_ar: Optional[str] = None
+    name_he: Optional[str] = None
+    city_name_ar: Optional[str] = None
+    has_owner: bool
+
+
+class BusinessOwnerNearbyCheckResponse(BaseModel):
+    status: str  # "NO_PLACE" / "CAN_CLAIM" / "HAS_OWNER"
+    candidate: Optional[NearbyPlaceInfo] = None
+
+class BusinessOwnerPlaceRequestCreate(BaseModel):
+    """
+    מה שהאפליקציה של בעל העסק תשלח
+    אחרי שבחר מיקום + מילא פרטי העסק.
+    """
+
+    user_id: int                          # ה-id של המשתמש (BUSINESS_OWNER)
+
+    # אם זה קליים על מקום קיים → existing_place_id != None
+    existing_place_id: Optional[int] = None
+
+    # מיקום שבחר
+    lat: float
+    lon: float
+    source: str                           # "MAP_PICK" / "GPS_NO_OSM" / ...
+    osm_id: Optional[str] = None
+
+    # פרטי העסק
+    name: str
+    name_ar: str
+    name_he: str
+    city_id: int
+    category_id: int                      # תמיד עסק → חובה קטגוריה
+
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    opening_hours: Optional[str] = None
+    main_image_url: Optional[str] = None
+    # NOTE: These fields are accepted in API but not saved to DB yet (UI-only)
+    business_license_image_url: Optional[str] = None  # רישיון עסק (UI only)
+    business_images_urls: Optional[List[str]] = None  # תמונות העסק (UI only)
+    social_links: Optional[str] = None
+    social_media_account_name: Optional[str] = None  # שם חשבון רשתות חברתיות (UI only)
+
+
+
+
+class BusinessOwnerRequestReview(BaseModel):
+    admin_user_id: int
+    reason: Optional[str] = None
+
+
 class DriverApplicationOut(BaseModel):
     user_id: int
     driver_profile_id: int
@@ -242,65 +404,367 @@ def list_pending_drivers(db: Session = Depends(get_db)):
             )
         )
     return result
+# 👇👇 ADD THIS WHOLE BLOCK HERE 👇👇
 
-# ---------- Pydantic schemas for signup ----------
-
-class RegularUserSignup(BaseModel):
-    full_name: str
-    username: str
-    email: EmailStr
-    phone: str
-    password: str
-
-
-class UserOut(BaseModel):
+class BusinessOwnerPlaceRequestOut(BaseModel):
     id: int
-    full_name: str
-    username: str
-    email: EmailStr
-    phone: str
-    role: str
+    user_id: int
+    existing_place_id: Optional[int] = None
+
+    lat: float
+    lon: float
+    source: str
+    osm_id: Optional[str] = None
+
+    name: str
+    name_ar: str
+    name_he: str
+    city_id: int
+    category_id: Optional[int] = None
+
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    opening_hours: Optional[str] = None
+    main_image_url: Optional[str] = None
+    # NOTE: These fields are not in DB yet, so not included in response
+    # business_license_image_url: Optional[str] = None
+    # business_images_urls: Optional[List[str]] = None
+    social_links: Optional[str] = None
+    # social_media_account_name: Optional[str] = None
+
     status: str
+    rejection_reason: Optional[str] = None
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True
 
-class DriverSignupRequest(BaseModel):
-    # basic user info
-    full_name: str
-    username: str
-    email: EmailStr
-    phone: str
-    password: str
-
-    # driver documents
-    driver_license_image_url: str   # רישיון נהיגה
-    id_card_image_url: str          # תעודת זהות
-
-    # car info + docs
-    car_type: str                   # סוג רכב
-    plate_number: str               # מספר רכב
-    production_year: int            # שנת יצור
-    car_license_image_url: str      # רישיון רכב
-    car_insurance_image_url: str    # ביטוח רכב
-
-    # optional photos
-    car_photos_urls: Optional[List[str]] = None  # צילומים לרכב (לא חובה)
 
 
-class DriverSignupOut(BaseModel):
-    user: UserOut
-    driver_profile_id: int
-    vehicle_id: int
-    driver_status: str
-    vehicle_status: str
 
-    class Config:
-        orm_mode = True
-        
-class DriverReviewRequest(BaseModel):
-    admin_user_id: int
-    reason: Optional[str] = None
+
+@app.get(
+    "/admin/business-owner/requests",
+    response_model=List[BusinessOwnerPlaceRequestOut],
+)
+def list_business_owner_requests(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    רשימת כל הבקשות מבעלי עסקים.
+    אפשר לסנן לפי status = PENDING / APPROVED / REJECTED
+    """
+    q = db.query(BusinessOwnerPlaceRequest).order_by(
+        BusinessOwnerPlaceRequest.created_at.desc()
+    )
+
+    if status:
+        try:
+            status_enum = OwnerPlaceRequestStatus(status)
+            q = q.filter(BusinessOwnerPlaceRequest.status == status_enum)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    return q.all()
+
+
+@app.post("/admin/business-owner/requests/{request_id}/approve")
+def approve_business_owner_request(
+    request_id: int,
+    data: BusinessOwnerRequestReview,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can approve")
+
+    req = (
+        db.query(BusinessOwnerPlaceRequest)
+        .filter(BusinessOwnerPlaceRequest.id == request_id)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    if req.status != OwnerPlaceRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Request is not pending")
+
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Business owner user not found")
+
+    # CASE 1: claim existing place
+    if req.existing_place_id is not None:
+        place = db.query(Place).filter(Place.id == req.existing_place_id).first()
+        if not place:
+            raise HTTPException(status_code=404, detail="Place not found")
+
+        place.name = req.name
+        place.name_ar = req.name_ar
+        place.name_he = req.name_he
+        place.city_id = req.city_id
+        place.category_id = req.category_id
+        place.description = req.description
+        place.phone = req.phone
+        place.opening_hours = req.opening_hours
+        place.main_image_url = req.main_image_url
+        place.social_links = req.social_links
+        place.owner_user_id = user.id
+        place.can_be_claimed = False
+
+    # CASE 2: new place
+    else:
+        location = Location(
+            geom=func.ST_SetSRID(func.ST_MakePoint(req.lon, req.lat), 4326),
+            source=req.source,
+            osm_id=req.osm_id,
+        )
+        db.add(location)
+        db.flush()
+
+        place = Place(
+            location_id=location.id,
+            city_id=req.city_id,
+            category_id=req.category_id,
+            place_type=PlaceType.BUSINESS,
+            name=req.name,
+            name_ar=req.name_ar,
+            name_he=req.name_he,
+            can_be_claimed=False,
+            description=req.description,
+            phone=req.phone,
+            opening_hours=req.opening_hours,
+            main_image_url=req.main_image_url,
+            social_links=req.social_links,
+            owner_user_id=user.id,
+            created_by_admin_id=admin.id,
+        )
+        db.add(place)
+
+    req.status = OwnerPlaceRequestStatus.APPROVED
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.reviewed_by_admin_id = admin.id
+    req.rejection_reason = None
+
+    user.status = UserStatus.ACTIVE
+    user.rejection_reason = None
+
+    db.commit()
+
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Business owner request approved",
+        body="Your business owner request has been approved. You can now log in and manage your business place.",
+    )
+
+    return {"detail": "Business owner request approved"}
+
+
+@app.post("/admin/business-owner/requests/{request_id}/reject")
+def reject_business_owner_request(
+    request_id: int,
+    data: BusinessOwnerRequestReview,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can reject")
+
+    req = (
+        db.query(BusinessOwnerPlaceRequest)
+        .filter(BusinessOwnerPlaceRequest.id == request_id)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    if req.status != OwnerPlaceRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Request is not pending")
+
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Business owner user not found")
+
+    reason = data.reason or "Your business owner request was not approved."
+
+    req.status = OwnerPlaceRequestStatus.REJECTED
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.reviewed_by_admin_id = admin.id
+    req.rejection_reason = reason
+
+    user.status = UserStatus.REJECTED
+    user.rejection_reason = reason
+
+    db.commit()
+
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Business owner request rejected",
+        body=f"Your business owner request was rejected.\n\nReason: {reason}\n\nYou can try to sign up again with the same email and username if you wish to submit a new request.",
+    )
+
+    return {"detail": "Business owner request rejected"}
+# 👆👆 UNTIL HERE 👆👆
+@app.post("/admin/business-owner/requests/{request_id}/approve")
+def approve_business_owner_request(
+    request_id: int,
+    data: BusinessOwnerRequestReview,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can approve")
+
+    req = (
+        db.query(BusinessOwnerPlaceRequest)
+        .filter(BusinessOwnerPlaceRequest.id == request_id)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    if req.status != OwnerPlaceRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Request is not pending")
+
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Business owner user not found")
+
+    # --- CASE 1: קליים על מקום קיים ---
+    if req.existing_place_id is not None:
+        place = db.query(Place).filter(Place.id == req.existing_place_id).first()
+        if not place:
+            raise HTTPException(status_code=404, detail="Place not found")
+
+        # מעדכנים את המקום בדאטה של בעל העסק
+        place.name = req.name
+        place.name_ar = req.name_ar
+        place.name_he = req.name_he
+        place.city_id = req.city_id
+        place.category_id = req.category_id
+        place.description = req.description
+        place.phone = req.phone
+        place.opening_hours = req.opening_hours
+        place.main_image_url = req.main_image_url
+        place.social_links = req.social_links
+        place.owner_user_id = user.id
+        place.can_be_claimed = False   # יש בעלים עכשיו
+
+    # --- CASE 2: מקום חדש לגמרי ---
+    else:
+        # קודם מיקום חדש
+        location = Location(
+            geom=func.ST_SetSRID(func.ST_MakePoint(req.lon, req.lat), 4326),
+            source=req.source,
+            osm_id=req.osm_id,
+        )
+        db.add(location)
+        db.flush()  # location.id
+
+        place = Place(
+            location_id=location.id,
+            city_id=req.city_id,
+            category_id=req.category_id,
+            place_type=PlaceType.BUSINESS,
+            name=req.name,
+            name_ar=req.name_ar,
+            name_he=req.name_he,
+            can_be_claimed=False,  # כבר משויך לבעלים
+            description=req.description,
+            phone=req.phone,
+            opening_hours=req.opening_hours,
+            main_image_url=req.main_image_url,
+            social_links=req.social_links,
+            owner_user_id=user.id,
+            created_by_admin_id=admin.id,
+        )
+        db.add(place)
+
+    # מעדכנים את הבקשה
+    req.status = OwnerPlaceRequestStatus.APPROVED
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.reviewed_by_admin_id = admin.id
+    req.rejection_reason = None
+
+    # מעדכנים את המשתמש
+    user.status = UserStatus.ACTIVE
+    user.rejection_reason = None
+
+    db.commit()
+
+    # מייל (אופציונלי)
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Business owner request approved",
+        body="Your business owner request has been approved. You can now log in and manage your business place.",
+    )
+
+    return {"detail": "Business owner request approved"}
+
+@app.post("/admin/business-owner/requests/{request_id}/reject")
+def reject_business_owner_request(
+    request_id: int,
+    data: BusinessOwnerRequestReview,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can reject")
+
+    req = (
+        db.query(BusinessOwnerPlaceRequest)
+        .filter(BusinessOwnerPlaceRequest.id == request_id)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    if req.status != OwnerPlaceRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Request is not pending")
+
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Business owner user not found")
+
+    reason = data.reason or "Your business owner request was not approved."
+
+    req.status = OwnerPlaceRequestStatus.REJECTED
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.reviewed_by_admin_id = admin.id
+    req.rejection_reason = reason
+
+    user.status = UserStatus.REJECTED
+    user.rejection_reason = reason
+
+    db.commit()
+
+    send_email(
+        to_email=user.email,
+        subject="Wejhetna – Business owner request rejected",
+        body=f"Your business owner request was rejected.\n\nReason: {reason}\n\nYou can try to sign up again with the same email and username if you wish to submit a new request.",
+    )
+
+    return {"detail": "Business owner request rejected"}
+
+# -
 @app.post("/admin/drivers/{driver_profile_id}/approve")
 def approve_driver(
     driver_profile_id: int,
@@ -375,6 +839,7 @@ def reject_driver(
 
     # if no reason → use a default
     reason = data.reason or "Your documents were not approved."
+    user.rejection_reason = reason
 
     user.status = UserStatus.REJECTED
     profile.driver_status = DriverStatus.REJECTED
@@ -432,21 +897,113 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
     db.refresh(user)
 
     return user
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 @app.post("/auth/signup/driver", response_model=DriverSignupOut)
 def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
-    # 1. Check username/email uniqueness
+    # 1. Check if there is already a user with this username/email
     existing_user = (
         db.query(User)
         .filter(or_(User.username == data.username, User.email == data.email))
         .first()
     )
 
+    # ============================
+    # CASE A – USER ALREADY EXISTS
+    # ============================
     if existing_user:
+        # Try to find their driver profile (if any)
+        driver_profile = (
+            db.query(DriverProfile)
+            .filter(DriverProfile.user_id == existing_user.id)
+            .first()
+        )
+
+        # Is this user a driver WITH a driver_profile that was REJECTED?
+        is_rejected_driver = (
+            driver_profile is not None
+            and driver_profile.driver_status == DriverStatus.REJECTED
+        )
+
+        # 👉 1) REJECTED DRIVER RE-APPLYING → ALLOW
+        if is_rejected_driver:
+            # hash new password
+            password_hash = hash_password(data.password)
+
+            # update basic user info
+            existing_user.full_name = data.full_name
+            existing_user.phone = data.phone
+            existing_user.password_hash = password_hash
+            existing_user.status = UserStatus.PENDING  # back to pending
+            # we KEEP existing_user.rejection_reason so admin can see old rejection
+
+            # update documents + status
+            driver_profile.driver_license_image_url = data.driver_license_image_url
+            driver_profile.id_card_image_url = data.id_card_image_url
+            driver_profile.driver_status = DriverStatus.PENDING
+            driver_profile.driver_status_updated_at = datetime.now(timezone.utc)
+
+            # get last vehicle for this driver (if exists)
+            vehicle = (
+                db.query(DriverVehicle)
+                .filter(DriverVehicle.driver_profile_id == driver_profile.id)
+                .order_by(DriverVehicle.id.desc())
+                .first()
+            )
+
+            if not vehicle:
+                # no vehicle yet → create new one
+                vehicle = DriverVehicle(
+                    driver_profile_id=driver_profile.id,
+                    car_type=data.car_type,
+                    plate_number=data.plate_number,
+                    production_year=data.production_year,
+                    car_license_image_url=data.car_license_image_url,
+                    car_insurance_image_url=data.car_insurance_image_url,
+                    car_photos_urls=data.car_photos_urls,
+                    status=VehicleStatus.SUBMITTED,
+                    submitted_at=datetime.now(timezone.utc),
+                )
+                db.add(vehicle)
+            else:
+                # update existing vehicle for the new application
+                vehicle.car_type = data.car_type
+                vehicle.plate_number = data.plate_number
+                vehicle.production_year = data.production_year
+                vehicle.car_license_image_url = data.car_license_image_url
+                vehicle.car_insurance_image_url = data.car_insurance_image_url
+                vehicle.car_photos_urls = data.car_photos_urls
+                vehicle.status = VehicleStatus.SUBMITTED
+                vehicle.submitted_at = datetime.now(timezone.utc)
+                vehicle.reviewed_at = None
+                vehicle.reviewed_by_admin_id = None
+                vehicle.rejection_reason = None
+
+            db.commit()
+            db.refresh(existing_user)
+            db.refresh(driver_profile)
+            db.refresh(vehicle)
+
+            return DriverSignupOut(
+                user=UserOut.model_validate(existing_user, from_attributes=True),
+                driver_profile_id=driver_profile.id,
+                vehicle_id=vehicle.id,
+                driver_status=driver_profile.driver_status.value,
+                vehicle_status=vehicle.status.value,
+                message="Your request has been sent again.",  # 👈 re-apply msg
+            )
+
+        # 👉 2) ANY OTHER EXISTING USER (approved driver / regular / admin / business owner)
+        # → BLOCK with 'already exists'
         raise HTTPException(
             status_code=400,
             detail="Username or email already exists",
         )
+
+    # ============================
+    # CASE B – FIRST TIME DRIVER SIGNUP (NO USER YET)
+    # ============================
 
     # 2. Hash password
     password_hash = hash_password(data.password)
@@ -504,24 +1061,67 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         vehicle_id=vehicle.id,
         driver_status=driver_profile.driver_status.value,
         vehicle_status=vehicle.status.value,
+        message="Your request has been sent and is waiting for admin approval.",
     )
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    # 👇👇 ADD THIS BLOCK HERE 👇👇
+@app.post("/auth/signup/business-owner", response_model=BusinessOwnerSignupOut)
+def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_db)):
+    """
+    יצירת משתמש חדש עם ROLE = BUSINESS_OWNER.
+    בתחילה status = PENDING → לא פעיל עד שהאדמין יאשר את הבקשה.
+    """
+    existing_user = (
+        db.query(User)
+        .filter(or_(User.username == data.username, User.email == data.email))
+        .first()
+    )
+
+    if existing_user:
+        if (
+            existing_user.role == UserRole.BUSINESS_OWNER
+            and existing_user.status == UserStatus.REJECTED
+        ):
+            # Rejected business owner trying again - allow re-signup
+            existing_user.full_name = data.full_name
+            existing_user.phone = data.phone
+            existing_user.password_hash = hash_password(data.password)
+            existing_user.status = UserStatus.PENDING
+            existing_user.rejection_reason = None  # Clear old rejection reason
+
+            db.commit()
+            db.refresh(existing_user)
+
+            return BusinessOwnerSignupOut(
+                user=UserOut.model_validate(existing_user, from_attributes=True),
+                message="Your business owner signup request has been sent again. Please choose your business location next.",
+            )
+
+        raise HTTPException(
+            status_code=400,
+            detail="Username or email already exists",
+        )
+
+    user = User(
+        full_name=data.full_name,
+        username=data.username,
+        email=data.email,
+        phone=data.phone,
+        password_hash=hash_password(data.password),
+        role=UserRole.BUSINESS_OWNER,
+        status=UserStatus.PENDING,
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return BusinessOwnerSignupOut(
+        user=UserOut.model_validate(user, from_attributes=True),
+        message="Your business owner signup request has been created. Please choose your business location next.",
+    )
+# 👆👆 UNTIL HERE 👆👆
 
 
-class LoginRequest(BaseModel):
-    username_or_email: str
-    password: str
-
-
-class LoginResponse(BaseModel):
-    id: int
-    full_name: str
-    role: str
-    status: str
-
-    class Config:
-        orm_mode = True
 
 @app.post("/auth/login", response_model=LoginResponse)
 def login(data: LoginRequest, db: Session = Depends(get_db)):
@@ -901,6 +1501,87 @@ def get_places_in_bbox(
     )
 
     return places
+from sqlalchemy import func, or_, cast   # cast חדש
+from geoalchemy2 import Geography        # כדי לקסט ל-Geography
+
+@app.get("/places/map", response_model=List[PlaceResponse])
+def get_places_in_bbox(
+    north: float,
+    south: float,
+    east: float,
+    west: float,
+    db: Session = Depends(get_db),
+):
+    envelope_geom = func.ST_MakeEnvelope(west, south, east, north, 4326)
+    envelope_geog = cast(envelope_geom, Geography(geometry_type="POLYGON", srid=4326))
+
+    places = (
+        db.query(Place)
+        .join(Location, Place.location_id == Location.id)
+        .filter(func.ST_Intersects(Location.geom, envelope_geog))
+        .all()
+    )
+
+    return places
+
+
+# 👇👇 ADD THIS BLOCK HERE 👇👇
+@app.get("/business-owner/places/nearby", response_model=BusinessOwnerNearbyCheckResponse)
+def check_nearby_places_for_owner(
+    lat: float,
+    lon: float,
+    radius_m: float = 50,        # ברירת מחדל 50 מטר
+    db: Session = Depends(get_db),
+):
+    """
+    בודקת האם יש עסק קיים במרחק radius_m מטר
+    מהמיקום שבעל העסק בחר.
+
+    לוגיקה:
+    - אם אין בכלל מקום קרוב → status = "NO_PLACE"
+    - אם יש מקום ו-has_owner = True → status = "HAS_OWNER"
+    - אם יש מקום ו-has_owner = False → status = "CAN_CLAIM"
+    """
+
+    picked_point_geog = cast(
+        func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326),
+        Geography(geometry_type="POINT", srid=4326),
+    )
+
+    row = (
+        db.query(Place, City)
+        .join(Location, Place.location_id == Location.id)
+        .join(City, Place.city_id == City.id)
+        .filter(
+            Place.place_type == PlaceType.BUSINESS,
+            func.ST_DWithin(Location.geom, picked_point_geog, radius_m),
+        )
+        .order_by(Place.id)
+        .first()
+    )
+
+    if not row:
+        return BusinessOwnerNearbyCheckResponse(status="NO_PLACE", candidate=None)
+
+    place, city = row
+    has_owner = place.owner_user_id is not None
+
+    candidate = NearbyPlaceInfo(
+        place_id=place.id,
+        name=place.name,
+        name_ar=place.name_ar,
+        name_he=place.name_he,
+        city_name_ar=city.name_ar,
+        has_owner=has_owner,
+    )
+
+    if has_owner:
+        return BusinessOwnerNearbyCheckResponse(status="HAS_OWNER", candidate=candidate)
+
+    return BusinessOwnerNearbyCheckResponse(status="CAN_CLAIM", candidate=candidate)
+# 👆👆 UNTIL HERE 👆👆
+
+
 
 # =========================
 # PLACES API
@@ -1143,3 +1824,189 @@ def gps_osm_check(data: GpsCheckRequest):
         return GpsCheckResponse(match_found=True, osm_id=osm_id)
 
     return GpsCheckResponse(match_found=False, osm_id=None)
+
+@app.post("/business-owner/place-requests", response_model=BusinessOwnerPlaceRequestOut, status_code=201)
+def create_business_owner_place_request(
+    data: BusinessOwnerPlaceRequestCreate,
+    db: Session = Depends(get_db),
+):
+    """
+    יצירת בקשה חדשה מבעל עסק:
+    - או קליים על מקום קיים (existing_place_id != None)
+    - או בקשה ליצור מקום חדש (existing_place_id == None)
+    """
+
+    user = db.query(User).filter(User.id == data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Business owner user not found")
+
+    if user.role != UserRole.BUSINESS_OWNER:
+        raise HTTPException(status_code=400, detail="User is not BUSINESS_OWNER")
+
+    # המצב שלו – בדרך כלל PENDING או REJECTED
+    # REJECTED users can create new requests (they re-signed up)
+    if user.status not in (UserStatus.PENDING, UserStatus.REJECTED):
+        # אם כבר ACTIVE – אפשר להחליט אם לאפשר עוד בקשות, כרגע נחסום
+        raise HTTPException(
+            status_code=400,
+            detail="User is already an active business owner",
+        )
+    
+    # If user was REJECTED and is trying again, set status back to PENDING
+    if user.status == UserStatus.REJECTED:
+        user.status = UserStatus.PENDING
+        user.rejection_reason = None  # Clear old rejection reason
+
+    existing_place = None
+    if data.existing_place_id is not None:
+        existing_place = (
+            db.query(Place)
+            .filter(Place.id == data.existing_place_id)
+            .first()
+        )
+        if not existing_place:
+            raise HTTPException(status_code=404, detail="Place not found")
+
+        if existing_place.place_type != PlaceType.BUSINESS:
+            raise HTTPException(
+                status_code=400,
+                detail="Only business places can be claimed",
+            )
+
+        if existing_place.owner_user_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="This place already has an owner",
+            )
+
+    # יצירת רשומה לטבלת הבקשות (היסטוריית בקשות נשמרת)
+    # NOTE: business_license_image_url, business_images_urls, social_media_account_name
+    # are NOT set here because the database columns may not exist yet
+    # These fields are UI-only for now - they will be saved to DB after migration
+    req = BusinessOwnerPlaceRequest(
+        user_id=user.id,
+        existing_place_id=data.existing_place_id,
+        lat=data.lat,
+        lon=data.lon,
+        source=data.source,
+        osm_id=data.osm_id,
+        name=data.name,
+        name_ar=data.name_ar,
+        name_he=data.name_he,
+        city_id=data.city_id,
+        category_id=data.category_id,
+        description=data.description,
+        phone=data.phone,
+        opening_hours=data.opening_hours,
+        main_image_url=data.main_image_url,
+        social_links=data.social_links,
+        status=OwnerPlaceRequestStatus.PENDING,
+    )
+
+    # סטטוס USER נשאר PENDING (או REJECTED עד אישור חדש)
+    user.status = UserStatus.PENDING
+
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    return req
+
+# =========================
+# ADMIN – USERS LIST
+# =========================
+
+@app.get("/admin/users", response_model=List[UserListOut])
+def list_all_users(
+    role_filter: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    מחזיר את כל המשתמשים.
+    אפשר לסנן לפי role = REGULAR / DRIVER / BUSINESS_OWNER / ADMIN
+    """
+    try:
+        q = db.query(User).order_by(User.created_at.desc())
+
+        if role_filter:
+            try:
+                role_enum = UserRole(role_filter)
+                q = q.filter(User.role == role_enum)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid role filter")
+
+        users = q.all()
+        return users
+    except Exception as e:
+        print(f"Error in list_all_users: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")
+
+# =========================
+# ADMIN – DELETE USER
+# =========================
+
+class DeleteUserRequest(BaseModel):
+    admin_user_id: int
+
+@app.delete("/admin/users/{user_id}")
+def delete_user(
+    user_id: int,
+    data: DeleteUserRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    מחק משתמש:
+    - אם REGULAR או DRIVER → מחק לחלוטין (כולל פרופיל נהג/רכב)
+    - אם BUSINESS_OWNER → שנה status ל-PENDING (לא יכול להתחבר), אבל השאר את המקומות על המפה
+    """
+    # בדיקת אדמין
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can delete users")
+
+    # מציאת המשתמש למחיקה
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # לא ניתן למחוק אדמין אחר
+    if user.role == UserRole.ADMIN:
+        raise HTTPException(status_code=400, detail="Cannot delete admin users")
+
+    # טיפול מיוחד ב-BUSINESS_OWNER
+    if user.role == UserRole.BUSINESS_OWNER:
+        # שנה status ל-PENDING (לא יכול להתחבר)
+        user.status = UserStatus.PENDING
+        user.rejection_reason = "Account removed by admin. Business places remain on the map."
+        
+        # השאר את המקומות על המפה (לא מוחקים אותם)
+        # רק מסירים את owner_user_id מהמקומות
+        places = db.query(Place).filter(Place.owner_user_id == user.id).all()
+        for place in places:
+            place.owner_user_id = None
+            place.can_be_claimed = True  # אפשר לטעון מחדש
+        
+        db.commit()
+        return {"detail": "Business owner removed. Status set to PENDING. Places remain on map."}
+
+    # טיפול ב-REGULAR או DRIVER - מחיקה מלאה
+    if user.role == UserRole.DRIVER:
+        # מחק פרופיל נהג ורכבים
+        driver_profile = db.query(DriverProfile).filter(DriverProfile.user_id == user.id).first()
+        if driver_profile:
+            # מחק רכבים
+            vehicles = db.query(DriverVehicle).filter(DriverVehicle.driver_profile_id == driver_profile.id).all()
+            for vehicle in vehicles:
+                db.delete(vehicle)
+            # מחק פרופיל נהג
+            db.delete(driver_profile)
+
+    # מחק את המשתמש עצמו
+    db.delete(user)
+    db.commit()
+
+    return {"detail": "User deleted successfully"}

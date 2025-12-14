@@ -15,6 +15,13 @@ import LoginScreen from "../screens/LoginScreen";
 import AdminHomeScreen from "../screens/Admin/AdminHomeScreen";
 import RegularHomeScreen from "../screens/RegularAccount/RegularHomeScreen";
 import AdminDriverDetailsScreen from "../screens/Admin/AdminDriverDetailsScreen";
+import AdminBusinessOwnerRequestsScreen from "../screens/Admin/AdminBusinessOwnerRequestsScreen";
+import AdminBusinessOwnerRequestDetailsScreen from "../screens/Admin/AdminBusinessOwnerRequestDetailsScreen";
+import BusinessOwnerSignupScreen from "../screens/businessOwner/BusinessOwnerSignupScreen";
+import BusinessOwnerPickLocationScreen from "../screens/businessOwner/BusinessOwnerPickLocationScreen";
+import BusinessOwnerDetailsFormScreen from "../screens/businessOwner/BusinessOwnerDetailsFormScreen";
+import ExistingUsersScreen from "../screens/Admin/ExistingUsersScreen";
+import RejectedUsersScreen from "../screens/Admin/RejectedUsersScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -107,8 +114,47 @@ export default function AppNavigator() {
   options={{ title: "Driver details" }}
 />
 
+<Stack.Screen
+  name="AdminBusinessOwnerRequests"
+  component={AdminBusinessOwnerRequestsScreen}
+  options={{ title: "Business Owner Requests" }}
+/>
 
+<Stack.Screen
+  name="AdminBusinessOwnerRequestDetails"
+  component={AdminBusinessOwnerRequestDetailsScreen}
+  options={{ title: "Request Details" }}
+/>
 
+<Stack.Screen
+  name="BusinessOwnerSignup"
+  component={BusinessOwnerSignupScreen}
+  options={{ title: "Business Owner Signup" }}
+/>
+
+<Stack.Screen
+  name="BusinessOwnerPickLocation"
+  component={BusinessOwnerPickLocationScreen}
+  options={{ title: "Pick Location" }}
+/>
+
+<Stack.Screen
+  name="BusinessOwnerDetailsForm"
+  component={BusinessOwnerDetailsFormScreen}
+  options={{ title: "Business Details" }}
+/>
+
+<Stack.Screen
+  name="ExistingUsers"
+  component={ExistingUsersScreen}
+  options={{ title: "Existing Users" }}
+/>
+
+<Stack.Screen
+  name="RejectedUsers"
+  component={RejectedUsersScreen}
+  options={{ title: "Rejected Users" }}
+/>
 
       </Stack.Navigator>
 
