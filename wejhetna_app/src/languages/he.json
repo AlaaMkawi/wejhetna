@@ -7,8 +7,8 @@
   "password": "סיסמה",
   "new_user_question_": " משתמש חדש?",
   "sign_up": "הרשמה",
-  "contact_us": "צור קשר"
-
+  "contact_us": "צור קשר",
+  "invalid_credentials": "פרטי ההתחברות שגויים."
 
 
 }

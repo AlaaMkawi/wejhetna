@@ -6,11 +6,11 @@ import {
   StyleSheet,
   Animated,
   Image,
-  I18nManager,
+  I18nManager, 
 } from "react-native";
 import RNRestart from "react-native-restart";
 
-import { changeAppLanguage } from "../i18n";
+import { changeAppLanguage } from "../i18n"; 
 
 export default function LanguageSwitcher() {
   const [open, setOpen] = useState(false);
@@ -27,25 +27,22 @@ export default function LanguageSwitcher() {
 
   const selectLanguage = async (lang: string) => {
     await changeAppLanguage(lang);
-
     const isRTL = lang === "ar" || lang === "he";
-
     if (I18nManager.isRTL !== isRTL) {
       I18nManager.allowRTL(isRTL);
       I18nManager.forceRTL(isRTL);
-      RNRestart.restart(); // restart app to apply layout changes
+      RNRestart.restart(); 
     }
-
     setOpen(false);
   };
 
   return (
     <View style={styles.container}>
-      {/* Language Icon Button */}
+      {/* Icon Button */}
       <TouchableOpacity style={styles.iconBtn} onPress={toggleDropdown}>
         <Image
           source={require("../../assets/language-icon.png")}
-          style={{ width: 30, height: 30 }}
+          style={{ width: 45, height: 45, tintColor: "#0f5b63" }} 
           resizeMode="contain"
         />
       </TouchableOpacity>
@@ -56,7 +53,10 @@ export default function LanguageSwitcher() {
           <TouchableOpacity onPress={() => selectLanguage("ar")}>
             <Text style={styles.option}>العربية</Text>
           </TouchableOpacity>
-
+          
+          {/* Subtle floating divider */}
+          <View style={styles.divider} />
+          
           <TouchableOpacity onPress={() => selectLanguage("he")}>
             <Text style={styles.option}>עברית</Text>
           </TouchableOpacity>
@@ -68,45 +68,49 @@ export default function LanguageSwitcher() {
 
 const styles = StyleSheet.create({
   container: {
-    position: "absolute",
-    top: 20,
-    left: 20,
     zIndex: 999,
+    alignItems: 'center', // Centers the dropdown under the icon
   },
 
   iconBtn: {
-    backgroundColor: "#ffffff",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    backgroundColor: "transparent",
+    width: 60,
+    height: 60,
     alignItems: "center",
     justifyContent: "center",
-
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 6,
   },
 
+  // CHANGED: Completely transparent, no box, no shadows
   dropdown: {
-    marginTop: 8,
-    backgroundColor: "#ffffff",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    elevation: 6,
-
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
+    position:'absolute',
+    top:60,
+    backgroundColor: "transparent", 
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 0,
+    borderWidth: 0,
+    shadowOpacity: 0,
+    elevation: 0,
+    minWidth: 100,
+    alignItems: 'center',
   },
 
+  // CHANGED: Added shadow to text so it is readable without a background
   option: {
-    fontSize: 16,
-    color: "#2b6f73",
-    fontWeight: "600",
-    paddingVertical: 6,
+    fontSize: 18,
+    color: "#0f5b63",
+    fontWeight: "700",
+    paddingVertical: 12,
+    textShadowColor: 'rgba(255, 255, 255, 0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
+  
+ 
+  divider: {
+      height: 1,
+      width: "50%",
+      backgroundColor: "#0f5b63",
+      opacity: 0.3,
+  }
 });
