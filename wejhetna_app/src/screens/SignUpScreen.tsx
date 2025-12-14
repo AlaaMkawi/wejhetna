@@ -8,14 +8,19 @@ import {
 } from "react-native";
 import RegularSignupForm from "./RegularSignupForm";
 import DriverSignupForm from "./DriverSignupForm";
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { AuthStackParamList } from "../navigation/types";
 
 const MINT = "#9bd3d8";
 const DARK_TEAL = "#0f5b63";
 
 type SignupType = "choose" | "regular" | "driver";
+type NavType = NativeStackNavigationProp<AuthStackParamList>;
 
 export default function SignUpScreen() {
   const [type, setType] = useState<SignupType>("choose");
+  const navigation = useNavigation<NavType>();
 
   return (
     <ScrollView contentContainerStyle={styles.screen}>
@@ -47,6 +52,13 @@ export default function SignUpScreen() {
               onPress={() => setType("driver")}
             >
               <Text style={styles.secondaryButtonText}>Driver</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryButton}
+              onPress={() => navigation.navigate("BusinessOwnerSignup")}
+            >
+              <Text style={styles.secondaryButtonText}>Business owner</Text>
             </TouchableOpacity>
           </>
         )}

@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     Boolean,
     cast,
+    Float,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, column_property
@@ -45,7 +46,12 @@ class VehicleStatus(str, enum.Enum):
 
 class PlaceType(str, enum.Enum):
     PUBLIC_SERVICE = "PUBLIC_SERVICE"   # בתי ספר, מרפאה, מסגד...
-    BUSINESS = "BUSINESS"               # עסקים רגילים
+    BUSINESS = "BUSINESS"        
+           # עסקים רגילים
+class OwnerPlaceRequestStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
 
 # ========== TABLES ==========
 
@@ -264,3 +270,7 @@ class Place(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+
+

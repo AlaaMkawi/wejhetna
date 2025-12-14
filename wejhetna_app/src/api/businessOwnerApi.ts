@@ -1,0 +1,108 @@
+// src/api/businessOwnerApi.ts
+import axios from "axios";
+
+// ⚠️ OPTION A: If you ALREADY have API_BASE_URL defined somewhere (like config.ts),
+// then DELETE the line below and import it instead, for example:
+// import { API_BASE_URL } from "../config";
+
+const API_BASE_URL = "http://10.0.2.2:8000"; // backend base URL for emulator
+
+// ---------- Types ----------
+export type LoginRole = "REGULAR" | "DRIVER" | "BUSINESS_OWNER" | "ADMIN";
+
+export interface BusinessOwnerSignupPayload {
+  full_name: string;
+  username: string;
+  email: string;
+  phone: string;
+  password: string;
+}
+
+export interface UserOut {
+  id: number;
+  full_name: string;
+  username: string;
+  email: string;
+  phone: string;
+  role: LoginRole;
+  status: string; // "PENDING" | "ACTIVE" | "REJECTED"
+}
+
+export interface BusinessOwnerSignupResponse {
+  user: UserOut;
+  message?: string;
+}
+
+export interface NearbyPlaceInfo {
+  place_id: number;
+  name: string;
+  name_ar?: string;
+  name_he?: string;
+  city_name_ar?: string;
+  has_owner: boolean;
+}
+
+export type NearbyStatus = "NO_PLACE" | "CAN_CLAIM" | "HAS_OWNER";
+
+export interface BusinessOwnerNearbyCheckResponse {
+  status: NearbyStatus;
+  candidate?: NearbyPlaceInfo | null;
+}
+
+export interface BusinessOwnerPlaceRequestPayload {
+  user_id: number;
+  existing_place_id?: number | null;
+  lat: number;
+  lon: number;
+  source: string; // "MAP_PICK" / "GPS_NO_OSM"
+  osm_id?: string | null;
+  name: string;
+  name_ar: string;
+  name_he: string;
+  city_id: number;
+  category_id: number;
+  description?: string | null;
+  phone?: string | null;
+  opening_hours?: string | null;
+  main_image_url?: string | null;
+  social_links?: string | null;
+}
+
+// ---------- API calls ----------
+
+// 1) Signup as business owner
+export async function signupBusinessOwner(
+  payload: BusinessOwnerSignupPayload
+): Promise<BusinessOwnerSignupResponse> {
+  const res = await axios.post(
+    `${API_BASE_URL}/auth/signup/business-owner`,
+    payload
+  );
+  return res.data;
+}
+
+// 2) Check nearby places for owner
+export async function checkNearbyForOwner(
+  lat: number,
+  lon: number,
+  radius_m = 50
+): Promise<BusinessOwnerNearbyCheckResponse> {
+  const res = await axios.get(
+    `${API_BASE_URL}/business-owner/places/nearby`,
+    {
+      params: { lat, lon, radius_m },
+    }
+  );
+  return res.data;
+}
+
+// 3) Create business owner place request
+export async function createBusinessOwnerPlaceRequest(
+  payload: BusinessOwnerPlaceRequestPayload
+) {
+  const res = await axios.post(
+    `${API_BASE_URL}/business-owner/place-requests`,
+    payload
+  );
+  return res.data;
+}
