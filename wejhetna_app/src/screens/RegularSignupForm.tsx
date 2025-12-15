@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigation } from "@react-navigation/native";
 import {
   View,
   Text,
@@ -19,6 +20,7 @@ type Props = {
 
 export default function RegularSignupForm({ onBack }: Props) {
   const { t } = useTranslation();
+  const navigation = useNavigation<any>();
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -139,9 +141,6 @@ export default function RegularSignupForm({ onBack }: Props) {
         <Text style={styles.secondaryButtonText}>{t("back")}</Text>
       </TouchableOpacity>
 
-      {result && (
-        <Text style={styles.success}>{JSON.stringify(result)}</Text>
-      )}
       {error && <Text style={styles.error}>{error}</Text>}
 
       {/* pretty popup */}
@@ -150,7 +149,19 @@ export default function RegularSignupForm({ onBack }: Props) {
         type={modalType}
         title={modalTitle}
         message={modalMessage}
-        onClose={() => setModalVisible(false)}
+        onClose={() => {
+          setModalVisible(false);
+          // Navigate to LoginScreen only after user closes success modal
+          if (modalType === "success") {
+            navigation.reset({
+              index: 1,
+              routes: [
+                { name: "Home" },
+                { name: "Login" },
+              ],
+            });
+          }
+        }}
       />
     </View>
   );
