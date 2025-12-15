@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   View,
   Text,
@@ -6,6 +7,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  I18nManager,
 } from "react-native";
 import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "./MessageModal"; // 👈 pretty popup
@@ -20,20 +22,21 @@ type Props = {
 };
 
 export default function DriverSignupForm({ onBack }: Props) {
+  const { t } = useTranslation();
   // 🔹 Step state: 1 = basic info, 2 = driver details + docs
   const [step, setStep] = useState<1 | 2>(1);
 
   // ----- STEP 1: BASIC USER INFO (same as regular user) -----
-  const [fullName, setFullName] = useState("Android Driver");
-  const [username, setUsername] = useState("driver_android");
-  const [email, setEmail] = useState("driver.android@example.com");
-  const [phone, setPhone] = useState("0509999999");
-  const [password, setPassword] = useState("Driver123!");
+  const [fullName, setFullName] = useState("");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
 
   // ----- STEP 2: CAR + DRIVER INFO -----
-  const [carType, setCarType] = useState("Hyundai i20");
-  const [plateNumber, setPlateNumber] = useState("11-222-33");
-  const [productionYear, setProductionYear] = useState("2019");
+  const [carType, setCarType] = useState("");
+  const [plateNumber, setPlateNumber] = useState("");
+  const [productionYear, setProductionYear] = useState("");
 
   // DOC URL FIELDS (images)
   const [driverLicenseUrl, setDriverLicenseUrl] = useState("");
@@ -164,44 +167,44 @@ export default function DriverSignupForm({ onBack }: Props) {
       !phoneTrim ||
       !passwordTrim
     ) {
-      setError("Please fill all basic info before continuing.");
-      showModal("error", "Sign up error", "Please fill all basic info before continuing.");
+      const msg = t("fill_all_basic_info");
+      setError(msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (nameTrim.length < 3) {
-      setError("Full name should be at least 3 characters.");
-      showModal("error", "Sign up error", "Full name should be at least 3 characters.");
+      const msg = t("full_name_min_length");
+      setError(msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidUsername(usernameTrim)) {
-      const msg =
-        "Username must be 3–20 characters and contain only letters, numbers, or underscore.";
+      const msg = t("username_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidEmail(emailTrim)) {
-      const msg = "Please enter a valid email address.";
+      const msg = t("valid_email");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidPhone(phoneTrim)) {
-      const msg = "Phone must contain 9–15 digits (numbers only).";
+      const msg = t("phone_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isStrongPassword(passwordTrim)) {
-      const msg =
-        "Password must be at least 8 characters and include both letters and numbers.";
+      const msg = t("password_strong");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
@@ -236,93 +239,88 @@ export default function DriverSignupForm({ onBack }: Props) {
       !carLicenseTrim ||
       !carInsuranceTrim
     ) {
-      const msg = "Please fill all required fields.";
+      const msg = t("fill_all_required");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     // 🔸 Re-check core rules in case user changed something after Step 1
     if (!isValidUsername(username.trim())) {
-      const msg =
-        "Username must be 3–20 characters and contain only letters, numbers, or underscore.";
+      const msg = t("username_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidEmail(email.trim())) {
-      const msg = "Please enter a valid email address.";
+      const msg = t("valid_email");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidPhone(phone.trim())) {
-      const msg = "Phone must contain 9–15 digits (numbers only).";
+      const msg = t("phone_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isStrongPassword(password.trim())) {
-      const msg =
-        "Password must be at least 8 characters and include both letters and numbers.";
+      const msg = t("password_strong");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     // 🔸 Step 2 rules
     if (carTypeTrim.length < 2) {
-      const msg = "Car type should be at least 2 characters.";
+      const msg = t("car_type_min_length");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidPlateNumber(plateTrim)) {
-      const msg =
-        "Plate number should be at least 5 characters and include a digit.";
+      const msg = t("plate_number_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidProductionYear(prodYearTrim)) {
-      const current = new Date().getFullYear();
-      const msg = `Production year must be a valid number between 1990 and ${current + 1}.`;
+      const msg = t("production_year_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!isValidIdNumber(idTrim)) {
-      const msg =
-        "ID number must contain only digits and be 7–15 digits long.";
+      const msg = t("id_number_invalid");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!driverLicenseTrim) {
-      const msg = "Driver license image is required.";
+      const msg = t("driver_license_required");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!carLicenseTrim) {
-      const msg = "Car license image is required.";
+      const msg = t("car_license_required");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
     if (!carInsuranceTrim) {
-      const msg = "Car insurance image is required.";
+      const msg = t("car_insurance_required");
       setError(msg);
-      showModal("error", "Sign up error", msg);
+      showModal("error", t("sign_up_error"), msg);
       return;
     }
 
@@ -364,16 +362,16 @@ export default function DriverSignupForm({ onBack }: Props) {
 
       if (!res.ok) {
         if (res.status === 400 || res.status === 409) {
-          const msg = "Username or email already exists.";
+          const msg = t("username_email_exists");
           setError(msg);
-          showModal("error", "Sign up error", msg);
+          showModal("error", t("sign_up_error"), msg);
         } else if (typeof json?.detail === "string") {
           setError(json.detail);
-          showModal("error", "Sign up error", json.detail);
+          showModal("error", t("sign_up_error"), json.detail);
         } else {
-          const msg = "Signup failed. Please try again.";
+          const msg = t("signup_failed");
           setError(msg);
-          showModal("error", "Sign up error", msg);
+          showModal("error", t("sign_up_error"), msg);
         }
         return;
       }
@@ -381,21 +379,21 @@ export default function DriverSignupForm({ onBack }: Props) {
       setResult(json);
       showModal(
         "success",
-        "Application sent",
-        "Your driver application has been sent for approval."
+        t("application_sent"),
+        t("application_sent_success")
       );
     } catch (e: any) {
-      const msg = "Network error: " + e.message;
+      const msg = t("network_error") + e.message;
       setError(msg);
-      showModal("error", "Network error", msg);
+      showModal("error", t("network_error").trim(), msg);
     }
   };
 
   // ----- UI -----
   return (
     <View style={{ flex: 1 }}>
-      <Text style={styles.subtitle}>Driver sign up</Text>
-      <Text style={styles.stepText}>Step {step} of 2</Text>
+      <Text style={styles.subtitle}>{t("driver_signup")}</Text>
+      <Text style={styles.stepText}>{t("step_of")} {step} {t("of")} 2</Text>
 
       {step === 1 ? (
         <ScrollView>
@@ -404,49 +402,54 @@ export default function DriverSignupForm({ onBack }: Props) {
             style={styles.input}
             value={fullName}
             onChangeText={setFullName}
-            placeholder="Full name"
+            placeholder={t("full_name")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
           <TextInput
             style={styles.input}
             value={username}
             onChangeText={setUsername}
-            placeholder="Username"
+            placeholder={t("username")}
             placeholderTextColor="#9ab8bd"
             autoCapitalize="none"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
           <TextInput
             style={styles.input}
             value={email}
             onChangeText={setEmail}
-            placeholder="Email"
+            placeholder={t("email")}
             keyboardType="email-address"
             placeholderTextColor="#9ab8bd"
             autoCapitalize="none"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
           <TextInput
             style={styles.input}
             value={phone}
             onChangeText={setPhone}
-            placeholder="Phone"
+            placeholder={t("phone")}
             keyboardType="phone-pad"
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
           <TextInput
             style={styles.input}
             value={password}
             onChangeText={setPassword}
-            placeholder="Password"
+            placeholder={t("password")}
             secureTextEntry
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
           <TouchableOpacity style={styles.primaryButton} onPress={goToStep2}>
-            <Text style={styles.primaryButtonText}>Continue</Text>
+            <Text style={styles.primaryButtonText}>{t("continue")}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.secondaryButton} onPress={onBack}>
-            <Text style={styles.secondaryButtonText}>Back</Text>
+            <Text style={styles.secondaryButtonText}>{t("back")}</Text>
           </TouchableOpacity>
 
           {error && <Text style={styles.error}>{error}</Text>}
@@ -454,119 +457,128 @@ export default function DriverSignupForm({ onBack }: Props) {
       ) : (
         <ScrollView>
           {/* STEP 2: CAR + DRIVER INFO + FILES */}
-          <Text style={styles.sectionTitle}>Car info</Text>
+          <Text style={styles.sectionTitle}>{t("car_info")}</Text>
           <TextInput
             style={styles.input}
             value={carType}
             onChangeText={setCarType}
-            placeholder="Car type"
+            placeholder={t("car_type")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
           <TextInput
             style={styles.input}
             value={plateNumber}
             onChangeText={setPlateNumber}
-            placeholder="Plate number"
+            placeholder={t("plate_number")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
           <TextInput
             style={styles.input}
             value={productionYear}
             onChangeText={setProductionYear}
-            placeholder="Production year"
+            placeholder={t("production_year")}
             keyboardType="numeric"
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
-          <Text style={styles.sectionTitle}>Driver documents</Text>
+          <Text style={styles.sectionTitle}>{t("driver_documents")}</Text>
           <TextInput
             style={styles.input}
             value={idNumber}
             onChangeText={setIdNumber}
-            placeholder="ID number (long number)"
+            placeholder={t("id_number")}
             keyboardType="numeric"
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
           <TouchableOpacity
             style={styles.smallButton}
             onPress={uploadDriverLicense}
           >
-            <Text style={styles.smallButtonText}>Upload driver license</Text>
+            <Text style={styles.smallButtonText}>{t("upload_driver_license")}</Text>
           </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={driverLicenseUrl}
             onChangeText={setDriverLicenseUrl}
-            placeholder="Driver license image URL"
+            placeholder={t("driver_license_image_url")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
-          <Text style={styles.sectionTitle}>Car documents</Text>
+          <Text style={styles.sectionTitle}>{t("car_documents")}</Text>
 
           <TouchableOpacity
             style={styles.smallButton}
             onPress={uploadCarLicense}
           >
-            <Text style={styles.smallButtonText}>Upload car license</Text>
+            <Text style={styles.smallButtonText}>{t("upload_car_license")}</Text>
           </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={carLicenseUrl}
             onChangeText={setCarLicenseUrl}
-            placeholder="Car license image URL"
+            placeholder={t("car_license_image_url")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
           <TouchableOpacity
             style={styles.smallButton}
             onPress={uploadCarInsurance}
           >
-            <Text style={styles.smallButtonText}>Upload car insurance</Text>
+            <Text style={styles.smallButtonText}>{t("upload_car_insurance")}</Text>
           </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={carInsuranceUrl}
             onChangeText={setCarInsuranceUrl}
-            placeholder="Car insurance image URL"
+            placeholder={t("car_insurance_image_url")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
-          <Text style={styles.sectionTitle}>Car photos (optional)</Text>
+          <Text style={styles.sectionTitle}>{t("car_photos_optional")}</Text>
 
           <TouchableOpacity
             style={styles.smallButton}
             onPress={uploadCarPhoto1}
           >
-            <Text style={styles.smallButtonText}>Upload car photo 1</Text>
+            <Text style={styles.smallButtonText}>{t("upload_car_photo_1")}</Text>
           </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={carPhoto1Url}
             onChangeText={setCarPhoto1Url}
-            placeholder="Car photo 1 URL"
+            placeholder={t("car_photo_1_url")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
           <TouchableOpacity
             style={styles.smallButton}
             onPress={uploadCarPhoto2}
           >
-            <Text style={styles.smallButtonText}>Upload car photo 2</Text>
+            <Text style={styles.smallButtonText}>{t("upload_car_photo_2")}</Text>
           </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={carPhoto2Url}
             onChangeText={setCarPhoto2Url}
-            placeholder="Car photo 2 URL"
+            placeholder={t("car_photo_2_url")}
             placeholderTextColor="#9ab8bd"
+            textAlign={I18nManager.isRTL ? "right" : "left"}
           />
 
           <TouchableOpacity
             style={[styles.primaryButton, { marginTop: 16 }]}
             onPress={signupDriver}
           >
-            <Text style={styles.primaryButtonText}>Submit for approval</Text>
+            <Text style={styles.primaryButtonText}>{t("submit_for_approval")}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -574,13 +586,10 @@ export default function DriverSignupForm({ onBack }: Props) {
             onPress={() => setStep(1)}
           >
             <Text style={styles.secondaryButtonText}>
-              Back to previous step
+              {t("back_to_previous_step")}
             </Text>
           </TouchableOpacity>
 
-          {result && (
-            <Text style={styles.success}>{JSON.stringify(result)}</Text>
-          )}
           {error && <Text style={styles.error}>{error}</Text>}
         </ScrollView>
       )}
@@ -642,6 +651,7 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 16,
     fontWeight: "600",
+    textAlign: I18nManager.isRTL ? "right" : "left",
   },
   secondaryButton: {
     marginTop: 10,
@@ -656,6 +666,7 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     fontSize: 15,
     fontWeight: "600",
+    textAlign: I18nManager.isRTL ? "right" : "left",
   },
   smallButton: {
     alignSelf: "flex-start",
