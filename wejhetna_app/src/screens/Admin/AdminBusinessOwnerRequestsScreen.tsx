@@ -1,5 +1,7 @@
 // src/screens/Admin/AdminBusinessOwnerRequestsScreen.tsx
 import React, { useEffect, useState } from "react";
+import { BlurView } from "@react-native-community/blur";
+
 import {
   View,
   Text,
@@ -309,6 +311,7 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
         />
       )}
     </View>
+    
   );
 }
 
@@ -461,7 +464,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 16,
-    backdropFilter: "blur(10px)",
   },
   badgeOverlayText: {
     color: "#fff",
@@ -583,3 +585,10 @@ const styles = StyleSheet.create({
   },
 });
 
+<BlurView
+  style={styles.badgeOverlay}
+  blurType="dark"
+  blurAmount={10}
+>
+  <Text style={styles.badgeOverlayText}>Pending</Text>
+</BlurView>

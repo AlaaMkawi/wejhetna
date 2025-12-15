@@ -1,6 +1,6 @@
 // src/screens/Admin/AlreadyUsersScreen.tsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
   Alert,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { RootStackParamList } from "../../navigation/types";
+import { AdminTabParamList } from "../../navigation/types";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
@@ -27,12 +27,12 @@ export type UserListItem = {
   created_at: string;
 };
 
-type Props = NativeStackScreenProps<RootStackParamList, "AlreadyUsers">;
+type Props = NativeStackScreenProps<AdminTabParamList, "alreadyUsers">;
 
 type UserRoleFilter = "ALL" | "REGULAR" | "BUSINESS_OWNER" | "DRIVER";
 
-export default function AlreadyUsersScreen({ route, navigation }: Props) {
-  const { adminUserId, role } = route.params;
+export default function AlreadyUsersScreen({ route }: Props) {
+  const { adminUserId } = route.params;
 
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +42,7 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
   const [roleFilter, setRoleFilter] = useState<UserRoleFilter>("ALL");
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -88,11 +88,12 @@ export default function AlreadyUsersScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [roleFilter]);
 
   useEffect(() => {
     loadUsers();
-  }, [roleFilter]);
+  }, [loadUsers]);
+
 
   const getVisibleUsers = () => {
     return users.filter((user) =>

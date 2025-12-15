@@ -1,6 +1,6 @@
 // src/screens/Admin/ExistingUsersScreen.tsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -31,8 +31,8 @@ type Props = NativeStackScreenProps<RootStackParamList, "ExistingUsers">;
 
 type UserRoleFilter = "ALL" | "REGULAR" | "BUSINESS_OWNER" | "DRIVER";
 
-export default function ExistingUsersScreen({ route, navigation }: Props) {
-  const { adminUserId, role } = route.params;
+export default function ExistingUsersScreen({ route}: Props) {
+  const { adminUserId} = route.params;
 
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +42,7 @@ export default function ExistingUsersScreen({ route, navigation }: Props) {
   const [roleFilter, setRoleFilter] = useState<UserRoleFilter>("ALL");
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
 
-  const loadUsers = async () => {
+const loadUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -92,11 +92,12 @@ export default function ExistingUsersScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  };
-
+  }, [roleFilter]);
+  
   useEffect(() => {
     loadUsers();
-  }, [roleFilter]);
+  }, [loadUsers]);
+
 
   const getVisibleUsers = () => {
     return users.filter((user) =>
