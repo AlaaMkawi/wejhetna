@@ -8,7 +8,26 @@
   "new_user_question_": " משתמש חדש?",
   "sign_up": "הרשמה",
   "contact_us": "צור קשר",
-  "invalid_credentials": "פרטי ההתחברות שגויים."
-
-
+  "invalid_credentials": "פרטי ההתחברות שגויים.",
+  "create_your_account": "צור את החשבון שלך",
+  "sign_up_title": "הרשמה",
+  "choose_how_to_use": "בחר איך אתה רוצה להשתמש בוג'הטנא", 
+  "regular_user": "משתמש רגיל",
+  "driver": "נהג",
+  "business_owner": "בעל עסק",
+  "regular_user_signup": "הרשמת משתמש רגיל",
+  "driver_signup": "הרשמת נהג",
+  "back": "חזור",
+  "admin_not_active": "חשבון המנהל לא פעיל.",
+  "account_not_active": "החשבון שלך עדיין לא פעיל.",
+  "network_error": "שגיאת רשת: ",
+  "full_name": "שם מלא",
+  "username": "שם משתמש",
+  "email": "אימייל",
+  "phone": "מספר טלפון",
+  "sign_up_error": "שגיאת הרשמה",
+  "username_email_exists": "שם המשתמש או האימייל כבר קיימים.",
+  "signup_failed": "ההרשמה נכשלה. אנא נסה שוב.",
+  "account_created": "חשבון נוצר",
+  "account_created_success": "החשבון שלך נוצר בהצלחה."
 }

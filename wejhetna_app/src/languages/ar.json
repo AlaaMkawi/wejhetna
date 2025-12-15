@@ -8,7 +8,26 @@
   "new_user_question_": " مستخدم جديد؟",
   "sign_up": "تسجيل",
   "contact_us": "اتصل بنا",
-  "invalid_credentials": "بيانات الدخول غير صحيحة."
-
-
+  "invalid_credentials": "بيانات الدخول غير صحيحة.",
+  "create_your_account": "أنشئ حسابك",
+  "sign_up_title": "التسجيل",
+  "choose_how_to_use": "اختر كيف تريد استخدام وجهتنا", 
+  "regular_user": "مستخدم عادي",
+  "driver": "سائق",
+  "business_owner": "صاحب عمل",
+  "regular_user_signup": "تسجيل مستخدم عادي",
+  "driver_signup": "تسجيل سائق",
+  "back": "رجوع",
+  "admin_not_active": "حساب المدير غير نشط.",
+  "account_not_active": "حسابك غير نشط بعد.",
+  "network_error": "خطأ في الشبكة: ",
+  "full_name": "الاسم الكامل",
+  "username": "اسم المستخدم",
+  "email": "البريد الإلكتروني",
+  "phone": "رقم الهاتف",
+  "sign_up_error": "خطأ في التسجيل",
+  "username_email_exists": "اسم المستخدم أو البريد الإلكتروني موجود بالفعل.",
+  "signup_failed": "فشل التسجيل. يرجى المحاولة مرة أخرى.",
+  "account_created": "تم إنشاء الحساب",
+  "account_created_success": "تم إنشاء حسابك بنجاح."
 }

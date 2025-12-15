@@ -81,7 +81,7 @@ export default function LoginScreen({ navigation }: Props) {
 
       if (role === "ADMIN") {
         if (status !== "ACTIVE") {
-          setError("Admin account is not active.");
+          setError(t("admin_not_active"));
           return;
         }
         navigation.reset({
@@ -95,7 +95,7 @@ export default function LoginScreen({ navigation }: Props) {
         });
       } else {
         if (status !== "ACTIVE") {
-          setError("Your account is not active yet.");
+          setError(t("account_not_active"));
           return;
         }
         navigation.reset({
@@ -104,7 +104,7 @@ export default function LoginScreen({ navigation }: Props) {
         });
       }
     } catch (e: any) {
-      setError("Network error: " + e.message);
+      setError(t("network_error") + e.message);
     } finally {
       setLoading(false);
     }
