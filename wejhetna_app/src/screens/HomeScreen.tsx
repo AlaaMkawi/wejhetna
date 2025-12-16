@@ -19,7 +19,13 @@ type Props = {
 };
 
 const { width, height } = Dimensions.get("window");
-const DARK_TEAL = "#0f5b63"; 
+const DARK_TEAL = "#0f5b63";
+const SOFT_TEAL = "#3a8d96";
+// Watercolor palette - soft, transparent colors (less blue, more green/mint)
+const WATERCOLOR_MINT = "rgba(155, 211, 216, 0.5)"; // Soft mint green
+const WATERCOLOR_SAGE = "rgba(140, 180, 170, 0.45)"; // Sage green
+const WATERCOLOR_AQUA = "rgba(120, 200, 190, 0.4)"; // Aqua green
+const WATERCOLOR_PALE = "rgba(180, 220, 210, 0.35)"; // Pale green 
 
 export default function HomeScreen({ navigation }: Props) {
   const { t } = useTranslation();
@@ -55,11 +61,19 @@ export default function HomeScreen({ navigation }: Props) {
         {/* 4. Floating Buttons (Bottom) */}
         <View style={styles.buttonsContainer}>
           
-          {/* Login - Glowing Pill */}
+          {/* Login - Watercolor Button */}
           <TouchableOpacity
             style={styles.primaryButton}
             onPress={() => navigation.navigate("Login")}
+            activeOpacity={0.85}
           >
+            {/* Watercolor layers for depth */}
+            <View style={styles.watercolorBase}>
+              <View style={styles.watercolorBaseLayer} />
+              <View style={styles.watercolorLayer1} />
+              <View style={styles.watercolorLayer2} />
+              <View style={styles.watercolorLayer3} />
+            </View>
             <Text style={styles.primaryButtonText}>{t("login")}</Text>
           </TouchableOpacity>
 
@@ -129,36 +143,96 @@ const styles = StyleSheet.create({
   
  
   primaryButton: {
-    backgroundColor: DARK_TEAL,
     paddingVertical: 18,
-    borderRadius: 50, 
+    borderRadius: 30, 
     alignItems: "center",
+    justifyContent: "center",
     width: "100%",
-    
-    shadowColor: DARK_TEAL,
+    overflow: "hidden",
+    borderWidth: 1.5,
+    borderColor: "rgba(155, 211, 216, 0.5)",
+    shadowColor: "rgba(140, 180, 170, 0.4)",
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.3,
     shadowRadius: 15,
-    elevation: 10,
+    elevation: 8,
+    position: "relative",
+  },
+  watercolorBase: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 30,
+    overflow: "hidden",
+  },
+  watercolorBaseLayer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    borderRadius: 30,
+    backgroundColor: WATERCOLOR_MINT,
+  },
+  watercolorLayer1: {
+    position: "absolute",
+    top: 0,
+    left: "30%",
+    width: "70%",
+    height: "100%",
+    borderRadius: 30,
+    backgroundColor: WATERCOLOR_SAGE,
+  },
+  watercolorLayer2: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: "60%",
+    height: "100%",
+    borderRadius: 30,
+    backgroundColor: WATERCOLOR_AQUA,
+  },
+  watercolorLayer3: {
+    position: "absolute",
+    top: 0,
+    left: "50%",
+    width: "50%",
+    height: "100%",
+    borderRadius: 30,
+    backgroundColor: WATERCOLOR_PALE,
   },
   primaryButtonText: {
-    color: "#fff",
+    color: DARK_TEAL,
     fontSize: 18,
     fontWeight: "700",
+    letterSpacing: 0.5,
+    textShadowColor: "rgba(255, 255, 255, 0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+    zIndex: 10,
   },
 
   secondaryButton: {
     paddingVertical: 18,
-    borderRadius: 50, 
+    borderRadius: 30, 
     borderWidth: 2,   
-    borderColor: DARK_TEAL,
+    borderColor: "rgba(255, 255, 255, 0.6)",
     alignItems: "center",
-    backgroundColor: "transparent", 
+    backgroundColor: "rgba(255, 255, 255, 0.35)", 
     width: "100%",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
   },
   secondaryButtonText: {
     color: DARK_TEAL,
     fontSize: 18,
     fontWeight: "700",
+    letterSpacing: I18nManager.isRTL ? 0 : 0.5,
+    textDecorationLine: "none",
+    textShadowColor: "transparent",
+    includeFontPadding: false,
+   lineHeight: 24,
+
   },
 });

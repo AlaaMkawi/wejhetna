@@ -1,10 +1,13 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigation } from "@react-navigation/native";
 import {
   View,
   Text,
   TextInput,
   StyleSheet,
   TouchableOpacity,
+  I18nManager,
 } from "react-native";
 import MessageModal from "./MessageModal";
 
@@ -16,11 +19,13 @@ type Props = {
 };
 
 export default function RegularSignupForm({ onBack }: Props) {
-  const [fullName, setFullName] = useState("Regular Test");
-  const [username, setUsername] = useState("regular_android");
-  const [email, setEmail] = useState("regular.android@example.com");
-  const [phone, setPhone] = useState("0501234567");
-  const [password, setPassword] = useState("test1234");
+  const { t } = useTranslation();
+  const navigation = useNavigation<any>();
+  const [fullName, setFullName] = useState("");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
 
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,45 +67,43 @@ export default function RegularSignupForm({ onBack }: Props) {
 
       if (!res.ok) {
         if (res.status === 400 || res.status === 409) {
-          const msg = "Username or email already exists.";
+          const msg = t("username_email_exists");
           setError(msg);
-          showModal("error", "Sign up error", msg);
+          showModal("error", t("sign_up_error"), msg);
         } else if (typeof json?.detail === "string") {
           setError(json.detail);
-          showModal("error", "Sign up error", json.detail);
+          showModal("error", t("sign_up_error"), json.detail);
         } else {
-          const msg = "Signup failed. Please try again.";
+          const msg = t("signup_failed");
           setError(msg);
-          showModal("error", "Sign up error", msg);
+          showModal("error", t("sign_up_error"), msg);
         }
         return;
       }
 
       setResult(json);
-      showModal("success", "Account created", "Your account was created successfully.");
+      showModal("success", t("account_created"), t("account_created_success"));
     } catch (e: any) {
-      const msg = "Network error: " + e.message;
+      const msg = t("network_error") + e.message;
       setError(msg);
-      showModal("error", "Network error", msg);
+      showModal("error", t("network_error").trim(), msg);
     }
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.subtitle}>Regular user sign up</Text>
-
       <TextInput
         style={styles.input}
         value={fullName}
         onChangeText={setFullName}
-        placeholder="Full name"
+        placeholder={t("full_name")}
         placeholderTextColor="#9ab8bd"
       />
       <TextInput
         style={styles.input}
         value={username}
         onChangeText={setUsername}
-        placeholder="Username"
+        placeholder={t("username")}
         placeholderTextColor="#9ab8bd"
         autoCapitalize="none"
       />
@@ -108,7 +111,7 @@ export default function RegularSignupForm({ onBack }: Props) {
         style={styles.input}
         value={email}
         onChangeText={setEmail}
-        placeholder="Email"
+        placeholder={t("email")}
         placeholderTextColor="#9ab8bd"
         autoCapitalize="none"
         keyboardType="email-address"
@@ -117,7 +120,7 @@ export default function RegularSignupForm({ onBack }: Props) {
         style={styles.input}
         value={phone}
         onChangeText={setPhone}
-        placeholder="Phone"
+        placeholder={t("phone")}
         placeholderTextColor="#9ab8bd"
         keyboardType="phone-pad"
       />
@@ -125,22 +128,19 @@ export default function RegularSignupForm({ onBack }: Props) {
         style={styles.input}
         value={password}
         onChangeText={setPassword}
-        placeholder="Password"
+        placeholder={t("password")}
         placeholderTextColor="#9ab8bd"
         secureTextEntry
       />
 
       <TouchableOpacity style={styles.primaryButton} onPress={signupRegular}>
-        <Text style={styles.primaryButtonText}>Sign up</Text>
+        <Text style={styles.primaryButtonText}>{t("sign_up")}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.secondaryButton} onPress={onBack}>
-        <Text style={styles.secondaryButtonText}>Back</Text>
+        <Text style={styles.secondaryButtonText}>{t("back")}</Text>
       </TouchableOpacity>
 
-      {result && (
-        <Text style={styles.success}>{JSON.stringify(result)}</Text>
-      )}
       {error && <Text style={styles.error}>{error}</Text>}
 
       {/* pretty popup */}
@@ -149,7 +149,19 @@ export default function RegularSignupForm({ onBack }: Props) {
         type={modalType}
         title={modalTitle}
         message={modalMessage}
-        onClose={() => setModalVisible(false)}
+        onClose={() => {
+          setModalVisible(false);
+          // Navigate to LoginScreen only after user closes success modal
+          if (modalType === "success") {
+            navigation.reset({
+              index: 1,
+              routes: [
+                { name: "Home" },
+                { name: "Login" },
+              ],
+            });
+          }
+        }}
       />
     </View>
   );
@@ -176,6 +188,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     fontSize: 14,
     color: "#234348",
+    textAlign: I18nManager.isRTL ? "right" : "left",
   },
   primaryButton: {
     marginTop: 4,
@@ -189,6 +202,7 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 16,
     fontWeight: "600",
+    textAlign: I18nManager.isRTL ? "right" : "left",
   },
   secondaryButton: {
     marginTop: 10,
@@ -203,6 +217,7 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     fontSize: 15,
     fontWeight: "600",
+    textAlign: I18nManager.isRTL ? "right" : "left",
   },
   success: {
     marginTop: 10,
