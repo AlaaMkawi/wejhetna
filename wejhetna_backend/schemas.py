@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field,  EmailStr
 
 from models import PlaceType  # נשתמש ב-ENUM שהגדרת במודלים
 
@@ -188,3 +188,25 @@ class AdminPlaceCreate(BaseModel):
         None,
         description="OSM feature id like 'node:123456789'",
     )
+
+
+# =========================
+# EMAIL VERIFICATION SCHEMAS
+# =========================
+
+class SendVerificationCodeRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class VerifyEmailResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class ResendCodeRequest(BaseModel):
+    email: EmailStr
