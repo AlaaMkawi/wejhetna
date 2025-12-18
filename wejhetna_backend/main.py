@@ -7,7 +7,7 @@ from schemas import LocationCreate, LocationResponse
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import File, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -35,6 +35,7 @@ from models import (
     PlaceType,
     BusinessOwnerPlaceRequest,
     OwnerPlaceRequestStatus,
+    EmailVerification,
 )
 from schemas import (
     CityCreate,
@@ -46,6 +47,10 @@ from schemas import (
     PlaceCreate,
     PlaceResponse,
     AdminPlaceCreate,
+    SendVerificationCodeRequest,
+    VerifyEmailRequest,
+    VerifyEmailResponse,
+    ResendCodeRequest,
 )
 import requests
 
@@ -85,8 +90,10 @@ app = FastAPI(
     version="0.1.0"
 )
 Base.metadata.create_all(bind=engine)
-EMAIL_USER = "wejhetna@gmail.com"   # <– put the sender email here
-EMAIL_PASS = "cdoj zsjt xpqf uelp"   # <– app password from Gmail
+EMAIL_USER = "wejhetna@gmail.com"
+EMAIL_PASS = "cdoj zsjt xpqf uelp"
+
+
 def send_email(to_email: str, subject: str, body: str):
     """
     Send a simple email using Gmail SMTP.
@@ -136,39 +143,6 @@ def get_db():
     finally:
         db.close()
 
-def send_email(to_email: str, subject: str, body: str):
-    """
-    Send a simple email using Gmail SMTP.
-    Uses EMAIL_USER and EMAIL_PASS defined above.
-    """
-    if not EMAIL_USER or not EMAIL_PASS:
-        print("Email config missing, skipping real send.")
-        print("=== EMAIL (FAKE) ===")
-        print("To:", to_email)
-        print("Subject:", subject)
-        print("Body:", body)
-        print("=============")
-        return
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_USER, EMAIL_PASS)
-            smtp.send_message(msg)
-        print("Email sent to", to_email)
-    except Exception as e:
-        print("Error sending email:", e)
-        # still print for debugging
-        print("=== EMAIL (FAILED TO SEND) ===")
-        print("To:", to_email)
-        print("Subject:", subject)
-        print("Body:", body)
-        print("=============")
 
 
 # ----- File uploads (local for now) -----
@@ -180,10 +154,79 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 # Password hashing
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
+# Import random for verification codes
+import random
+
 
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
+
+
+# =========================
+# EMAIL VERIFICATION HELPER FUNCTIONS
+# =========================
+
+def generate_verification_code() -> str:
+    """Generate a random 6-digit verification code."""
+    return str(random.randint(100000, 999999))
+
+
+def send_verification_email(to_email: str, code: str, full_name: str = ""):
+    """Send verification code email to user."""
+    subject = "Wejhetna - Email Verification Code"
+    body = f"""Hello {full_name if full_name else 'there'},
+
+Thank you for signing up with Wejhetna!
+
+Your email verification code is: {code}
+
+This code will expire in 15 minutes.
+
+If you didn't sign up for Wejhetna, please ignore this email.
+
+Best regards,
+Wejhetna Team"""
+    
+    send_email(to_email, subject, body)
+
+
+def create_verification_code(user_id: int, email: str, db: Session) -> EmailVerification:
+    """Create a new verification code for a user."""
+    # Invalidate any existing unused codes for this user
+    db.query(EmailVerification).filter(
+        EmailVerification.user_id == user_id,
+        EmailVerification.is_used == False
+    ).update({"is_used": True})
+    
+    # Generate new code
+    code = generate_verification_code()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    
+    verification = EmailVerification(
+        user_id=user_id,
+        email=email,
+        code=code,
+        expires_at=expires_at,
+        is_used=False
+    )
+    
+    db.add(verification)
+    db.commit()
+    db.refresh(verification)
+    
+    return verification
+
+
+# =========================
+# EMAIL VERIFICATION HELPER FUNCTIONS
+# =========================
+
+
+
+
+
+
 
 class RegularUserSignup(BaseModel):
     full_name: str
@@ -370,41 +413,7 @@ class DriverApplicationOut(BaseModel):
         orm_mode = True
 from typing import List  # make sure this import exists at the top
 
-@app.get("/admin/drivers/pending", response_model=List[DriverApplicationOut])
-def list_pending_drivers(db: Session = Depends(get_db)):
-    # all drivers whose driver_status is PENDING
-    rows = (
-        db.query(User, DriverProfile, DriverVehicle)
-        .join(DriverProfile, DriverProfile.user_id == User.id)
-        .join(DriverVehicle, DriverVehicle.driver_profile_id == DriverProfile.id)
-        .filter(DriverProfile.driver_status == DriverStatus.PENDING)
-        .all()
-    )
 
-    result: List[DriverApplicationOut] = []
-    for user, profile, vehicle in rows:
-        result.append(
-            DriverApplicationOut(
-                user_id=user.id,
-                driver_profile_id=profile.id,
-                vehicle_id=vehicle.id,
-                full_name=user.full_name,
-                email=user.email,
-                phone=user.phone,
-                driver_status=profile.driver_status.value,
-                vehicle_status=vehicle.status.value,
-                driver_license_image_url=profile.driver_license_image_url,
-                id_card_image_url=profile.id_card_image_url,
-                car_type=vehicle.car_type,
-                plate_number=vehicle.plate_number,
-                production_year=vehicle.production_year,
-                car_license_image_url=vehicle.car_license_image_url,
-                car_insurance_image_url=vehicle.car_insurance_image_url,
-                car_photos_urls=vehicle.car_photos_urls,
-            )
-        )
-    return result
-# 👇👇 ADD THIS WHOLE BLOCK HERE 👇👇
 
 class BusinessOwnerPlaceRequestOut(BaseModel):
     id: int
@@ -470,151 +479,7 @@ def list_business_owner_requests(
     return q.all()
 
 
-@app.post("/admin/business-owner/requests/{request_id}/approve")
-def approve_business_owner_request(
-    request_id: int,
-    data: BusinessOwnerRequestReview,
-    db: Session = Depends(get_db),
-):
-    admin = (
-        db.query(User)
-        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
-        .first()
-    )
-    if not admin:
-        raise HTTPException(status_code=403, detail="Only admin can approve")
 
-    req = (
-        db.query(BusinessOwnerPlaceRequest)
-        .filter(BusinessOwnerPlaceRequest.id == request_id)
-        .first()
-    )
-    if not req:
-        raise HTTPException(status_code=404, detail="Request not found")
-
-    if req.status != OwnerPlaceRequestStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Request is not pending")
-
-    user = db.query(User).filter(User.id == req.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Business owner user not found")
-
-    # CASE 1: claim existing place
-    if req.existing_place_id is not None:
-        place = db.query(Place).filter(Place.id == req.existing_place_id).first()
-        if not place:
-            raise HTTPException(status_code=404, detail="Place not found")
-
-        place.name = req.name
-        place.name_ar = req.name_ar
-        place.name_he = req.name_he
-        place.city_id = req.city_id
-        place.category_id = req.category_id
-        place.description = req.description
-        place.phone = req.phone
-        place.opening_hours = req.opening_hours
-        place.main_image_url = req.main_image_url
-        place.social_links = req.social_links
-        place.owner_user_id = user.id
-        place.can_be_claimed = False
-
-    # CASE 2: new place
-    else:
-        location = Location(
-            geom=func.ST_SetSRID(func.ST_MakePoint(req.lon, req.lat), 4326),
-            source=req.source,
-            osm_id=req.osm_id,
-        )
-        db.add(location)
-        db.flush()
-
-        place = Place(
-            location_id=location.id,
-            city_id=req.city_id,
-            category_id=req.category_id,
-            place_type=PlaceType.BUSINESS,
-            name=req.name,
-            name_ar=req.name_ar,
-            name_he=req.name_he,
-            can_be_claimed=False,
-            description=req.description,
-            phone=req.phone,
-            opening_hours=req.opening_hours,
-            main_image_url=req.main_image_url,
-            social_links=req.social_links,
-            owner_user_id=user.id,
-            created_by_admin_id=admin.id,
-        )
-        db.add(place)
-
-    req.status = OwnerPlaceRequestStatus.APPROVED
-    req.reviewed_at = datetime.now(timezone.utc)
-    req.reviewed_by_admin_id = admin.id
-    req.rejection_reason = None
-
-    user.status = UserStatus.ACTIVE
-    user.rejection_reason = None
-
-    db.commit()
-
-    send_email(
-        to_email=user.email,
-        subject="Wejhetna – Business owner request approved",
-        body="Your business owner request has been approved. You can now log in and manage your business place.",
-    )
-
-    return {"detail": "Business owner request approved"}
-
-
-@app.post("/admin/business-owner/requests/{request_id}/reject")
-def reject_business_owner_request(
-    request_id: int,
-    data: BusinessOwnerRequestReview,
-    db: Session = Depends(get_db),
-):
-    admin = (
-        db.query(User)
-        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
-        .first()
-    )
-    if not admin:
-        raise HTTPException(status_code=403, detail="Only admin can reject")
-
-    req = (
-        db.query(BusinessOwnerPlaceRequest)
-        .filter(BusinessOwnerPlaceRequest.id == request_id)
-        .first()
-    )
-    if not req:
-        raise HTTPException(status_code=404, detail="Request not found")
-
-    if req.status != OwnerPlaceRequestStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Request is not pending")
-
-    user = db.query(User).filter(User.id == req.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Business owner user not found")
-
-    reason = data.reason or "Your business owner request was not approved."
-
-    req.status = OwnerPlaceRequestStatus.REJECTED
-    req.reviewed_at = datetime.now(timezone.utc)
-    req.reviewed_by_admin_id = admin.id
-    req.rejection_reason = reason
-
-    user.status = UserStatus.REJECTED
-    user.rejection_reason = reason
-
-    db.commit()
-
-    send_email(
-        to_email=user.email,
-        subject="Wejhetna – Business owner request rejected",
-        body=f"Your business owner request was rejected.\n\nReason: {reason}\n\nYou can try to sign up again with the same email and username if you wish to submit a new request.",
-    )
-
-    return {"detail": "Business owner request rejected"}
-# 👆👆 UNTIL HERE 👆👆
 @app.post("/admin/business-owner/requests/{request_id}/approve")
 def approve_business_owner_request(
     request_id: int,
@@ -765,102 +630,7 @@ def reject_business_owner_request(
     return {"detail": "Business owner request rejected"}
 
 # -
-@app.post("/admin/drivers/{driver_profile_id}/approve")
-def approve_driver(
-    driver_profile_id: int,
-    data: DriverReviewRequest,
-    db: Session = Depends(get_db),
-):
-    # check admin exists and is ADMIN
-    admin = (
-        db.query(User)
-        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
-        .first()
-    )
-    if not admin:
-        raise HTTPException(status_code=403, detail="Only admin can approve")
 
-    profile = db.query(DriverProfile).filter(DriverProfile.id == driver_profile_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Driver profile not found")
-
-    user = profile.user
-    vehicle = (
-        db.query(DriverVehicle)
-        .filter(DriverVehicle.driver_profile_id == profile.id)
-        .first()
-    )
-
-    # update statuses
-    user.status = UserStatus.ACTIVE
-    profile.driver_status = DriverStatus.APPROVED
-    profile.driver_status_updated_at = datetime.now(timezone.utc)
-
-    if vehicle:
-        vehicle.status = VehicleStatus.APPROVED
-        vehicle.reviewed_at = datetime.now(timezone.utc)
-        vehicle.reviewed_by_admin_id = admin.id
-        vehicle.rejection_reason = None
-
-    db.commit()
-
-    # send email
-    send_email(
-        to_email=user.email,
-        subject="Wejhetna – Driver application approved",
-        body="Your driver account has been approved. You can now use the app as a driver.",
-    )
-
-    return {"detail": "Driver approved"}
-@app.post("/admin/drivers/{driver_profile_id}/reject")
-def reject_driver(
-    driver_profile_id: int,
-    data: DriverReviewRequest,
-    db: Session = Depends(get_db),
-):
-    admin = (
-        db.query(User)
-        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
-        .first()
-    )
-    if not admin:
-        raise HTTPException(status_code=403, detail="Only admin can reject")
-
-    profile = db.query(DriverProfile).filter(DriverProfile.id == driver_profile_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Driver profile not found")
-
-    user = profile.user
-    vehicle = (
-        db.query(DriverVehicle)
-        .filter(DriverVehicle.driver_profile_id == profile.id)
-        .first()
-    )
-
-    # if no reason → use a default
-    reason = data.reason or "Your documents were not approved."
-    user.rejection_reason = reason
-
-    user.status = UserStatus.REJECTED
-    profile.driver_status = DriverStatus.REJECTED
-    profile.driver_status_updated_at = datetime.now(timezone.utc)
-
-    if vehicle:
-        vehicle.status = VehicleStatus.REJECTED
-        vehicle.reviewed_at = datetime.now(timezone.utc)
-        vehicle.reviewed_by_admin_id = admin.id
-        vehicle.rejection_reason = reason
-
-    db.commit()
-
-    # send email with reason
-    send_email(
-        to_email=user.email,
-        subject="Wejhetna – Driver application rejected",
-        body=f"Your driver application was rejected. Reason: {reason}",
-    )
-
-    return {"detail": "Driver rejected"}
 
 
 # ---------- Regular user signup endpoint ----------
@@ -880,6 +650,12 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
 
     # Hash password
     password_hash = hash_password(data.password)
+    verified = db.query(EmailVerification).filter(
+        EmailVerification.email == data.email,
+        EmailVerification.is_used == True
+    ).first()
+    if not verified:
+        raise HTTPException(403,"Email not verified")
 
     # Create user
     user = User(
@@ -890,11 +666,14 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
         password_hash=password_hash,
         role=UserRole.REGULAR,
         status=UserStatus.ACTIVE,
+        email_verified=True
+
     )
 
     db.add(user)
     db.commit()
     db.refresh(user)
+
 
     return user
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -1017,6 +796,9 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         password_hash=password_hash,
         role=UserRole.DRIVER,
         status=UserStatus.PENDING,
+        email_verified=True
+
+
     )
     db.add(user)
     db.flush()  # get user.id
@@ -1054,7 +836,10 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
     db.refresh(driver_profile)
     db.refresh(vehicle)
 
-    # 8. Return response
+    # 8. Send verification code
+
+
+    # 9. Return response
     return DriverSignupOut(
         user=UserOut.model_validate(user, from_attributes=True),
         driver_profile_id=driver_profile.id,
@@ -1063,7 +848,6 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         vehicle_status=vehicle.status.value,
         message="Your request has been sent and is waiting for admin approval.",
     )
-    # 👇👇 ADD THIS BLOCK HERE 👇👇
 @app.post("/auth/signup/business-owner", response_model=BusinessOwnerSignupOut)
 def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_db)):
     """
@@ -1087,9 +871,14 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
             existing_user.password_hash = hash_password(data.password)
             existing_user.status = UserStatus.PENDING
             existing_user.rejection_reason = None  # Clear old rejection reason
+            existing_user.email_verified = False
 
             db.commit()
             db.refresh(existing_user)
+
+            # Send verification code
+            verification = create_verification_code(existing_user.id, existing_user.email, db)
+            send_verification_email(existing_user.email, verification.code, existing_user.full_name)
 
             return BusinessOwnerSignupOut(
                 user=UserOut.model_validate(existing_user, from_attributes=True),
@@ -1109,18 +898,90 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
         password_hash=hash_password(data.password),
         role=UserRole.BUSINESS_OWNER,
         status=UserStatus.PENDING,
+        email_verified=True
+
     )
 
     db.add(user)
     db.commit()
     db.refresh(user)
 
+
+
     return BusinessOwnerSignupOut(
         user=UserOut.model_validate(user, from_attributes=True),
         message="Your business owner signup request has been created. Please choose your business location next.",
     )
-# 👆👆 UNTIL HERE 👆👆
 
+
+# =========================
+# EMAIL VERIFICATION ENDPOINTS
+# =========================
+
+@app.post("/auth/verify-email", response_model=VerifyEmailResponse)
+def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
+    """Verify user's email with the code they received."""
+    # Find user by email
+    verification = db.query(EmailVerification).filter(
+        EmailVerification.email == data.email,
+        EmailVerification.code == data.code,
+        EmailVerification.is_used == False
+    ).first()
+
+
+
+    # Find the most recent unused verification code for this user
+    verification = (
+        db.query(EmailVerification)
+        .filter(
+            EmailVerification.email == data.email,
+            EmailVerification.code == data.code.strip(),
+            EmailVerification.is_used == False
+        )
+        .order_by(EmailVerification.created_at.desc())
+        .first()
+    )
+    
+    if not verification:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+    
+    # Check if code is expired
+    if verification.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+    
+    # Mark code as used and verify user's email
+    verification.is_used = True
+
+    user = db.query(User).filter(User.email == verification.email).first()
+    if user:
+        user.email_verified = True
+
+    db.commit()
+
+    db.commit()
+    
+    return VerifyEmailResponse(
+        success=True,
+        message="Email verified successfully"
+    )
+
+
+@app.post("/auth/resend-verification-code")
+def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_db)):
+    """Resend verification code to user's email."""
+    # Find user by email
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if already verified
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="Email is already verified")
+    
+    # Create and send new verification code
+
+    
+    return {"success": True, "message": "Verification code has been resent"}
 
 
 @app.post("/auth/login", response_model=LoginResponse)
@@ -1138,6 +999,11 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Please verify your email before logging in"
+        )
 
     return LoginResponse(
         id=user.id,
@@ -1145,6 +1011,32 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         role=user.role.value,
         status=user.status.value,
     )
+@app.post("/auth/request-email-verification")
+def request_email_verification(data: SendVerificationCodeRequest, db: Session = Depends(get_db)):
+    # check email not already used by verified user
+    existing = db.query(User).filter(
+        User.email == data.email,
+        User.email_verified == True
+    ).first()
+    if existing:
+        raise HTTPException(400, "Email already registered")
+
+    code = generate_verification_code()
+
+    verification = EmailVerification(
+        user_id=None,
+        email=data.email,
+        code=code,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+        is_used=False
+    )
+
+    db.add(verification)
+    db.commit()
+
+    send_verification_email(data.email, code)
+
+    return {"success": True}
 
 # --- Health check ---
 @app.get("/")
@@ -1178,7 +1070,7 @@ async def upload_file(file: UploadFile = File(...)):
     # URL that the app can store in DB / display
     file_url = f"http://10.0.2.2:8000/uploads/{new_name}"  # for Android emulator
     return {"file_url": file_url}
-from datetime import datetime, timezone  # make sure this import exists
+from datetime import datetime, timezone, timedelta  # make sure this import exists
 
 @app.post("/admin/drivers/{driver_profile_id}/approve")
 def approve_driver(
@@ -1479,28 +1371,7 @@ def get_location(location_id: int, db: Session = Depends(get_db)):
 from sqlalchemy import func, or_, cast   # cast חדש
 from geoalchemy2 import Geography        # כדי לקסט ל-Geography
 
-@app.get("/places/map", response_model=List[PlaceResponse])
-def get_places_in_bbox(
-    north: float,
-    south: float,
-    east: float,
-    west: float,
-    db: Session = Depends(get_db),
-):
-    # envelope כ-geometry
-    envelope_geom = func.ST_MakeEnvelope(west, south, east, north, 4326)
 
-    # הקסטה ל-Geography (פוליגון גאוגרפי)
-    envelope_geog = cast(envelope_geom, Geography(geometry_type="POLYGON", srid=4326))
-
-    places = (
-        db.query(Place)
-        .join(Location, Place.location_id == Location.id)
-        .filter(func.ST_Intersects(Location.geom, envelope_geog))
-        .all()
-    )
-
-    return places
 from sqlalchemy import func, or_, cast   # cast חדש
 from geoalchemy2 import Geography        # כדי לקסט ל-Geography
 
