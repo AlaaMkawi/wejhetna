@@ -234,8 +234,7 @@ class RegularUserSignup(BaseModel):
     email: EmailStr
     phone: str
     password: str
-
-
+    password_confirmation: str
 class UserOut(BaseModel):
     id: int
     full_name: str
@@ -637,17 +636,96 @@ def reject_business_owner_request(
 
 @app.post("/auth/signup/regular", response_model=UserOut)
 def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
+    if data.password != data.password_confirmation:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords do not match",
+        )
+    import re
+    if not re.match(r'^[a-zA-Z\u0590-\u05FF\u0600-\u06FF\s]+$', data.full_name.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Full name should contain only letters"
+        )
+
+    # Validate username - at least 3 characters, alphanumeric and underscore
+    if len(data.username.strip()) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be at least 3 characters"
+        )
+    if not re.match(r'^[a-zA-Z0-9_]+$', data.username.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Username can only contain letters, numbers, and underscore"
+        )
+
+    # Validate phone - exactly 10 digits starting with 05
+    if not re.match(r'^05\d{8}$', data.phone.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone must be 10 digits starting with 05"
+        )
+
+    # Validate password - at least 8 chars, uppercase, lowercase, number, symbol
+    if len(data.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters"
+        )
+    if not re.search(r'[A-Z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one uppercase letter"
+        )
+    if not re.search(r'[a-z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one lowercase letter"
+        )
+    if not re.search(r'[0-9]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one number"
+        )
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one symbol"
+        )
+
     # Check username or email already exists
+    # Check username, email, or phone already exists
     existing_user = db.query(User).filter(
-        or_(User.username == data.username, User.email == data.email)
+        or_(
+            User.username == data.username,
+            User.email == data.email,
+            User.phone == data.phone.strip()
+        )
     ).first()
 
     if existing_user:
-        raise HTTPException(
-            status_code=400,
-            detail="Username or email already exists",
-        )
-
+        # Check which field caused the conflict
+        if existing_user.username == data.username:
+            raise HTTPException(
+                status_code=400,
+                detail="Username already exists",
+            )
+        elif existing_user.email == data.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email already exists",
+            )
+        elif existing_user.phone == data.phone.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number already exists",
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="User already exists",
+            )
     # Hash password
     password_hash = hash_password(data.password)
     verified = db.query(EmailVerification).filter(
