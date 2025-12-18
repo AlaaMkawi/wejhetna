@@ -6,7 +6,11 @@ export type RootStackParamList = {
   SignUp: undefined;
   AdminLogin: undefined;
   AdminDrivers: { adminUserId: number; role: "ADMIN";};
+  EnterEmail: undefined;
+  VerifyEmail: { email: string };
+  RegularSignup: { email: string };
   UserLogin: { mode: "REGULAR" | "DRIVER" };
+ 
   AdminPanel: undefined;
   AdminHomeScreen: { adminUserId: number; role: "ADMIN" };
   Login: undefined;

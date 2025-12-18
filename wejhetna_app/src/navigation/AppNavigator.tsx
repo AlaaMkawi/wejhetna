@@ -22,6 +22,9 @@ import BusinessOwnerPickLocationScreen from "../screens/businessOwner/BusinessOw
 import BusinessOwnerDetailsFormScreen from "../screens/businessOwner/BusinessOwnerDetailsFormScreen";
 import ExistingUsersScreen from "../screens/Admin/ExistingUsersScreen";
 import RejectedUsersScreen from "../screens/Admin/RejectedUsersScreen";
+import VerifyEmailScreen from "../screens/VerifyEmailScreen";
+import EnterEmailScreen from "../screens/EnterEmailScreen";
+import RegularSignupForm from "../screens/RegularSignupForm";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -40,7 +43,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="SignUp"
         component={SignUpScreen}
-  options={{ headerShown: false }}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="AdminLogin"
@@ -59,6 +62,10 @@ export default function AppNavigator() {
         component={UserLoginScreen}
         options={{ headerShown: false }}
       />
+      <Stack.Screen name="EnterEmail" component={EnterEmailScreen} />
+      <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
+      <Stack.Screen name="RegularSignup" component={RegularSignupForm} />
+
 
 {/* --- שינוי 2: הוספת ה-Tab Navigator המותאם אישית --- */}
       <Stack.Screen

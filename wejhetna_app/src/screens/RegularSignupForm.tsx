@@ -9,47 +9,36 @@ import {
   TouchableOpacity,
   I18nManager,
 } from "react-native";
-import MessageModal from "./MessageModal";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 const DARK_TEAL = "#0f5b63";
 
-type Props = {
-  onBack: () => void;
-};
-
-export default function RegularSignupForm({ onBack }: Props) {
+export default function RegularSignupForm({ onBack, route }: any) {
   const { t } = useTranslation();
   const navigation = useNavigation<any>();
+
+  // ✅ email comes ONLY from verified step
+  const email = route?.params?.email;
+if (!email) {
+  return (
+    <View style={styles.container}>
+      <Text style={{ color: "red", textAlign: "center" }}>
+        Invalid signup flow. Please start again.
+      </Text>
+    </View>
+  );
+}
+
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
 
-  const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // 🔹 modal state
-  const [modalVisible, setModalVisible] = useState(false);
-  const [modalType, setModalType] = useState<"error" | "success">("error");
-  const [modalTitle, setModalTitle] = useState("");
-  const [modalMessage, setModalMessage] = useState("");
-
-  const showModal = (
-    type: "error" | "success",
-    title: string,
-    message: string
-  ) => {
-    setModalType(type);
-    setModalTitle(title);
-    setModalMessage(message);
-    setModalVisible(true);
-  };
-
   const signupRegular = async () => {
-    setResult(null);
     setError(null);
+
     try {
       const res = await fetch(`${API_BASE_URL}/auth/signup/regular`, {
         method: "POST",
@@ -57,7 +46,7 @@ export default function RegularSignupForm({ onBack }: Props) {
         body: JSON.stringify({
           full_name: fullName,
           username,
-          email,
+          email, // ✅ verified email
           phone,
           password,
         }),
@@ -66,27 +55,22 @@ export default function RegularSignupForm({ onBack }: Props) {
       const json = await res.json();
 
       if (!res.ok) {
-        if (res.status === 400 || res.status === 409) {
-          const msg = t("username_email_exists");
-          setError(msg);
-          showModal("error", t("sign_up_error"), msg);
-        } else if (typeof json?.detail === "string") {
-          setError(json.detail);
-          showModal("error", t("sign_up_error"), json.detail);
-        } else {
-          const msg = t("signup_failed");
-          setError(msg);
-          showModal("error", t("sign_up_error"), msg);
-        }
+        setError(
+          typeof json?.detail === "string"
+            ? json.detail
+            : t("signup_failed")
+        );
         return;
       }
 
-      setResult(json);
-      showModal("success", t("account_created"), t("account_created_success"));
+      // ✅ Signup done → go to Login
+      navigation.reset({
+        index: 0,
+        routes: [{ name: "Login" }],
+      });
+
     } catch (e: any) {
-      const msg = t("network_error") + e.message;
-      setError(msg);
-      showModal("error", t("network_error").trim(), msg);
+      setError(t("network_error"));
     }
   };
 
@@ -99,6 +83,7 @@ export default function RegularSignupForm({ onBack }: Props) {
         placeholder={t("full_name")}
         placeholderTextColor="#9ab8bd"
       />
+
       <TextInput
         style={styles.input}
         value={username}
@@ -107,15 +92,7 @@ export default function RegularSignupForm({ onBack }: Props) {
         placeholderTextColor="#9ab8bd"
         autoCapitalize="none"
       />
-      <TextInput
-        style={styles.input}
-        value={email}
-        onChangeText={setEmail}
-        placeholder={t("email")}
-        placeholderTextColor="#9ab8bd"
-        autoCapitalize="none"
-        keyboardType="email-address"
-      />
+
       <TextInput
         style={styles.input}
         value={phone}
@@ -124,6 +101,7 @@ export default function RegularSignupForm({ onBack }: Props) {
         placeholderTextColor="#9ab8bd"
         keyboardType="phone-pad"
       />
+
       <TextInput
         style={styles.input}
         value={password}
@@ -142,42 +120,12 @@ export default function RegularSignupForm({ onBack }: Props) {
       </TouchableOpacity>
 
       {error && <Text style={styles.error}>{error}</Text>}
-
-      {/* pretty popup */}
-      <MessageModal
-        visible={modalVisible}
-        type={modalType}
-        title={modalTitle}
-        message={modalMessage}
-        onClose={() => {
-          setModalVisible(false);
-          // Navigate to LoginScreen only after user closes success modal
-          if (modalType === "success") {
-            navigation.reset({
-              index: 1,
-              routes: [
-                { name: "Home" },
-                { name: "Login" },
-              ],
-            });
-          }
-        }}
-      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    marginTop: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: DARK_TEAL,
-    textAlign: "center",
-    marginBottom: 16,
-  },
+  container: { marginTop: 8 },
   input: {
     backgroundColor: "#f5fdff",
     borderRadius: 20,
@@ -191,25 +139,21 @@ const styles = StyleSheet.create({
     textAlign: I18nManager.isRTL ? "right" : "left",
   },
   primaryButton: {
-    marginTop: 4,
     backgroundColor: DARK_TEAL,
     borderRadius: 24,
     paddingVertical: 12,
     alignItems: "center",
-    justifyContent: "center",
   },
   primaryButtonText: {
-    color: "#ffffff",
+    color: "#fff",
     fontSize: 16,
     fontWeight: "600",
-    textAlign: I18nManager.isRTL ? "right" : "left",
   },
   secondaryButton: {
     marginTop: 10,
     borderRadius: 24,
     paddingVertical: 10,
     alignItems: "center",
-    justifyContent: "center",
     borderWidth: 1,
     borderColor: DARK_TEAL,
   },
@@ -217,12 +161,6 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     fontSize: 15,
     fontWeight: "600",
-    textAlign: I18nManager.isRTL ? "right" : "left",
-  },
-  success: {
-    marginTop: 10,
-    color: "green",
-    fontSize: 12,
   },
   error: {
     marginTop: 10,

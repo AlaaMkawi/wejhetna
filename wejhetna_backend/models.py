@@ -67,6 +67,7 @@ class User(Base):
 
     role = Column(Enum(UserRole), nullable=False)
     status = Column(Enum(UserStatus), nullable=False, default=UserStatus.ACTIVE)
+    email_verified = Column(Boolean, nullable=False, default=False)
 
     rejection_reason = Column(Text, nullable=True)
 
@@ -279,7 +280,8 @@ class BusinessOwnerPlaceRequest(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # מי ביקש – משתמש עם role = BUSINESS_OWNER
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
 
     # אם זה קליים על מקום קיים → existing_place_id יהיה לא-null
     existing_place_id = Column(Integer, ForeignKey("places.id"), nullable=True)
@@ -325,4 +327,19 @@ class BusinessOwnerPlaceRequest(Base):
     city = relationship("City")
     category = relationship("Category")
     reviewed_by_admin = relationship("User", foreign_keys=[reviewed_by_admin_id])
+
+
+class EmailVerification(Base):
+    __tablename__ = "email_verifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    email = Column(String, nullable=False)
+    code = Column(String, nullable=False)  # 4-6 digit code
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    is_used = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # relationships
+    user = relationship("User")
 
