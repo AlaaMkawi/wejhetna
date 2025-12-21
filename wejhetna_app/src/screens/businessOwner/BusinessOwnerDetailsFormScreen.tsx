@@ -12,10 +12,12 @@ import {
   ScrollView,
   Image,
 } from "react-native";
+import { useTranslation } from "react-i18next";
 import { launchImageLibrary } from "react-native-image-picker";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Picker } from "@react-native-picker/picker";
+import Ionicons from "react-native-vector-icons/Ionicons";
 import { RootStackParamList } from "../../navigation/types";
 import {
   fetchCities,
@@ -27,6 +29,11 @@ import {
   createBusinessOwnerPlaceRequest,
   BusinessOwnerPlaceRequestPayload,
 } from "../../api/businessOwnerApi";
+import MessageModal from "../MessageModal";
+
+const DARK_TEAL = "#0f5b63";
+const SOFT_TEAL = "#3a8d96";
+const MINT = "#9bd3d8";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
@@ -36,6 +43,7 @@ type BusinessOwnerDetailsFormRoute = RouteProp<
 >;
 
 export default function BusinessOwnerDetailsFormScreen() {
+  const { t } = useTranslation();
   const route = useRoute<BusinessOwnerDetailsFormRoute>();
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -74,6 +82,31 @@ export default function BusinessOwnerDetailsFormScreen() {
   const [phoneTouched, setPhoneTouched] = useState(false);
   const [phoneBlurred, setPhoneBlurred] = useState(false);
 
+  // Error states for validation
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [nameArError, setNameArError] = useState<string | null>(null);
+  const [nameHeError, setNameHeError] = useState<string | null>(null);
+  const [cityError, setCityError] = useState<string | null>(null);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+
+  // Modal states
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalType, setModalType] = useState<"error" | "success">("error");
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+
+  const showModal = (
+    type: "error" | "success",
+    title: string,
+    message: string
+  ) => {
+    setModalType(type);
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalVisible(true);
+  };
+
   useEffect(() => {
     let isActive = true;
 
@@ -96,7 +129,7 @@ export default function BusinessOwnerDetailsFormScreen() {
         }
       } catch (err) {
         console.error(err);
-        Alert.alert("Error", "Failed to load cities/categories from server");
+        showModal("error", t("error") || "Error", t("failed_to_load_data") || "Failed to load cities/categories from server");
       } finally {
         if (isActive) setLoading(false);
       }
@@ -109,13 +142,59 @@ export default function BusinessOwnerDetailsFormScreen() {
   }, []);
 
   function handlePhoneChange(value: string) {
-    const digitsOnly = value.replace(/[^0-9]/g, "");
+    const digitsOnly = value.replace(/[^0-9]/g, "").slice(0, 10);
     setPhone(digitsOnly);
     if (!phoneTouched) setPhoneTouched(true);
+    
+    // Validate phone
+    if (digitsOnly.length > 0) {
+      const isValid = digitsOnly.length === 9 || digitsOnly.length === 10;
+      setPhoneError(isValid ? null : (t("phone_must_be_9_or_10_digits") || "Phone must be 9 or 10 digits"));
+    } else {
+      setPhoneError(null);
+    }
   }
 
   function handlePhoneBlur() {
     setPhoneBlurred(true);
+  }
+  
+  function handleNameChange(value: string) {
+    const cleaned = value.replace(/[^A-Za-z0-9 _-]/g, "");
+    setName(cleaned);
+    if (cleaned.trim().length > 0) {
+      setNameError(cleaned.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
+    } else {
+      setNameError(null);
+    }
+  }
+  
+  function handleNameArChange(value: string) {
+    setNameAr(value);
+    if (value.trim().length > 0) {
+      setNameArError(value.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
+    } else {
+      setNameArError(null);
+    }
+  }
+  
+  function handleNameHeChange(value: string) {
+    setNameHe(value);
+    if (value.trim().length > 0) {
+      setNameHeError(value.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
+    } else {
+      setNameHeError(null);
+    }
+  }
+  
+  function handleCityChange(value: number | undefined) {
+    setCityId(value);
+    setCityError(value ? null : (t("please_select_city") || "Please select a city"));
+  }
+  
+  function handleCategoryChange(value: number | undefined) {
+    setCategoryId(value);
+    setCategoryError(value ? null : (t("please_select_category") || "Please select a category"));
   }
 
   // Image upload helper (UI only - not sent to backend)
@@ -123,7 +202,12 @@ export default function BusinessOwnerDetailsFormScreen() {
     setUrl: (url: string) => void,
     setUploading: (loading: boolean) => void
   ) => {
-    launchImageLibrary({ mediaType: "photo" }, async (res) => {
+    launchImageLibrary({ 
+      mediaType: "photo",
+      quality: 0.7,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    }, async (res) => {
       if (res.didCancel || res.errorCode) {
         console.log("User cancelled or error:", res.errorMessage);
         return;
@@ -166,7 +250,12 @@ export default function BusinessOwnerDetailsFormScreen() {
   };
 
   const handleUploadBusinessImage = () => {
-    launchImageLibrary({ mediaType: "photo" }, async (res) => {
+    launchImageLibrary({ 
+      mediaType: "photo",
+      quality: 0.7,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    }, async (res) => {
       if (res.didCancel || res.errorCode) {
         return;
       }
@@ -295,21 +384,10 @@ export default function BusinessOwnerDetailsFormScreen() {
 
       await createBusinessOwnerPlaceRequest(payload);
 
-      Alert.alert(
-        "Request Submitted",
-        "Your business place request has been submitted successfully. An admin will review it and you will be notified once it's approved.",
-        [
-          {
-            text: "OK",
-            onPress: () => {
-              // Navigate back to home/login
-              navigation.reset({
-                index: 0,
-                routes: [{ name: "Home" }],
-              });
-            },
-          },
-        ]
+      showModal(
+        "success",
+        t("request_submitted") || "Request Submitted",
+        t("business_request_submitted") || "Your business place request has been submitted successfully. An admin will review it and you will be notified once it's approved."
       );
     } catch (err: any) {
       // Log full error details for debugging
@@ -393,198 +471,339 @@ export default function BusinessOwnerDetailsFormScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator />
-        <Text>Loading cities and categories...</Text>
+        <ActivityIndicator size="large" color={DARK_TEAL} />
+        <Text style={styles.loadingText}>{t("loading_cities_categories") || "Loading cities and categories..."}</Text>
       </View>
     );
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.scrollContent}>
-      <View style={styles.container}>
-        <Text style={styles.title}>Business Details</Text>
-        {existingPlaceId && (
-          <Text style={styles.infoText}>
-            You are claiming an existing place on the map.
-          </Text>
-        )}
-
-        <Text style={styles.label}>Business Name (English) *</Text>
-        <TextInput
-          style={styles.input}
-          value={name}
-          onChangeText={(text) => setName(text.replace(/[^A-Za-z0-9 _-]/g, ""))}
-          placeholder="Example: Coffee Shop"
-        />
-
-        <Text style={styles.label}>Business Name (Arabic) *</Text>
-        <TextInput
-          style={styles.input}
-          value={nameAr}
-          onChangeText={setNameAr}
-          placeholder="مثال: مقهى"
-          textAlign="right"
-        />
-
-        <Text style={styles.label}>Business Name (Hebrew) *</Text>
-        <TextInput
-          style={styles.input}
-          value={nameHe}
-          onChangeText={setNameHe}
-          placeholder="דוגמה: בית קפה"
-          textAlign="right"
-        />
-
-        <Text style={styles.label}>City *</Text>
-        <View style={styles.pickerContainer}>
-          <Picker
-            selectedValue={cityId}
-            onValueChange={(value) => setCityId(value)}
-            style={styles.picker}
-          >
-            <Picker.Item label="Select a city..." value={undefined} />
-            {cities.map((city) => (
-              <Picker.Item
-                key={city.id}
-                label={city.name_ar || city.name_en || `City ${city.id}`}
-                value={city.id}
-              />
-            ))}
-          </Picker>
-        </View>
-
-        <Text style={styles.label}>Category *</Text>
-        <View style={styles.pickerContainer}>
-          <Picker
-            selectedValue={categoryId}
-            onValueChange={(value) => setCategoryId(value)}
-            style={styles.picker}
-          >
-            <Picker.Item label="Select a category..." value={undefined} />
-            {categories.map((cat) => (
-              <Picker.Item
-                key={cat.id}
-                label={cat.name_ar || cat.name_en || `Category ${cat.id}`}
-                value={cat.id}
-              />
-            ))}
-          </Picker>
-        </View>
-
-        <Text style={styles.label}>Phone (Optional)</Text>
-        <TextInput
-          style={[
-            styles.input,
-            shouldShowPhoneRequirements && !isPhoneValid && styles.inputError,
-          ]}
-          value={phone}
-          onChangeText={handlePhoneChange}
-          onBlur={handlePhoneBlur}
-          placeholder="0501234567"
-          keyboardType="phone-pad"
-        />
-        {shouldShowPhoneRequirements && !isPhoneValid && (
-          <Text style={styles.errorText}>
-            Phone must be 9 or 10 digits (if provided)
-          </Text>
-        )}
-
-        <Text style={styles.label}>Description (Optional)</Text>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          value={description}
-          onChangeText={setDescription}
-          placeholder="Describe your business..."
-          multiline
-          numberOfLines={4}
-        />
-
-        <Text style={styles.label}>Opening Hours (Optional)</Text>
-        <TextInput
-          style={styles.input}
-          value={openingHours}
-          onChangeText={setOpeningHours}
-          placeholder="Example: Sun-Thu: 9:00-18:00"
-        />
-
-        <Text style={styles.label}>Business License (Optional - UI Only)</Text>
-        <Text style={styles.subLabel}>Upload a photo of your business license (not saved yet)</Text>
+    <View style={styles.wrapper}>
+      {/* Header */}
+      <View style={styles.header}>
         <TouchableOpacity
-          style={styles.uploadButton}
-          onPress={handleUploadBusinessLicense}
-          disabled={uploadingLicense}
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
         >
-          {uploadingLicense ? (
-            <ActivityIndicator color="#1e90ff" />
-          ) : businessLicenseUrl ? (
-            <View style={styles.imagePreviewContainer}>
-              <Image source={{ uri: businessLicenseUrl }} style={styles.imagePreview} />
-              <Text style={styles.imagePreviewText}>License uploaded ✓</Text>
-            </View>
-          ) : (
-            <Text style={styles.uploadButtonText}>📄 Upload Business License</Text>
-          )}
+          <Ionicons name="arrow-back" size={24} color={DARK_TEAL} />
         </TouchableOpacity>
-
-        <Text style={styles.label}>Business Pictures (Optional - UI Only)</Text>
-        <Text style={styles.subLabel}>Upload photos of your business (not saved yet)</Text>
-        <TouchableOpacity
-          style={styles.uploadButton}
-          onPress={handleUploadBusinessImage}
-          disabled={uploadingImages}
-        >
-          {uploadingImages ? (
-            <ActivityIndicator color="#1e90ff" />
-          ) : (
-            <Text style={styles.uploadButtonText}>📷 Add Business Photo</Text>
-          )}
-        </TouchableOpacity>
-
-        {businessImagesUrls.length > 0 && (
-          <View style={styles.imagesList}>
-            {businessImagesUrls.map((url, index) => (
-              <View key={index} style={styles.imageItem}>
-                <Image source={{ uri: url }} style={styles.businessImage} />
-                <TouchableOpacity
-                  style={styles.removeImageButton}
-                  onPress={() => handleRemoveBusinessImage(index)}
-                >
-                  <Text style={styles.removeImageText}>✕</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-        )}
-
-        <Text style={styles.label}>Social Media Account Name (Optional - UI Only)</Text>
-        <Text style={styles.subLabel}>Your social media account name (not saved yet)</Text>
-        <TextInput
-          style={styles.input}
-          value={socialMediaAccountName}
-          onChangeText={setSocialMediaAccountName}
-          placeholder="Example: @mybusiness or mybusiness_page"
-          autoCapitalize="none"
-        />
-
-        <TouchableOpacity
-          style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
-          onPress={handleSubmit}
-          disabled={!canSubmit}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitButtonText}>Submit Request</Text>
-          )}
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{t("business_details") || "Business Details"}</Text>
+        <View style={styles.headerSpacer} />
       </View>
-    </ScrollView>
+
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.container}>
+          {existingPlaceId && (
+            <View style={styles.infoBanner}>
+              <Ionicons name="information-circle" size={20} color={SOFT_TEAL} />
+              <Text style={styles.infoText}>
+                {t("claiming_existing_place") || "You are claiming an existing place on the map."}
+              </Text>
+            </View>
+          )}
+
+          {/* Business Names Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{t("business_name") || "Business Name"} *</Text>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("english") || "English"}</Text>
+              <TextInput
+                style={[styles.input, nameError && styles.inputError]}
+                value={name}
+                onChangeText={handleNameChange}
+                placeholder={t("example_coffee_shop") || "Example: Coffee Shop"}
+                placeholderTextColor="#9ab8bd"
+              />
+              {nameError && <Text style={styles.fieldError}>{nameError}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("arabic") || "Arabic"}</Text>
+              <TextInput
+                style={[styles.input, nameArError && styles.inputError]}
+                value={nameAr}
+                onChangeText={handleNameArChange}
+                placeholder={t("example_cafe_ar") || "مثال: مقهى"}
+                textAlign="right"
+                placeholderTextColor="#9ab8bd"
+              />
+              {nameArError && <Text style={styles.fieldError}>{nameArError}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("hebrew") || "Hebrew"}</Text>
+              <TextInput
+                style={[styles.input, nameHeError && styles.inputError]}
+                value={nameHe}
+                onChangeText={handleNameHeChange}
+                placeholder={t("example_cafe_he") || "דוגמה: בית קפה"}
+                textAlign="right"
+                placeholderTextColor="#9ab8bd"
+              />
+              {nameHeError && <Text style={styles.fieldError}>{nameHeError}</Text>}
+            </View>
+          </View>
+
+          {/* City and Category Section */}
+          <View style={styles.section}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("city") || "City"} *</Text>
+              <View style={[styles.pickerContainer, cityError && styles.inputError]}>
+                <Picker
+                  selectedValue={cityId}
+                  onValueChange={handleCityChange}
+                  style={styles.picker}
+                >
+                  <Picker.Item label={t("select_city") || "Select a city..."} value={undefined} />
+                  {cities.map((city) => (
+                    <Picker.Item
+                      key={city.id}
+                      label={city.name_ar || city.name_en || `City ${city.id}`}
+                      value={city.id}
+                    />
+                  ))}
+                </Picker>
+              </View>
+              {cityError && <Text style={styles.fieldError}>{cityError}</Text>}
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("category") || "Category"} *</Text>
+              <View style={[styles.pickerContainer, categoryError && styles.inputError]}>
+                <Picker
+                  selectedValue={categoryId}
+                  onValueChange={handleCategoryChange}
+                  style={styles.picker}
+                >
+                  <Picker.Item label={t("select_category") || "Select a category..."} value={undefined} />
+                  {categories.map((cat) => (
+                    <Picker.Item
+                      key={cat.id}
+                      label={cat.name_ar || cat.name_en || `Category ${cat.id}`}
+                      value={cat.id}
+                    />
+                  ))}
+                </Picker>
+              </View>
+              {categoryError && <Text style={styles.fieldError}>{categoryError}</Text>}
+            </View>
+          </View>
+
+          {/* Contact Information Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{t("contact_information") || "Contact Information"}</Text>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("phone") || "Phone"} ({t("optional") || "Optional"})</Text>
+              <TextInput
+                style={[styles.input, phoneError && styles.inputError]}
+                value={phone}
+                onChangeText={handlePhoneChange}
+                onBlur={handlePhoneBlur}
+                placeholder="0501234567"
+                keyboardType="phone-pad"
+                maxLength={10}
+                placeholderTextColor="#9ab8bd"
+              />
+              {phoneError && <Text style={styles.fieldError}>{phoneError}</Text>}
+            </View>
+          </View>
+
+          {/* Additional Information Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{t("additional_information") || "Additional Information"}</Text>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("description") || "Description"} ({t("optional") || "Optional"})</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={description}
+                onChangeText={setDescription}
+                placeholder={t("describe_business") || "Describe your business..."}
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+                placeholderTextColor="#9ab8bd"
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("opening_hours") || "Opening Hours"} ({t("optional") || "Optional"})</Text>
+              <TextInput
+                style={styles.input}
+                value={openingHours}
+                onChangeText={setOpeningHours}
+                placeholder={t("example_opening_hours") || "Example: Sun-Thu: 9:00-18:00"}
+                placeholderTextColor="#9ab8bd"
+              />
+            </View>
+          </View>
+
+          {/* Documents Section (Optional) */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{t("documents") || "Documents"} ({t("optional") || "Optional"})</Text>
+            
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("business_license") || "Business License"}</Text>
+              <TouchableOpacity
+                style={styles.uploadButton}
+                onPress={handleUploadBusinessLicense}
+                disabled={uploadingLicense}
+              >
+                {uploadingLicense ? (
+                  <ActivityIndicator color={DARK_TEAL} />
+                ) : businessLicenseUrl ? (
+                  <View style={styles.imagePreviewContainer}>
+                    <Image 
+                      source={{ uri: businessLicenseUrl }} 
+                      style={styles.imagePreview}
+                      resizeMode="cover"
+                    />
+                    <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
+                  </View>
+                ) : (
+                  <View style={styles.uploadButtonContent}>
+                    <Ionicons name="document-text-outline" size={24} color={DARK_TEAL} />
+                    <Text style={styles.uploadButtonText}>{t("upload_business_license") || "Upload Business License"}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("business_pictures") || "Business Pictures"}</Text>
+              <TouchableOpacity
+                style={styles.uploadButton}
+                onPress={handleUploadBusinessImage}
+                disabled={uploadingImages}
+              >
+                {uploadingImages ? (
+                  <ActivityIndicator color={DARK_TEAL} />
+                ) : (
+                  <View style={styles.uploadButtonContent}>
+                    <Ionicons name="camera-outline" size={24} color={DARK_TEAL} />
+                    <Text style={styles.uploadButtonText}>{t("add_business_photo") || "Add Business Photo"}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {businessImagesUrls.length > 0 && (
+              <View style={styles.imagesList}>
+                {businessImagesUrls.map((url, index) => (
+                  <View key={index} style={styles.imageItem}>
+                    <Image 
+                      source={{ uri: url }} 
+                      style={styles.businessImage}
+                      resizeMode="cover"
+                    />
+                    <TouchableOpacity
+                      style={styles.removeImageButton}
+                      onPress={() => handleRemoveBusinessImage(index)}
+                    >
+                      <Ionicons name="close-circle" size={24} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          {/* Social Media Section (Optional) */}
+          <View style={styles.section}>
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{t("social_media_account") || "Social Media Account"} ({t("optional") || "Optional"})</Text>
+              <TextInput
+                style={styles.input}
+                value={socialMediaAccountName}
+                onChangeText={setSocialMediaAccountName}
+                placeholder={t("example_social_media") || "Example: @mybusiness or mybusiness_page"}
+                autoCapitalize="none"
+                placeholderTextColor="#9ab8bd"
+              />
+            </View>
+          </View>
+
+          {/* Submit Button */}
+          <TouchableOpacity
+            style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={!canSubmit}
+            activeOpacity={0.8}
+          >
+            {submitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitButtonText}>
+                {t("submit_request") || "Submit Request"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+      
+      {/* Success/Error Modal */}
+      <MessageModal
+        visible={modalVisible}
+        type={modalType}
+        title={modalTitle}
+        message={modalMessage}
+        onClose={() => {
+          setModalVisible(false);
+          // If success modal, navigate to Home
+          if (modalType === "success") {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: "Home" }],
+            });
+          }
+        }}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    flex: 1,
+    backgroundColor: "#f5fdff",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e0e0e0",
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: DARK_TEAL,
+    flex: 1,
+    textAlign: "center",
+  },
+  headerSpacer: {
+    width: 40,
+  },
   scrollContent: {
     padding: 16,
+    paddingBottom: 24,
   },
   container: {
     flex: 1,
@@ -593,91 +812,137 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    backgroundColor: "#f5fdff",
   },
-  title: {
-    fontSize: 22,
-    fontWeight: "600",
-    marginBottom: 8,
-    textAlign: "center",
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: DARK_TEAL,
+  },
+  infoBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#e8f4f6",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: SOFT_TEAL,
   },
   infoText: {
-    fontSize: 14,
-    color: "#666",
-    marginBottom: 16,
-    textAlign: "center",
-    fontStyle: "italic",
+    fontSize: 13,
+    color: DARK_TEAL,
+    marginLeft: 8,
+    flex: 1,
+    textAlign: "right",
   },
-  label: {
+  section: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: DARK_TEAL,
+    marginBottom: 16,
+    textAlign: "right",
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
     fontSize: 14,
     fontWeight: "500",
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  subLabel: {
-    fontSize: 12,
-    color: "#666",
+    color: DARK_TEAL,
     marginBottom: 8,
-    fontStyle: "italic",
+    textAlign: "right",
   },
   input: {
+    backgroundColor: "#f5fdff",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
+    borderColor: "#d6ebee",
+    fontSize: 15,
+    color: DARK_TEAL,
+    textAlign: "right",
   },
   inputError: {
-    borderColor: "#ff0000",
+    borderColor: "#d7263d",
+    borderWidth: 1.5,
   },
   textArea: {
-    minHeight: 80,
+    minHeight: 100,
     textAlignVertical: "top",
+  },
+  fieldError: {
+    color: "#d7263d",
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: "right",
   },
   pickerContainer: {
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    marginBottom: 4,
+    borderColor: "#d6ebee",
+    borderRadius: 12,
+    backgroundColor: "#f5fdff",
+    overflow: "hidden",
   },
   picker: {
     height: 50,
-  },
-  errorText: {
-    color: "#ff0000",
-    fontSize: 12,
-    marginTop: 4,
+    color: DARK_TEAL,
   },
   submitButton: {
-    backgroundColor: "#1e90ff",
-    paddingVertical: 14,
-    borderRadius: 8,
+    backgroundColor: DARK_TEAL,
+    paddingVertical: 16,
+    borderRadius: 16,
     alignItems: "center",
-    marginTop: 24,
-    marginBottom: 16,
+    justifyContent: "center",
+    marginTop: 8,
+    marginBottom: 24,
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   submitButtonDisabled: {
-    backgroundColor: "#ccc",
+    backgroundColor: "#9ab8bd",
     opacity: 0.6,
   },
   submitButtonText: {
     color: "#fff",
-    fontWeight: "600",
+    fontWeight: "700",
     fontSize: 16,
   },
   uploadButton: {
     borderWidth: 2,
-    borderColor: "#1e90ff",
+    borderColor: MINT,
     borderStyle: "dashed",
-    borderRadius: 8,
-    padding: 16,
+    borderRadius: 12,
+    padding: 20,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 12,
-    backgroundColor: "#F0F8FF",
+    backgroundColor: "#f5fdff",
+    minHeight: 80,
+  },
+  uploadButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   uploadButtonText: {
-    color: "#1e90ff",
+    color: DARK_TEAL,
     fontWeight: "600",
     fontSize: 14,
   },
@@ -688,9 +953,9 @@ const styles = StyleSheet.create({
   imagePreview: {
     width: 200,
     height: 150,
-    borderRadius: 8,
+    borderRadius: 12,
     marginBottom: 8,
-    resizeMode: "cover",
+    backgroundColor: "#f0f0f0",
   },
   imagePreviewText: {
     color: "#4CAF50",
@@ -700,24 +965,23 @@ const styles = StyleSheet.create({
   imagesList: {
     flexDirection: "row",
     flexWrap: "wrap",
-    marginBottom: 12,
+    marginTop: 12,
+    gap: 12,
   },
   imageItem: {
     position: "relative",
-    marginRight: 8,
-    marginBottom: 8,
   },
   businessImage: {
     width: 100,
     height: 100,
-    borderRadius: 8,
-    resizeMode: "cover",
+    borderRadius: 12,
+    backgroundColor: "#f0f0f0",
   },
   removeImageButton: {
     position: "absolute",
     top: -8,
     right: -8,
-    backgroundColor: "#F44336",
+    backgroundColor: "#d7263d",
     borderRadius: 12,
     width: 24,
     height: 24,
@@ -725,10 +989,5 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 2,
     borderColor: "#fff",
-  },
-  removeImageText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "700",
   },
 });

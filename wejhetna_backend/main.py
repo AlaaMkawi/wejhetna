@@ -51,6 +51,10 @@ from schemas import (
     VerifyEmailRequest,
     VerifyEmailResponse,
     ResendCodeRequest,
+    RequestPasswordResetRequest,
+    VerifyPasswordResetCodeRequest,
+    ResetPasswordRequest,
+    PasswordResetResponse,
 )
 import requests
 
@@ -172,21 +176,55 @@ def generate_verification_code() -> str:
     return str(random.randint(100000, 999999))
 
 
-def send_verification_email(to_email: str, code: str, full_name: str = ""):
-    """Send verification code email to user."""
-    subject = "Wejhetna - Email Verification Code"
-    body = f"""Hello {full_name if full_name else 'there'},
+def send_verification_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
+    """Send verification code email to user in their preferred language."""
+    
+    # Email templates for different languages
+    if language == "he":
+        # Hebrew
+        subject = "ווג'הטנה - קוד אימות אימייל"
+        body = f"""שלום {full_name if full_name else 'שלום'},
+
+תודה שנרשמת לוג'הטנה!
+
+קוד אימות האימייל שלך הוא: {code}
+
+קוד זה יפוג תוקף בעוד 2 דקות.
+
+אם לא נרשמת לוג'הטנה, אנא התעלם מהאימייל הזה.
+
+בברכה,
+צוות ווג'הטנה"""
+    elif language == "en":
+        # English
+        subject = "Wejhetna - Email Verification Code"
+        body = f"""Hello {full_name if full_name else 'there'},
 
 Thank you for signing up with Wejhetna!
 
 Your email verification code is: {code}
 
-This code will expire in 15 minutes.
+This code will expire in 2 minutes.
 
 If you didn't sign up for Wejhetna, please ignore this email.
 
 Best regards,
 Wejhetna Team"""
+    else:
+        # Arabic (default)
+        subject = "وجهتنا - رمز التحقق من البريد الإلكتروني"
+        body = f"""مرحباً {full_name if full_name else ''},
+
+شكراً لك على التسجيل في وجهتنا!
+
+رمز التحقق من بريدك الإلكتروني هو: {code}
+
+سينتهي هذا الرمز خلال دقيقتين.
+
+إذا لم تقم بالتسجيل في وجهتنا، يرجى تجاهل هذا البريد الإلكتروني.
+
+مع تحياتنا،
+فريق وجهتنا"""
     
     send_email(to_email, subject, body)
 
@@ -201,7 +239,7 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
     
     # Generate new code
     code = generate_verification_code()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
     
     verification = EmailVerification(
         user_id=user_id,
@@ -223,7 +261,57 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
 # =========================
 
 
+def send_password_reset_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
+    """Send password reset code email to user in their preferred language."""
 
+    # Email templates for different languages
+    if language == "he":
+        # Hebrew
+        subject = "ווג'הטנה - קוד איפוס סיסמה"
+        body = f"""שלום {full_name if full_name else 'שלום'},
+
+ביקשת לאפס את הסיסמה שלך בוג'הטנה.
+
+קוד איפוס הסיסמה שלך הוא: {code}
+
+קוד זה יפוג תוקף בעוד 2 דקות.
+
+אם לא ביקשת לאפס את הסיסמה, אנא התעלם מהאימייל הזה.
+
+בברכה,
+צוות ווג'הטנה"""
+    elif language == "en":
+        # English
+        subject = "Wejhetna - Password Reset Code"
+        body = f"""Hello {full_name if full_name else 'there'},
+
+You requested to reset your password on Wejhetna.
+
+Your password reset code is: {code}
+
+This code will expire in 2 minutes.
+
+If you didn't request a password reset, please ignore this email.
+
+Best regards,
+Wejhetna Team"""
+    else:
+        # Arabic (default)
+        subject = "وجهتنا - رمز إعادة تعيين كلمة المرور"
+        body = f"""مرحباً {full_name if full_name else ''},
+
+لقد طلبت إعادة تعيين كلمة المرور الخاصة بك في وجهتنا.
+
+رمز إعادة تعيين كلمة المرور هو: {code}
+
+سينتهي هذا الرمز خلال دقيقتين.
+
+إذا لم تطلب إعادة تعيين كلمة المرور، يرجى تجاهل هذا البريد الإلكتروني.
+
+مع تحياتنا،
+فريق وجهتنا"""
+
+    send_email(to_email, subject, body)
 
 
 
@@ -759,6 +847,94 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 @app.post("/auth/signup/driver", response_model=DriverSignupOut)
 def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
+    import re
+
+    # ============================
+    # VALIDATION
+    # ============================
+
+    # Validate ID number - exactly 9 digits
+    id_trimmed = data.id_card_image_url.strip()
+    if not re.match(r'^[0-9]{9}$', id_trimmed):
+        raise HTTPException(
+            status_code=400,
+            detail="ID number must be exactly 9 digits"
+        )
+
+    # Validate car type - at least 2 characters
+    car_type_trimmed = data.car_type.strip()
+    if len(car_type_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Car type should be at least 2 characters"
+        )
+
+    # Validate plate number - at least 5 characters and must include a digit
+    plate_trimmed = data.plate_number.strip()
+    if len(plate_trimmed) < 5 or not re.search(r'\d', plate_trimmed):
+        raise HTTPException(
+            status_code=400,
+            detail="Plate number should be at least 5 characters and include a digit"
+        )
+
+    # Validate production year - between 1990 and current year + 1
+    current_year = datetime.now().year
+    if not isinstance(data.production_year,
+                      int) or data.production_year < 1990 or data.production_year > current_year + 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Production year must be a valid number between 1990 and {current_year + 1}"
+        )
+
+    # Validate basic user fields (same as regular signup)
+    if not re.match(r'^[a-zA-Z\u0590-\u05FF\u0600-\u06FF\s]+$', data.full_name.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Full name should contain only letters"
+        )
+
+    if len(data.username.strip()) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be at least 3 characters"
+        )
+    if not re.match(r'^[a-zA-Z0-9_]+$', data.username.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Username can only contain letters, numbers, and underscore"
+        )
+
+    if not re.match(r'^05\d{8}$', data.phone.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone must be 10 digits starting with 05"
+        )
+
+    if len(data.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters"
+        )
+    if not re.search(r'[A-Z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one uppercase letter"
+        )
+    if not re.search(r'[a-z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one lowercase letter"
+        )
+    if not re.search(r'[0-9]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one number"
+        )
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one symbol"
+        )
     # 1. Check if there is already a user with this username/email
     existing_user = (
         db.query(User)
@@ -954,9 +1130,9 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
             db.commit()
             db.refresh(existing_user)
 
-            # Send verification code
+            # Send verification code (default to Arabic if no language preference)
             verification = create_verification_code(existing_user.id, existing_user.email, db)
-            send_verification_email(existing_user.email, verification.code, existing_user.full_name)
+            send_verification_email(existing_user.email, verification.code, existing_user.full_name, language="ar")
 
             return BusinessOwnerSignupOut(
                 user=UserOut.model_validate(existing_user, from_attributes=True),
@@ -1062,6 +1238,126 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     return {"success": True, "message": "Verification code has been resent"}
 
 
+@app.post("/auth/request-password-reset")
+def request_password_reset(data: RequestPasswordResetRequest, db: Session = Depends(get_db)):
+    """Request password reset code - sends email with verification code."""
+    # Check if email exists in database
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user:
+        # Don't reveal if email exists or not (security best practice)
+        # Still return success to prevent email enumeration
+        return {"success": True, "message": "If the email exists, a reset code has been sent."}
+
+    # Generate verification code
+    code = generate_verification_code()
+
+    # Create password reset verification record
+    verification = EmailVerification(
+        user_id=user.id,
+        email=data.email,
+        code=code,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+        is_used=False
+    )
+
+    db.add(verification)
+    db.commit()
+
+    # Send email with code
+    language = data.language if hasattr(data, 'language') and data.language else "ar"
+    send_password_reset_email(data.email, code, user.full_name, language=language)
+
+    return {"success": True, "message": "Password reset code has been sent to your email."}
+
+
+@app.post("/auth/verify-password-reset-code", response_model=PasswordResetResponse)
+def verify_password_reset_code(data: VerifyPasswordResetCodeRequest, db: Session = Depends(get_db)):
+    """Verify password reset code is valid."""
+    # Find the most recent unused verification code for this email
+    verification = (
+        db.query(EmailVerification)
+        .filter(
+            EmailVerification.email == data.email,
+            EmailVerification.code == data.code.strip(),
+            EmailVerification.is_used == False
+        )
+        .order_by(EmailVerification.created_at.desc())
+        .first()
+    )
+
+    if not verification:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    # Check if code is expired
+    if verification.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+
+    # Don't mark as used yet - will be marked when password is actually reset
+    # This allows user to verify code and then reset password
+
+    return PasswordResetResponse(
+        success=True,
+        message="Code verified successfully"
+    )
+
+
+@app.post("/auth/reset-password", response_model=PasswordResetResponse)
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Reset user password after code verification."""
+    # Find the most recent unused verification code
+    verification = (
+        db.query(EmailVerification)
+        .filter(
+            EmailVerification.email == data.email,
+            EmailVerification.code == data.code.strip(),
+            EmailVerification.is_used == False
+        )
+        .order_by(EmailVerification.created_at.desc())
+        .first()
+    )
+
+    if not verification:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    # Check if code is expired
+    if verification.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+
+    # Find user
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate password requirements (same as signup)
+    import re
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not re.search(r'[A-Z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
+    if not re.search(r'[a-z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
+    if not re.search(r'[0-9]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one number")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one symbol")
+
+    # Hash new password
+    password_hash = hash_password(data.new_password)
+
+    # Update user password
+    user.password_hash = password_hash
+
+    # Mark verification code as used
+    verification.is_used = True
+
+    db.commit()
+
+    return PasswordResetResponse(
+        success=True,
+        message="Password has been reset successfully"
+    )
+
+
 @app.post("/auth/login", response_model=LoginResponse)
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = (
@@ -1105,14 +1401,15 @@ def request_email_verification(data: SendVerificationCodeRequest, db: Session = 
         user_id=None,
         email=data.email,
         code=code,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
         is_used=False
     )
 
     db.add(verification)
     db.commit()
 
-    send_verification_email(data.email, code)
+    language = data.language if hasattr(data, 'language') and data.language else "ar"
+    send_verification_email(data.email, code, full_name="", language=language)
 
     return {"success": True}
 
@@ -1829,7 +2126,49 @@ def create_business_owner_place_request(
                 status_code=400,
                 detail="This place already has an owner",
             )
+    # ===== VALIDATION: Business Details =====
+    # Validate business names (minimum 2 characters each)
+    name_trimmed = data.name.strip()
+    name_ar_trimmed = data.name_ar.strip()
+    name_he_trimmed = data.name_he.strip()
 
+    if len(name_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Business name (English) must be at least 2 characters"
+        )
+
+    if len(name_ar_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Business name (Arabic) must be at least 2 characters"
+        )
+
+    if len(name_he_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Business name (Hebrew) must be at least 2 characters"
+        )
+
+    # Validate phone (if provided, must be 9 or 10 digits)
+    if data.phone:
+        phone_trimmed = data.phone.strip()
+        if phone_trimmed:
+            if not re.match(r'^[0-9]{9,10}$', phone_trimmed):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Phone number must be 9 or 10 digits (if provided)"
+                )
+
+    # Validate city_id and category_id exist
+    city = db.query(City).filter(City.id == data.city_id).first()
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+
+    category = db.query(Category).filter(Category.id == data.category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    # ===== END VALIDATION =====
     # יצירת רשומה לטבלת הבקשות (היסטוריית בקשות נשמרת)
     # NOTE: business_license_image_url, business_images_urls, social_media_account_name
     # are NOT set here because the database columns may not exist yet

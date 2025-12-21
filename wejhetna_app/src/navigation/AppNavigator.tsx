@@ -25,6 +25,10 @@ import RejectedUsersScreen from "../screens/Admin/RejectedUsersScreen";
 import VerifyEmailScreen from "../screens/VerifyEmailScreen";
 import EnterEmailScreen from "../screens/EnterEmailScreen";
 import RegularSignupScreen from "../screens/RegularSignupScreen";
+import DriverSignupScreen from "../screens/DriverSignupScreen";
+import ForgotPasswordEnterEmailScreen from "../screens/ForgotPasswordEnterEmailScreen";
+import ForgotPasswordVerifyCodeScreen from "../screens/ForgotPasswordVerifyCodeScreen";
+import ResetPasswordScreen from "../screens/ResetPasswordScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -67,6 +71,26 @@ export default function AppNavigator() {
       <Stack.Screen 
         name="RegularSignup" 
         component={RegularSignupScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="DriverSignup" 
+        component={DriverSignupScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="ForgotPasswordEnterEmail" 
+        component={ForgotPasswordEnterEmailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="ForgotPasswordVerifyCode" 
+        component={ForgotPasswordVerifyCodeScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="ResetPassword" 
+        component={ResetPasswordScreen}
         options={{ headerShown: false }}
       />
 
@@ -140,7 +164,7 @@ export default function AppNavigator() {
 <Stack.Screen
   name="BusinessOwnerSignup"
   component={BusinessOwnerSignupScreen}
-  options={{ title: "Business Owner Signup" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen

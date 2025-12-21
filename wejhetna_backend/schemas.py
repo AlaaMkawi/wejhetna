@@ -196,6 +196,7 @@ class AdminPlaceCreate(BaseModel):
 
 class SendVerificationCodeRequest(BaseModel):
     email: EmailStr
+    language: Optional[str] = "ar"  # Default to Arabic, can be "ar", "he", or "en"
 
 
 class VerifyEmailRequest(BaseModel):
@@ -210,3 +211,28 @@ class VerifyEmailResponse(BaseModel):
 
 class ResendCodeRequest(BaseModel):
     email: EmailStr
+
+
+# =========================
+# PASSWORD RESET SCHEMAS
+# =========================
+
+class RequestPasswordResetRequest(BaseModel):
+    email: EmailStr
+    language: Optional[str] = "ar"  # Default to Arabic, can be "ar", "he", or "en"
+
+
+class VerifyPasswordResetCodeRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str
+
+
+class PasswordResetResponse(BaseModel):
+    success: bool
+    message: str

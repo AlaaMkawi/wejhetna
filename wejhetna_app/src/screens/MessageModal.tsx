@@ -7,6 +7,7 @@ import {
   StyleSheet,
   TouchableOpacity,
 } from "react-native";
+import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
 
@@ -25,6 +26,7 @@ export default function MessageModal({
   message,
   onClose,
 }: Props) {
+  const { t } = useTranslation();
   const isError = type === "error";
 
   return (
@@ -53,7 +55,7 @@ export default function MessageModal({
             style={[styles.button, isError ? styles.errorButton : styles.successButton]}
             onPress={onClose}
           >
-            <Text style={styles.buttonText}>Close</Text>
+            <Text style={styles.buttonText}>{t("close") || "Close"}</Text>
           </TouchableOpacity>
         </View>
       </View>

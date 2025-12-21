@@ -43,7 +43,7 @@ export default function RegularSignupForm({ verifiedEmail, onBack: _onBack, rout
     return (
       <View style={styles.container}>
         <Text style={styles.errorText}>
-          Invalid signup flow. Please start again.
+          {t("invalid_signup_flow") || "Invalid signup flow. Please start again."}
         </Text>
       </View>
     );
@@ -184,7 +184,7 @@ export default function RegularSignupForm({ verifiedEmail, onBack: _onBack, rout
 
     // Validate all fields
     if (!validateAllFields()) {
-      setError(t("error") || "Please fix the errors above");
+      setError(t("please_fix_errors") || "Please fix the errors above");
       return;
     }
 
@@ -208,8 +208,12 @@ export default function RegularSignupForm({ verifiedEmail, onBack: _onBack, rout
         const errorMsg = typeof json?.detail === "string" ? json.detail : t("signup_failed");
         
         // Handle specific backend validation errors
-        if (errorMsg.toLowerCase().includes("username") && errorMsg.toLowerCase().includes("exists")) {
+        if (errorMsg.toLowerCase().includes("email not verified")) {
+          setError(t("email_not_verified") || "Email not verified. Please verify your email first.");
+        } else if (errorMsg.toLowerCase().includes("username") && errorMsg.toLowerCase().includes("exists")) {
           setUsernameError(t("username_taken") || "Username already exists");
+        } else if (errorMsg.toLowerCase().includes("email") && errorMsg.toLowerCase().includes("exists")) {
+          setError(t("email_already_exists") || "Email already exists");
         } else if (errorMsg.toLowerCase().includes("phone") && (errorMsg.toLowerCase().includes("exists") || errorMsg.toLowerCase().includes("already"))) {
           setPhoneError(t("phone_taken") || "Phone number already exists");
         } else if (errorMsg.toLowerCase().includes("full_name") || errorMsg.toLowerCase().includes("name")) {
