@@ -25,9 +25,8 @@ const SOFT_TEAL = "#3a8d96";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
-export default function EnterEmailScreen({ route, navigation }: any) {
+export default function ForgotPasswordEnterEmailScreen({ navigation }: any) {
   const { t } = useTranslation();
-  const userType = route?.params?.userType || "regular"; // default to regular for backward compatibility
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -52,10 +51,9 @@ export default function EnterEmailScreen({ route, navigation }: any) {
 
       // Get current language from i18n
       const currentLanguage = i18n.language || "ar";
-      console.log(">>> FRONTEND DEBUG: Sending language:", currentLanguage);
       
       const res = await fetch(
-        `${API_BASE_URL}/auth/request-email-verification`,
+        `${API_BASE_URL}/auth/request-password-reset`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -70,7 +68,6 @@ export default function EnterEmailScreen({ route, navigation }: any) {
       try {
         json = await res.json();
       } catch (e) {
-        // If JSON parsing fails, treat as network error
         setErrorModal({
           visible: true,
           title: t("error") || "Error",
@@ -81,14 +78,6 @@ export default function EnterEmailScreen({ route, navigation }: any) {
 
       if (!res.ok) {
         let errorMessage = json?.detail || t("failed_to_send_code") || "Failed to send verification code";
-        const errorDetailLower = (json?.detail || "").toLowerCase();
-        
-        // Handle specific error messages with translations
-        if (errorDetailLower.includes("email already registered")) {
-          errorMessage = t("email_already_registered") || "Email already registered";
-        } else if (errorDetailLower.includes("email already exists")) {
-          errorMessage = t("email_already_exists") || "Email already exists";
-        }
         
         setErrorModal({
           visible: true,
@@ -98,7 +87,7 @@ export default function EnterEmailScreen({ route, navigation }: any) {
         return;
       }
 
-      // ✅ Success → show success modal then go to VerifyEmail
+      // ✅ Success → show success modal then go to VerifyCode
       setShowSuccessModal(true);
 
     } catch (e: any) {
@@ -134,12 +123,12 @@ export default function EnterEmailScreen({ route, navigation }: any) {
             {/* Header */}
             <View style={styles.headerContainer}>
               <Text style={styles.logoText}>Wejhetna</Text>
-              <Text style={styles.welcome}>{t("enter_your_email") || "Enter your email"}</Text>
+              <Text style={styles.welcome}>{t("forgot_password") || "Forgot Password"}</Text>
             </View>
 
             {/* Glass Card */}
             <View style={styles.glassCard}>
-              <Text style={styles.title}>{t("enter_your_email") || "Enter your email"}</Text>
+              <Text style={styles.title}>{t("forgot_password_enter_email") || "Enter your email to reset password"}</Text>
 
               {/* Email Input with Icon */}
               <View style={styles.inputRow}>
@@ -178,6 +167,14 @@ export default function EnterEmailScreen({ route, navigation }: any) {
                   </Text>
                 )}
               </TouchableOpacity>
+
+              {/* Back to Login */}
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => navigation.navigate("Login")}
+              >
+                <Text style={styles.backButtonText}>{t("back_to_login") || "Back to Login"}</Text>
+              </TouchableOpacity>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -191,7 +188,7 @@ export default function EnterEmailScreen({ route, navigation }: any) {
         buttonText={t("continue") || "Continue"}
         onPress={() => {
           setShowSuccessModal(false);
-          navigation.navigate("VerifyEmail", { email: email.trim(), userType });
+          navigation.navigate("ForgotPasswordVerifyCode", { email: email.trim() });
         }}
       />
 
@@ -283,5 +280,15 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     fontSize: 17,
     fontWeight: "700",
+  },
+  backButton: {
+    marginTop: 16,
+    alignItems: "center",
+  },
+  backButtonText: {
+    color: DARK_TEAL,
+    fontSize: 14,
+    fontWeight: "600",
+    textDecorationLine: "underline",
   },
 });

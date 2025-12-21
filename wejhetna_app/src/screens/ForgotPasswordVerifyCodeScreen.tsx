@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
-import i18n from "../i18n";
 import {
   View,
   Text,
@@ -25,10 +24,12 @@ const SOFT_TEAL = "#3a8d96";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
 
-export default function EnterEmailScreen({ route, navigation }: any) {
+export default function ForgotPasswordVerifyCodeScreen({ route, navigation }: any) {
   const { t } = useTranslation();
-  const userType = route?.params?.userType || "regular"; // default to regular for backward compatibility
-  const [email, setEmail] = useState("");
+  const emailFromRoute = route?.params?.email || "";
+
+  const [email] = useState(emailFromRoute);
+  const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string }>({
@@ -37,12 +38,12 @@ export default function EnterEmailScreen({ route, navigation }: any) {
     message: "",
   });
 
-  const sendCode = async () => {
-    if (!email.trim()) {
+  const handleVerify = async () => {
+    if (!email.trim() || !code.trim()) {
       setErrorModal({
         visible: true,
         title: t("error") || "Error",
-        message: t("please_enter_email") || "Please enter your email",
+        message: t("please_enter_email_and_code") || "Please enter email and code",
       });
       return;
     }
@@ -50,62 +51,34 @@ export default function EnterEmailScreen({ route, navigation }: any) {
     try {
       setLoading(true);
 
-      // Get current language from i18n
-      const currentLanguage = i18n.language || "ar";
-      console.log(">>> FRONTEND DEBUG: Sending language:", currentLanguage);
-      
-      const res = await fetch(
-        `${API_BASE_URL}/auth/request-email-verification`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
-            email: email.trim(),
-            language: currentLanguage 
-          }),
-        }
-      );
+      const res = await fetch(`${API_BASE_URL}/auth/verify-password-reset-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          code: code.trim(),
+        }),
+      });
 
-      let json;
-      try {
-        json = await res.json();
-      } catch (e) {
-        // If JSON parsing fails, treat as network error
-        setErrorModal({
-          visible: true,
-          title: t("error") || "Error",
-          message: t("network_error_message") || "Network error occurred. Please try again.",
-        });
-        return;
-      }
+      const json = await res.json();
 
       if (!res.ok) {
-        let errorMessage = json?.detail || t("failed_to_send_code") || "Failed to send verification code";
-        const errorDetailLower = (json?.detail || "").toLowerCase();
-        
-        // Handle specific error messages with translations
-        if (errorDetailLower.includes("email already registered")) {
-          errorMessage = t("email_already_registered") || "Email already registered";
-        } else if (errorDetailLower.includes("email already exists")) {
-          errorMessage = t("email_already_exists") || "Email already exists";
-        }
-        
         setErrorModal({
           visible: true,
-          title: t("error") || "Error",
-          message: errorMessage,
+          title: t("verification_failed") || "Verification failed",
+          message: json?.detail || t("invalid_or_expired_code") || "Invalid or expired code",
         });
         return;
       }
 
-      // ✅ Success → show success modal then go to VerifyEmail
+      // Show success modal
       setShowSuccessModal(true);
 
     } catch (e: any) {
       setErrorModal({
         visible: true,
         title: t("error") || "Error",
-        message: t("network_error_message") || e?.message || t("network_error") || "Something went wrong",
+        message: t("network_error_message") || e?.message || t("network_error") || "Network error",
       });
     } finally {
       setLoading(false);
@@ -134,22 +107,19 @@ export default function EnterEmailScreen({ route, navigation }: any) {
             {/* Header */}
             <View style={styles.headerContainer}>
               <Text style={styles.logoText}>Wejhetna</Text>
-              <Text style={styles.welcome}>{t("enter_your_email") || "Enter your email"}</Text>
+              <Text style={styles.welcome}>{t("verify_reset_code") || "Verify Reset Code"}</Text>
             </View>
 
             {/* Glass Card */}
             <View style={styles.glassCard}>
-              <Text style={styles.title}>{t("enter_your_email") || "Enter your email"}</Text>
+              <Text style={styles.title}>{t("enter_verification_code") || "Enter verification code"}</Text>
 
-              {/* Email Input with Icon */}
+              {/* Email Input with Icon (Disabled) */}
               <View style={styles.inputRow}>
                 <TextInput
-                  style={styles.inputFlex}
-                  placeholder={t("email") || "Email"}
-                  autoCapitalize="none"
-                  keyboardType="email-address"
+                  style={[styles.inputFlex, styles.inputDisabled]}
                   value={email}
-                  onChangeText={setEmail}
+                  editable={false}
                   placeholderTextColor="#66838a"
                 />
                 <Ionicons 
@@ -160,23 +130,49 @@ export default function EnterEmailScreen({ route, navigation }: any) {
                 />
               </View>
 
-              {/* Send Code Button */}
+              {/* Verification Code Input with Icon */}
+              <View style={styles.inputRow}>
+                <TextInput
+                  style={styles.inputFlex}
+                  value={code}
+                  onChangeText={setCode}
+                  placeholder={t("verification_code") || "Verification code"}
+                  keyboardType="numeric"
+                  placeholderTextColor="#66838a"
+                />
+                <Ionicons 
+                  name="lock-closed-outline" 
+                  size={20} 
+                  color={DARK_TEAL} 
+                  style={{ marginLeft: 10 }} 
+                />
+              </View>
+
+              {/* Verify Button */}
               <TouchableOpacity
                 style={[
                   styles.primaryButton,
-                  (!email.trim() || loading) && styles.buttonDisabled,
+                  (!email.trim() || !code.trim() || loading) && styles.buttonDisabled,
                 ]}
-                onPress={sendCode}
-                disabled={!email.trim() || loading}
+                onPress={handleVerify}
+                disabled={!email.trim() || !code.trim() || loading}
                 activeOpacity={0.85}
               >
                 {loading ? (
                   <ActivityIndicator color={DARK_TEAL} />
                 ) : (
                   <Text style={styles.primaryButtonText}>
-                    {t("send_code") || "Send code"}
+                    {t("verify") || "Verify"}
                   </Text>
                 )}
+              </TouchableOpacity>
+
+              {/* Back to Enter Email */}
+              <TouchableOpacity
+                style={styles.backButton}
+                onPress={() => navigation.navigate("ForgotPasswordEnterEmail")}
+              >
+                <Text style={styles.backButtonText}>{t("back") || "Back"}</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -186,12 +182,15 @@ export default function EnterEmailScreen({ route, navigation }: any) {
       {/* Success Modal */}
       <SuccessModal
         visible={showSuccessModal}
-        title={t("code_sent") || "Code sent"}
-        message={t("code_sent_message") || "Verification code has been sent to your email. Please check your inbox."}
+        title={t("code_verified") || "Code verified"}
+        message={t("code_verified_message") || "Code verified successfully. You can now reset your password."}
         buttonText={t("continue") || "Continue"}
         onPress={() => {
           setShowSuccessModal(false);
-          navigation.navigate("VerifyEmail", { email: email.trim(), userType });
+          navigation.navigate("ResetPassword", {
+            email: email.trim(),
+            code: code.trim(),
+          });
         }}
       />
 
@@ -267,6 +266,9 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     padding: 0,
   },
+  inputDisabled: {
+    opacity: 0.6,
+  },
   primaryButton: {
     backgroundColor: "rgba(255, 255, 255, 0.16)",
     borderRadius: 999,
@@ -283,5 +285,15 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     fontSize: 17,
     fontWeight: "700",
+  },
+  backButton: {
+    marginTop: 16,
+    alignItems: "center",
+  },
+  backButtonText: {
+    color: DARK_TEAL,
+    fontSize: 14,
+    fontWeight: "600",
+    textDecorationLine: "underline",
   },
 });

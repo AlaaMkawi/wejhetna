@@ -1,19 +1,24 @@
 // src/screens/businessOwner/BusinessOwnerPickLocationScreen.tsx
 
 import React, { useState } from "react";
-import { View, Button, StyleSheet, Text, Alert, ActivityIndicator } from "react-native";
+import { View, StyleSheet, Text, Alert, ActivityIndicator, TouchableOpacity } from "react-native";
 import {
   MapView,
   Camera,
   PointAnnotation,
 } from "@maplibre/maplibre-react-native";
-
+import { useTranslation } from "react-i18next";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 import { RootStackParamList } from "../../navigation/types";
 import { checkNearbyForOwner } from "../../api/businessOwnerApi";
 import Geolocation from "@react-native-community/geolocation";
+
+const DARK_TEAL = "#0f5b63";
+const SOFT_TEAL = "#3a8d96";
+const MINT = "#9bd3d8";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -24,6 +29,7 @@ type BusinessOwnerPickLocationRoute = RouteProp<
 >;
 
 export default function BusinessOwnerPickLocationScreen() {
+  const { t } = useTranslation();
   const route = useRoute<BusinessOwnerPickLocationRoute>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
@@ -82,7 +88,7 @@ export default function BusinessOwnerPickLocationScreen() {
                   },
                 },
                 {
-                  text: "Create New Place",
+                  text: t("create_new_place") || "Create New Place",
                   style: "cancel",
                   onPress: () => {
                     navigation.navigate("BusinessOwnerDetailsForm", {
@@ -111,8 +117,8 @@ export default function BusinessOwnerPickLocationScreen() {
         } catch (err: any) {
           console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
           Alert.alert(
-            "Error",
-            err?.response?.data?.detail || "Could not check nearby places"
+            t("error") || "Error",
+            err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
           );
         } finally {
           setCheckingNearby(false);
@@ -120,7 +126,7 @@ export default function BusinessOwnerPickLocationScreen() {
       },
       (error) => {
         console.log("GPS error", error);
-        Alert.alert("Error", "Could not get your location");
+        Alert.alert(t("error") || "Error", t("could_not_get_location") || "Could not get your location");
         setGpsLoading(false);
       },
       {
@@ -133,7 +139,7 @@ export default function BusinessOwnerPickLocationScreen() {
 
   async function handleConfirm() {
     if (selectedLat == null || selectedLon == null) {
-      Alert.alert("Error", "Please select a location");
+      Alert.alert(t("error") || "Error", t("please_select_location") || "Please select a location");
       return;
     }
 
@@ -165,7 +171,7 @@ export default function BusinessOwnerPickLocationScreen() {
               },
             },
             {
-              text: "Create New Place",
+              text: t("create_new_place") || "Create New Place",
               style: "cancel",
               onPress: () => {
                 navigation.navigate("BusinessOwnerDetailsForm", {
@@ -194,8 +200,8 @@ export default function BusinessOwnerPickLocationScreen() {
     } catch (err: any) {
       console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
       Alert.alert(
-        "Error",
-        err?.response?.data?.detail || "Could not check nearby places"
+        t("error") || "Error",
+        err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
       );
     } finally {
       setCheckingNearby(false);
@@ -204,6 +210,18 @@ export default function BusinessOwnerPickLocationScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={24} color={DARK_TEAL} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{t("pick_location") || "Pick Location"}</Text>
+        <View style={styles.headerSpacer} />
+      </View>
+
       <View style={styles.mapContainer}>
         <MapView
           style={StyleSheet.absoluteFill}
@@ -229,29 +247,48 @@ export default function BusinessOwnerPickLocationScreen() {
         </MapView>
       </View>
 
+      {/* Bottom Panel with Design */}
       <View style={styles.bottomPanel}>
-        <Text style={styles.infoText}>
-          {selectedLat != null && selectedLon != null
-            ? `Lat: ${selectedLat.toFixed(5)}, Lon: ${selectedLon.toFixed(5)}`
-            : "Tap on the map or use your location"}
-        </Text>
+        <View style={styles.coordinatesContainer}>
+          <Ionicons name="information-circle-outline" size={20} color={DARK_TEAL} />
+          <Text style={styles.coordinatesText}>
+            {selectedLat != null && selectedLon != null
+              ? `${t("latitude") || "Lat"}: ${selectedLat.toFixed(5)}, ${t("longitude") || "Lon"}: ${selectedLon.toFixed(5)}`
+              : t("tap_map_or_use_location") || "Tap on the map or use your location"}
+          </Text>
+        </View>
 
         <View style={styles.buttonsRow}>
-          <View style={styles.buttonWrapper}>
-            <Button
-              title={gpsLoading ? "Loading..." : "📍 My Location"}
-              onPress={handleUseMyLocation}
-              disabled={gpsLoading}
-            />
-          </View>
-
-          <View style={styles.buttonWrapper}>
-            {checkingNearby ? (
-              <ActivityIndicator style={styles.loader} />
+          <TouchableOpacity
+            style={[styles.actionButton, styles.myLocationButton, gpsLoading && styles.buttonDisabled]}
+            onPress={handleUseMyLocation}
+            disabled={gpsLoading || checkingNearby}
+          >
+            {gpsLoading ? (
+              <ActivityIndicator color={DARK_TEAL} />
             ) : (
-              <Button title="Confirm Location" onPress={handleConfirm} />
+              <>
+                <Ionicons name="location" size={20} color={DARK_TEAL} />
+                <Text style={styles.myLocationButtonText}>
+                  {t("my_location") || "My Location"}
+                </Text>
+              </>
             )}
-          </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionButton, styles.confirmButton, (checkingNearby || selectedLat == null || selectedLon == null) && styles.buttonDisabled]}
+            onPress={handleConfirm}
+            disabled={checkingNearby || selectedLat == null || selectedLon == null}
+          >
+            {checkingNearby ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.confirmButtonText}>
+                {t("confirm_location") || "Confirm Location"}
+              </Text>
+            )}
+          </TouchableOpacity>
         </View>
       </View>
     </View>
@@ -259,37 +296,119 @@ export default function BusinessOwnerPickLocationScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  mapContainer: { flex: 1 },
-  bottomPanel: {
-    padding: 12,
-    borderTopWidth: 1,
-    borderColor: "#ddd",
+  container: { 
+    flex: 1,
     backgroundColor: "#fff",
   },
-  infoText: {
-    marginBottom: 8,
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e0e0e0",
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: DARK_TEAL,
+    flex: 1,
     textAlign: "center",
-    fontSize: 14,
+  },
+  headerSpacer: {
+    width: 40,
+  },
+  mapContainer: { 
+    flex: 1,
+  },
+  bottomPanel: {
+    padding: 16,
+    borderTopWidth: 2,
+    borderTopColor: MINT,
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  coordinatesContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f5fdff",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+  },
+  coordinatesText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: DARK_TEAL,
+    flex: 1,
+    textAlign: "right",
   },
   buttonsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    gap: 12,
   },
-  buttonWrapper: {
+  actionButton: {
     flex: 1,
-    marginHorizontal: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    gap: 8,
   },
-  loader: {
-    padding: 10,
+  myLocationButton: {
+    backgroundColor: "#f5fdff",
+    borderWidth: 2,
+    borderColor: SOFT_TEAL,
+  },
+  myLocationButtonText: {
+    color: DARK_TEAL,
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  confirmButton: {
+    backgroundColor: DARK_TEAL,
+  },
+  confirmButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
   selectedDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: "#ED1C7B",
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
 });
 

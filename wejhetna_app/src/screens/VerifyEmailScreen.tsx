@@ -6,7 +6,6 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ImageBackground,
   StatusBar,
   Dimensions,
@@ -17,6 +16,7 @@ import {
 } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import SuccessModal from "../components/SuccessModal";
+import MessageModal from "./MessageModal";
 
 const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
@@ -27,15 +27,25 @@ const API_BASE_URL = "http://10.0.2.2:8000";
 export default function VerifyEmailScreen({ route, navigation }: any) {
   const { t } = useTranslation();
   const emailFromRoute = route?.params?.email || "";
+  const userType = route?.params?.userType || "regular"; // default to regular for backward compatibility
 
   const [email] = useState(emailFromRoute);
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string }>({
+    visible: false,
+    title: "",
+    message: "",
+  });
 
   const handleVerify = async () => {
     if (!email.trim() || !code.trim()) {
-      Alert.alert(t("error") || "Error", t("please_enter_email_and_code") || "Please enter email and code");
+      setErrorModal({
+        visible: true,
+        title: t("error") || "Error",
+        message: t("please_enter_email_and_code") || "Please enter email and code",
+      });
       return;
     }
 
@@ -54,10 +64,32 @@ export default function VerifyEmailScreen({ route, navigation }: any) {
       const json = await res.json();
 
      if (!res.ok) {
-      Alert.alert(
-        t("verification_failed") || "Verification failed",
-        json?.detail || t("invalid_or_expired_code") || "Invalid or expired code"
-      );
+      // Always use translated message instead of backend message
+      let errorMessage = t("invalid_or_expired_code") || "Invalid or expired code";
+      
+      // Check if backend message is in English and translate common patterns
+      if (json?.detail) {
+        const detailStr = typeof json.detail === "string" ? json.detail : JSON.stringify(json.detail);
+        const lowerDetail = detailStr.toLowerCase();
+        
+        // Map common backend error messages to translations
+        if (lowerDetail.includes("invalid") || lowerDetail.includes("incorrect") || lowerDetail.includes("wrong")) {
+          errorMessage = t("invalid_or_expired_code") || "Invalid or expired code";
+        } else if (lowerDetail.includes("expired") || lowerDetail.includes("expire")) {
+          errorMessage = t("invalid_or_expired_code") || "Invalid or expired code";
+        } else if (lowerDetail.includes("not found") || lowerDetail.includes("does not exist")) {
+          errorMessage = t("invalid_or_expired_code") || "Invalid or expired code";
+        } else if (lowerDetail.includes("used") || lowerDetail.includes("already")) {
+          errorMessage = t("invalid_or_expired_code") || "Invalid or expired code";
+        }
+        // If we can't match, still use translated message instead of raw backend message
+      }
+      
+      setErrorModal({
+        visible: true,
+        title: t("verification_failed") || "Verification failed",
+        message: errorMessage,
+      });
       return;
     }
 
@@ -65,7 +97,11 @@ export default function VerifyEmailScreen({ route, navigation }: any) {
     setShowSuccessModal(true);
 
   } catch (e: any) {
-    Alert.alert(t("error") || "Network error", e?.message || t("error") || "Error");
+    setErrorModal({
+      visible: true,
+      title: t("error") || "Error",
+      message: t("network_error_message") || e?.message || t("network_error") || "Network error",
+    });
   } finally {
     setLoading(false);
   }
@@ -165,10 +201,31 @@ export default function VerifyEmailScreen({ route, navigation }: any) {
         buttonText={t("continue") || "Continue"}
         onPress={() => {
           setShowSuccessModal(false);
-          navigation.navigate("RegularSignup", {
-            email: email.trim(),
-          });
+          // Navigate to the appropriate signup screen based on userType
+          if (userType === "driver") {
+            navigation.navigate("DriverSignup", {
+              email: email.trim(),
+            });
+          } else if (userType === "owner") {
+            navigation.navigate("BusinessOwnerSignup", {
+              email: email.trim(),
+            });
+          } else {
+            // default to regular signup
+            navigation.navigate("RegularSignup", {
+              email: email.trim(),
+            });
+          }
         }}
+      />
+
+      {/* Error Modal */}
+      <MessageModal
+        visible={errorModal.visible}
+        type="error"
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={() => setErrorModal({ ...errorModal, visible: false })}
       />
     </ImageBackground>
   );
