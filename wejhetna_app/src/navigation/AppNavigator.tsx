@@ -24,7 +24,13 @@ import ExistingUsersScreen from "../screens/Admin/ExistingUsersScreen";
 import RejectedUsersScreen from "../screens/Admin/RejectedUsersScreen";
 import VerifyEmailScreen from "../screens/VerifyEmailScreen";
 import EnterEmailScreen from "../screens/EnterEmailScreen";
-import RegularSignupForm from "../screens/RegularSignupForm";
+import RegularSignupScreen from "../screens/RegularSignupScreen";
+import DriverSignupScreen from "../screens/DriverSignupScreen";
+import ForgotPasswordEnterEmailScreen from "../screens/ForgotPasswordEnterEmailScreen";
+import ForgotPasswordVerifyCodeScreen from "../screens/ForgotPasswordVerifyCodeScreen";
+import ResetPasswordScreen from "../screens/ResetPasswordScreen";
+import ProfileScreen from "../screens/ProfileScreen";
+import UserTabNavigator from "./UserTabNavigator";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -64,7 +70,31 @@ export default function AppNavigator() {
       />
       <Stack.Screen name="EnterEmail" component={EnterEmailScreen} />
       <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} />
-      <Stack.Screen name="RegularSignup" component={RegularSignupForm} />
+      <Stack.Screen 
+        name="RegularSignup" 
+        component={RegularSignupScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="DriverSignup" 
+        component={DriverSignupScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="ForgotPasswordEnterEmail" 
+        component={ForgotPasswordEnterEmailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="ForgotPasswordVerifyCode" 
+        component={ForgotPasswordVerifyCodeScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen 
+        name="ResetPassword" 
+        component={ResetPasswordScreen}
+        options={{ headerShown: false }}
+      />
 
 
 {/* --- שינוי 2: הוספת ה-Tab Navigator המותאם אישית --- */}
@@ -111,10 +141,15 @@ export default function AppNavigator() {
         options={{ title: "Admin Home" }}
       />
       <Stack.Screen
-  name="RegularHome"
-  component={RegularHomeScreen}
-  options={{ headerShown: false }}
-/>
+        name="RegularHome"
+        component={RegularHomeScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="UserTabs"
+        component={UserTabNavigator}
+        options={{ headerShown: false }}
+      />
       <Stack.Screen
   name="AdminDriverDetails"
   component={AdminDriverDetailsScreen}
@@ -136,7 +171,7 @@ export default function AppNavigator() {
 <Stack.Screen
   name="BusinessOwnerSignup"
   component={BusinessOwnerSignupScreen}
-  options={{ title: "Business Owner Signup" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
@@ -161,6 +196,12 @@ export default function AppNavigator() {
   name="RejectedUsers"
   component={RejectedUsersScreen}
   options={{ title: "Rejected Users" }}
+/>
+
+<Stack.Screen
+  name="Profile"
+  component={ProfileScreen}
+  options={{ headerShown: false }}
 />
 
       </Stack.Navigator>

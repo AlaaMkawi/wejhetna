@@ -11,12 +11,12 @@ import {
   Text,
 } from "react-native";
 import { useTranslation } from "react-i18next";
-import RegularSignupForm from "./RegularSignupForm";
+import DriverSignupForm from "./DriverSignupForm";
 
 const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
 
-export default function RegularSignupScreen({ route }: any) {
+export default function DriverSignupScreen({ route, navigation }: any) {
   const { t } = useTranslation();
   const email = route?.params?.email;
 
@@ -42,12 +42,12 @@ export default function RegularSignupScreen({ route }: any) {
             {/* Header */}
             <View style={styles.headerContainer}>
               <Text style={styles.logoText}>Wejhetna</Text>
-              <Text style={styles.welcome}>{t("create_your_account") || "Create your account"}</Text>
+              <Text style={styles.welcome}>{t("driver_signup") || "Driver Signup"}</Text>
             </View>
 
             {/* Glass Card */}
             <View style={styles.glassCard}>
-              <RegularSignupForm verifiedEmail={email} route={route} />
+              <DriverSignupForm verifiedEmail={email} route={route} navigation={navigation} />
             </View>
           </ScrollView>
         </KeyboardAvoidingView>

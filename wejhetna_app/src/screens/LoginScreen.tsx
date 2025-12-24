@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView, 
   Platform
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
@@ -58,15 +59,40 @@ export default function LoginScreen({ navigation }: Props) {
 
       if (!res.ok) {
         let message = t("invalid_credentials");
-        if (typeof data === "string") message = data;
-        else if (typeof data?.detail === "string") message = data.detail;
-        else if (Array.isArray(data?.detail)) {
+        if (typeof data === "string") {
+          // Try to match common backend error messages with translations
+          const lowerData = data.toLowerCase();
+          if (lowerData.includes("invalid") || lowerData.includes("incorrect") || lowerData.includes("wrong")) {
+            message = t("invalid_credentials");
+          } else if (lowerData.includes("not found") || lowerData.includes("does not exist")) {
+            message = t("invalid_credentials");
+          } else {
+            message = data; // Use backend message if we can't translate it
+          }
+        } else if (typeof data?.detail === "string") {
+          const lowerDetail = data.detail.toLowerCase();
+          if (lowerDetail.includes("invalid") || lowerDetail.includes("incorrect") || lowerDetail.includes("wrong")) {
+            message = t("invalid_credentials");
+          } else if (lowerDetail.includes("not found") || lowerDetail.includes("does not exist")) {
+            message = t("invalid_credentials");
+          } else {
+            message = data.detail; // Use backend message if we can't translate it
+          }
+        } else if (Array.isArray(data?.detail)) {
+          // For validation errors, try to translate common messages
           message = data.detail
             .map((e: any) => {
-              const loc = Array.isArray(e.loc) ? e.loc.join(" → ") : "";
-              return loc ? `${loc}: ${e.msg}` : e.msg || "";
+              const msg = e.msg || "";
+              const lowerMsg = msg.toLowerCase();
+              if (lowerMsg.includes("required") || lowerMsg.includes("missing")) {
+                return t("login_missing_fields");
+              } else if (lowerMsg.includes("invalid") || lowerMsg.includes("incorrect")) {
+                return t("invalid_credentials");
+              }
+              return msg; // Return original if we can't translate
             })
-            .join("\n");
+            .filter((m: string) => m) // Remove empty strings
+            .join("\n") || t("invalid_credentials");
         }
 
         setError(message);
@@ -76,6 +102,10 @@ export default function LoginScreen({ navigation }: Props) {
       const role = data.role;
       const status = data.status;
       const userId = data.id;
+
+      // Store userId and role in AsyncStorage for profile access
+      await AsyncStorage.setItem("userId", userId.toString());
+      await AsyncStorage.setItem("userRole", role);
 
       if (role === "ADMIN") {
         if (status !== "ACTIVE") {
@@ -96,13 +126,15 @@ export default function LoginScreen({ navigation }: Props) {
           setError(t("account_not_active"));
           return;
         }
+        // Navigate to UserTabs instead of RegularHome to show bottom navigation
         navigation.reset({
           index: 0,
-          routes: [{ name: "RegularHome" }],
+          routes: [{ name: "UserTabs" }],
         });
       }
     } catch (e: any) {
-      setError(t("network_error") + e.message);
+      // Use a fully translated network error message
+      setError(t("network_error_message") || t("network_error"));
     } finally {
       setLoading(false);
     }
@@ -191,6 +223,14 @@ export default function LoginScreen({ navigation }: Props) {
                 </View>
 
                 {error && <Text style={styles.error}>{error}</Text>}
+
+                {/* Forgot Password Link */}
+                <TouchableOpacity 
+                    onPress={() => navigation.navigate("ForgotPasswordEnterEmail")}
+                    style={styles.forgotPasswordContainer}
+                >
+                    <Text style={styles.forgotPasswordText}>{t("forgot_password") || "Forgot Password?"}</Text>
+                </TouchableOpacity>
 
                 {/* Login button */}
                 <TouchableOpacity
@@ -371,6 +411,17 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     fontWeight: "800",
     marginHorizontal: 4,
+  },
+  forgotPasswordContainer: {
+    alignItems: "flex-end",
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  forgotPasswordText: {
+    fontSize: 14,
+    color: DARK_TEAL,
+    fontWeight: "600",
+    textDecorationLine: "underline",
   },
   footer: {
     marginTop: 40,

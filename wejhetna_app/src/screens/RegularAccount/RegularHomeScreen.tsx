@@ -693,6 +693,7 @@ export default function RegularHomeScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    paddingBottom: 90, // Space for bottom tab bar
     backgroundColor: "#fff",
   },
   searchContainer: {

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { useTranslation } from "react-i18next";
 import {
   View,
@@ -12,7 +12,6 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import DriverSignupForm from "./DriverSignupForm";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
@@ -21,13 +20,10 @@ const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
 
-type SignupType = "choose" | "driver";
-
 type NavType = NativeStackNavigationProp<RootStackParamList>;
 
 export default function SignUpScreen() {
   const { t } = useTranslation();
-  const [type, setType] = useState<SignupType>("choose");
   const navigation = useNavigation<NavType>();
 
   return (
@@ -56,54 +52,43 @@ export default function SignUpScreen() {
 
             {/* Glass Card */}
             <View style={styles.glassCard}>
-              {type === "choose" && (
-                <>
-                  <Text style={styles.title}>{t("sign_up_title")}</Text>
-                  <Text style={styles.subtitle}>{t("choose_how_to_use")}</Text>
+              <Text style={styles.title}>{t("sign_up_title")}</Text>
+              <Text style={styles.subtitle}>{t("choose_how_to_use")}</Text>
 
-                  <View style={styles.buttonsContainer}>
-                    {/* REGULAR USER → EMAIL FIRST */}
-                    <TouchableOpacity
-                      style={styles.primaryButton}
-                      onPress={() => navigation.navigate("EnterEmail")}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.primaryButtonText}>
-                        {t("regular_user")}
-                      </Text>
-                    </TouchableOpacity>
+              <View style={styles.buttonsContainer}>
+                {/* REGULAR USER → EMAIL FIRST */}
+                <TouchableOpacity
+                  style={styles.primaryButton}
+                  onPress={() => navigation.navigate("EnterEmail", { userType: "regular" })}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {t("regular_user")}
+                  </Text>
+                </TouchableOpacity>
 
-                    {/* DRIVER */}
-                    <TouchableOpacity
-                      style={styles.secondaryButton}
-                      onPress={() => setType("driver")}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.secondaryButtonText}>
-                        {t("driver")}
-                      </Text>
-                    </TouchableOpacity>
+                {/* DRIVER → EMAIL FIRST */}
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={() => navigation.navigate("EnterEmail", { userType: "driver" })}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.secondaryButtonText}>
+                    {t("driver")}
+                  </Text>
+                </TouchableOpacity>
 
-                    {/* BUSINESS OWNER */}
-                    <TouchableOpacity
-                      style={styles.secondaryButton}
-                      onPress={() => navigation.navigate("BusinessOwnerSignup")}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.secondaryButtonText}>
-                        {t("business_owner")}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              )}
-
-              {type === "driver" && (
-                <>
-                  <Text style={styles.modeLabel}>{t("driver_signup")}</Text>
-                  <DriverSignupForm onBack={() => setType("choose")} />
-                </>
-              )}
+                {/* BUSINESS OWNER → EMAIL FIRST */}
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={() => navigation.navigate("EnterEmail", { userType: "owner" })}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.secondaryButtonText}>
+                    {t("business_owner")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
