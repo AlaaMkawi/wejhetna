@@ -9,4 +9,4 @@ GPS
 npm install @react-native-community/geolocation
 npm install axios
 npm install @react-native-community/blur
-
+npm install -g npm@11.7.0 /*lena 24/12/2025*/

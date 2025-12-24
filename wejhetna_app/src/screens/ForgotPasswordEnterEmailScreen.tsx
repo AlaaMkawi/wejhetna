@@ -79,6 +79,11 @@ export default function ForgotPasswordEnterEmailScreen({ navigation }: any) {
       if (!res.ok) {
         let errorMessage = json?.detail || t("failed_to_send_code") || "Failed to send verification code";
         
+        // Check if it's an email not found error
+        if (res.status === 404 || errorMessage.toLowerCase().includes("not found") || errorMessage.toLowerCase().includes("email")) {
+          errorMessage = t("email_not_found") || "Email not found. Please check your email address or sign up for a new account.";
+        }
+        
         setErrorModal({
           visible: true,
           title: t("error") || "Error",

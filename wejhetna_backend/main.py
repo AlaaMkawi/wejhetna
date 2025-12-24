@@ -537,7 +537,68 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
         orm_mode = True
 
 
+# =========================
+# PROFILE RESPONSE MODELS
+# =========================
 
+class UserProfileOut(BaseModel):
+    id: int
+    full_name: str
+    username: str
+    email: str
+    phone: str
+    role: str
+    status: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+class DriverVehicleOut(BaseModel):
+    id: int
+    car_type: str
+    plate_number: str
+    production_year: int
+    car_license_image_url: str
+    car_insurance_image_url: str
+    car_photos_urls: Optional[List[str]] = None
+    status: str
+
+    class Config:
+        orm_mode = True
+
+class DriverProfileOut(BaseModel):
+    user: UserProfileOut
+    vehicle: Optional[DriverVehicleOut] = None
+    driver_status: str
+
+    class Config:
+        orm_mode = True
+
+class BusinessPlaceOut(BaseModel):
+    id: int
+    name: str
+    name_ar: Optional[str] = None
+    name_he: Optional[str] = None
+    city_name: Optional[str] = None
+    category_name: Optional[str] = None
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    opening_hours: Optional[str] = None
+    main_image_url: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+    class Config:
+        orm_mode = True
+
+class BusinessOwnerProfileOut(BaseModel):
+    user: UserProfileOut
+    place: Optional[BusinessPlaceOut] = None
+    request_status: Optional[str] = None
+
+    class Config:
+        orm_mode = True
 
 
 @app.get(
@@ -1244,9 +1305,10 @@ def request_password_reset(data: RequestPasswordResetRequest, db: Session = Depe
     # Check if email exists in database
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
-        # Don't reveal if email exists or not (security best practice)
-        # Still return success to prevent email enumeration
-        return {"success": True, "message": "If the email exists, a reset code has been sent."}
+        raise HTTPException(
+            status_code=404,
+            detail="Email not found. Please check your email address or sign up for a new account."
+        )
 
     # Generate verification code
     code = generate_verification_code()
@@ -2300,3 +2362,408 @@ def delete_user(
     db.commit()
 
     return {"detail": "User deleted successfully"}
+
+
+# =========================
+# USER PROFILE ENDPOINTS
+# =========================
+
+@app.get("/users/{user_id}", response_model=UserProfileOut)
+def get_user_profile(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get basic user profile information.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return UserProfileOut(
+        id=user.id,
+        full_name=user.full_name,
+        username=user.username,
+        email=user.email,
+        phone=user.phone,
+        role=user.role.value,
+        status=user.status.value,
+        created_at=user.created_at,
+    )
+
+
+@app.get("/users/{user_id}/driver-profile", response_model=DriverProfileOut)
+def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get driver profile with vehicle information.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.role != UserRole.DRIVER:
+        raise HTTPException(status_code=400, detail="User is not a driver")
+
+    driver_profile = db.query(DriverProfile).filter(DriverProfile.user_id == user_id).first()
+    if not driver_profile:
+        return DriverProfileOut(
+            user=UserProfileOut(
+                id=user.id,
+                full_name=user.full_name,
+                username=user.username,
+                email=user.email,
+                phone=user.phone,
+                role=user.role.value,
+                status=user.status.value,
+                created_at=user.created_at,
+            ),
+            vehicle=None,
+            driver_status="N/A",
+        )
+
+    # Get the most recent vehicle
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == driver_profile.id)
+        .order_by(DriverVehicle.id.desc())
+        .first()
+    )
+
+    vehicle_out = None
+    if vehicle:
+        vehicle_out = DriverVehicleOut(
+            id=vehicle.id,
+            car_type=vehicle.car_type,
+            plate_number=vehicle.plate_number,
+            production_year=vehicle.production_year,
+            car_license_image_url=vehicle.car_license_image_url,
+            car_insurance_image_url=vehicle.car_insurance_image_url,
+            car_photos_urls=vehicle.car_photos_urls,
+            status=vehicle.status.value,
+        )
+
+    return DriverProfileOut(
+        user=UserProfileOut(
+            id=user.id,
+            full_name=user.full_name,
+            username=user.username,
+            email=user.email,
+            phone=user.phone,
+            role=user.role.value,
+            status=user.status.value,
+            created_at=user.created_at,
+        ),
+        vehicle=vehicle_out,
+        driver_status=driver_profile.driver_status.value,
+    )
+
+
+@app.get("/users/{user_id}/business-owner-profile", response_model=BusinessOwnerProfileOut)
+def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get business owner profile with place information.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.role != UserRole.BUSINESS_OWNER:
+        raise HTTPException(status_code=400, detail="User is not a business owner")
+
+    # Get the most recent place request
+    place_request = (
+        db.query(BusinessOwnerPlaceRequest)
+        .filter(BusinessOwnerPlaceRequest.user_id == user_id)
+        .order_by(BusinessOwnerPlaceRequest.id.desc())
+        .first()
+    )
+
+    place_out = None
+    request_status = None
+
+    if place_request:
+        request_status = place_request.status.value
+
+        # If request is APPROVED, try to find the actual Place record by owner_user_id
+        # This handles both cases: existing place (existing_place_id) and new place (created on approval)
+        if place_request.status == OwnerPlaceRequestStatus.APPROVED:
+            # First, try to find place by owner_user_id (works for both existing and new places)
+            place = db.query(Place).filter(Place.owner_user_id == user_id).first()
+            
+            if place:
+                city = db.query(City).filter(City.id == place.city_id).first()
+                category = db.query(Category).filter(
+                    Category.id == place.category_id).first() if place.category_id else None
+
+                # Get location coordinates if available
+                location = db.query(Location).filter(Location.id == place.location_id).first()
+                lat, lon = None, None
+                if location and location.geom:
+                    try:
+                        result = db.execute(
+                            func.ST_AsText(func.ST_Transform(location.geom, 4326))
+                        ).scalar()
+                        if result:
+                            import re
+                            match = re.search(r'POINT\(([\d.]+)\s+([\d.]+)\)', result)
+                            if match:
+                                lon, lat = float(match.group(1)), float(match.group(2))
+                    except:
+                        pass
+
+                place_out = BusinessPlaceOut(
+                    id=place.id,
+                    name=place.name,
+                    name_ar=place.name_ar,
+                    name_he=place.name_he,
+                    city_name=city.name_ar if city else None,
+                    category_name=category.name_ar if category else None,
+                    description=place.description,
+                    phone=place.phone,
+                    opening_hours=place.opening_hours,
+                    main_image_url=place.main_image_url,
+                    lat=lat,
+                    lon=lon,
+                )
+        elif place_request.existing_place_id:
+            # If there's an existing place ID (for pending requests that claim existing places)
+            place = db.query(Place).filter(Place.id == place_request.existing_place_id).first()
+            if place:
+                city = db.query(City).filter(City.id == place.city_id).first()
+                category = db.query(Category).filter(
+                    Category.id == place.category_id).first() if place.category_id else None
+
+                # Get location coordinates if available
+                location = db.query(Location).filter(Location.id == place.location_id).first()
+                lat, lon = None, None
+                if location and location.geom:
+                    try:
+                        result = db.execute(
+                            func.ST_AsText(func.ST_Transform(location.geom, 4326))
+                        ).scalar()
+                        if result:
+                            import re
+                            match = re.search(r'POINT\(([\d.]+)\s+([\d.]+)\)', result)
+                            if match:
+                                lon, lat = float(match.group(1)), float(match.group(2))
+                    except:
+                        pass
+
+                place_out = BusinessPlaceOut(
+                    id=place.id,
+                    name=place.name,
+                    name_ar=place.name_ar,
+                    name_he=place.name_he,
+                    city_name=city.name_ar if city else None,
+                    category_name=category.name_ar if category else None,
+                    description=place.description,
+                    phone=place.phone,
+                    opening_hours=place.opening_hours,
+                    main_image_url=place.main_image_url,
+                    lat=lat,
+                    lon=lon,
+                )
+        
+        # If still no place found, use data from the request itself (for pending requests)
+        if not place_out:
+            city = db.query(City).filter(City.id == place_request.city_id).first()
+            category = db.query(Category).filter(
+                Category.id == place_request.category_id).first() if place_request.category_id else None
+
+            place_out = BusinessPlaceOut(
+                id=0,
+                name=place_request.name,
+                name_ar=place_request.name_ar,
+                name_he=place_request.name_he,
+                city_name=city.name_ar if city else None,
+                category_name=category.name_ar if category else None,
+                description=place_request.description,
+                phone=place_request.phone,
+                opening_hours=place_request.opening_hours,
+                main_image_url=place_request.main_image_url,
+                lat=place_request.lat,
+                lon=place_request.lon,
+            )
+
+    return BusinessOwnerProfileOut(
+        user=UserProfileOut(
+            id=user.id,
+            full_name=user.full_name,
+            username=user.username,
+            email=user.email,
+            phone=user.phone,
+            role=user.role.value,
+            status=user.status.value,
+            created_at=user.created_at,
+        ),
+        place=place_out,
+        request_status=request_status,
+    )
+
+
+# =========================
+# CHANGE PASSWORD ENDPOINT
+# =========================
+
+class ChangePasswordRequest(BaseModel):
+    user_id: int
+    current_password: str
+    new_password: str
+
+class ChangePasswordResponse(BaseModel):
+    success: bool
+    message: str
+
+@app.post("/auth/change-password", response_model=ChangePasswordResponse)
+def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
+    """Change user password - requires current password verification."""
+    # Find user
+    user = db.query(User).filter(User.id == data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify current password
+    if not verify_password(data.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    
+    # Validate new password requirements (same as signup)
+    import re
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not re.search(r'[A-Z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
+    if not re.search(r'[a-z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
+    if not re.search(r'[0-9]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one number")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one symbol")
+    
+    # Check if new password is same as current password
+    if verify_password(data.new_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+    
+    # Hash new password
+    password_hash = hash_password(data.new_password)
+    
+    # Update user password
+    user.password_hash = password_hash
+    
+    db.commit()
+    
+    return ChangePasswordResponse(
+        success=True,
+        message="Password has been changed successfully"
+    )
+
+
+# =========================
+# UPDATE PHONE NUMBER ENDPOINT
+# =========================
+
+class UpdatePhoneRequest(BaseModel):
+    user_id: int
+    new_phone: str
+
+class UpdatePhoneResponse(BaseModel):
+    success: bool
+    message: str
+
+@app.put("/users/{user_id}/phone", response_model=UpdatePhoneResponse)
+def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depends(get_db)):
+    """Update user phone number - validates that phone is not already in use by another user."""
+    # Verify user_id matches
+    if data.user_id != user_id:
+        raise HTTPException(status_code=400, detail="User ID mismatch")
+    
+    # Find user
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if phone number is the same (no change needed)
+    if user.phone == data.new_phone.strip():
+        raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
+    
+    # Check if phone number already exists for another user
+    existing_user = db.query(User).filter(
+        User.phone == data.new_phone.strip(),
+        User.id != user_id
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Phone number is already in use by another user"
+        )
+    
+    # Validate phone format (exactly 10 digits starting with 05)
+    import re
+    phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
+    if len(phone_cleaned) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must be exactly 10 digits"
+        )
+    if not phone_cleaned.startswith('05'):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must start with 05"
+        )
+    
+    # Update phone number
+    user.phone = data.new_phone.strip()
+    
+    db.commit()
+    db.refresh(user)
+    
+    return UpdatePhoneResponse(
+        success=True,
+        message="Phone number has been updated successfully"
+    )
+
+
+# =========================
+# UPDATE BUSINESS PLACE PHONE NUMBER ENDPOINT
+# =========================
+
+class UpdateBusinessPhoneRequest(BaseModel):
+    new_phone: str
+
+class UpdateBusinessPhoneResponse(BaseModel):
+    success: bool
+    message: str
+
+@app.put("/places/{place_id}/phone", response_model=UpdateBusinessPhoneResponse)
+def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: Session = Depends(get_db)):
+    """Update business place phone number - validates format (10 digits starting with 05)."""
+    # Find place
+    place = db.query(Place).filter(Place.id == place_id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+    
+    # Check if phone number is the same (no change needed)
+    if place.phone == data.new_phone.strip():
+        raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
+    
+    # Validate phone format (exactly 10 digits starting with 05)
+    import re
+    phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
+    if len(phone_cleaned) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must be exactly 10 digits"
+        )
+    if not phone_cleaned.startswith('05'):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must start with 05"
+        )
+    
+    # Update phone number
+    place.phone = data.new_phone.strip()
+    
+    db.commit()
+    db.refresh(place)
+    
+    return UpdateBusinessPhoneResponse(
+        success=True,
+        message="Business phone number has been updated successfully"
+    )

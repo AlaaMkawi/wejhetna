@@ -60,6 +60,10 @@ export type RootStackParamList = {
     adminUserId: number;
     role: "ADMIN";
   } | undefined;
+  Profile: {
+    userId?: number;
+  } | undefined;
+  UserTabs: undefined;
 };
 export type AuthStackParamList = {
   Login: undefined;

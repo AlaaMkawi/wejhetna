@@ -29,6 +29,8 @@ import DriverSignupScreen from "../screens/DriverSignupScreen";
 import ForgotPasswordEnterEmailScreen from "../screens/ForgotPasswordEnterEmailScreen";
 import ForgotPasswordVerifyCodeScreen from "../screens/ForgotPasswordVerifyCodeScreen";
 import ResetPasswordScreen from "../screens/ResetPasswordScreen";
+import ProfileScreen from "../screens/ProfileScreen";
+import UserTabNavigator from "./UserTabNavigator";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -139,10 +141,15 @@ export default function AppNavigator() {
         options={{ title: "Admin Home" }}
       />
       <Stack.Screen
-  name="RegularHome"
-  component={RegularHomeScreen}
-  options={{ headerShown: false }}
-/>
+        name="RegularHome"
+        component={RegularHomeScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="UserTabs"
+        component={UserTabNavigator}
+        options={{ headerShown: false }}
+      />
       <Stack.Screen
   name="AdminDriverDetails"
   component={AdminDriverDetailsScreen}
@@ -189,6 +196,12 @@ export default function AppNavigator() {
   name="RejectedUsers"
   component={RejectedUsersScreen}
   options={{ title: "Rejected Users" }}
+/>
+
+<Stack.Screen
+  name="Profile"
+  component={ProfileScreen}
+  options={{ headerShown: false }}
 />
 
       </Stack.Navigator>
