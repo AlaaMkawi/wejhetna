@@ -67,7 +67,7 @@ export default function ForgotPasswordEnterEmailScreen({ navigation }: any) {
       let json;
       try {
         json = await res.json();
-      } catch (e) {
+      } catch {
         setErrorModal({
           visible: true,
           title: t("error") || "Error",
@@ -95,11 +95,11 @@ export default function ForgotPasswordEnterEmailScreen({ navigation }: any) {
       // ✅ Success → show success modal then go to VerifyCode
       setShowSuccessModal(true);
 
-    } catch (e: any) {
+    } catch {
       setErrorModal({
         visible: true,
         title: t("error") || "Error",
-        message: t("network_error_message") || e?.message || t("network_error") || "Something went wrong",
+        message: t("network_error_message") || t("network_error") || "Something went wrong",
       });
     } finally {
       setLoading(false);

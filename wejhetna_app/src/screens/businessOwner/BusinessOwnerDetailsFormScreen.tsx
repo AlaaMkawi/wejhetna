@@ -49,7 +49,7 @@ export default function BusinessOwnerDetailsFormScreen() {
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const params = route.params;
-  const userId = params?.userId ?? 0;
+  const personalInfo = params?.personalInfo;
   const lat = params?.lat ?? 0;
   const lon = params?.lon ?? 0;
   const source = params?.source ?? "MAP_PICK";
@@ -359,9 +359,15 @@ export default function BusinessOwnerDetailsFormScreen() {
     try {
       setSubmitting(true);
 
-      // Prepare payload - ensure all fields are properly formatted
+      // Prepare payload - include personal info to create user
       const payload: BusinessOwnerPlaceRequestPayload = {
-        user_id: userId,
+        // Personal info (will create user in backend)
+        full_name: personalInfo?.full_name || "",
+        username: personalInfo?.username || "",
+        email: personalInfo?.email || "",
+        phone: personalInfo?.phone || "", // User's personal phone
+        password: personalInfo?.password || "",
+        // Business and location info
         existing_place_id: existingPlaceId ?? null,
         lat,
         lon,
@@ -373,7 +379,7 @@ export default function BusinessOwnerDetailsFormScreen() {
         city_id: cityId!,
         category_id: categoryId!,
         description: description.trim() || null,
-        phone: hasPhone ? phone : null,
+        business_phone: hasPhone ? phone : null, // Business phone (optional)
         opening_hours: openingHours.trim() || null,
         main_image_url: null,
         social_links: null,

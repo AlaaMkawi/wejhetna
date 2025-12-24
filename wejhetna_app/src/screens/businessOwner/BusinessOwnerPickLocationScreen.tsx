@@ -33,8 +33,8 @@ export default function BusinessOwnerPickLocationScreen() {
   const route = useRoute<BusinessOwnerPickLocationRoute>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  // userId will be used when submitting place request
-  const { userId } = route.params;
+  // personalInfo will be passed to details form and used to create user
+  const { personalInfo } = route.params;
 
   const [selectedLat, setSelectedLat] = useState<number | null>(31.25);
   const [selectedLon, setSelectedLon] = useState<number | null>(34.8);
@@ -78,7 +78,7 @@ export default function BusinessOwnerPickLocationScreen() {
                   text: "Claim This Place",
                   onPress: () => {
                     navigation.navigate("BusinessOwnerDetailsForm", {
-                      userId,
+                      personalInfo,
                       lat: latitude,
                       lon: longitude,
                       source: "GPS_WITH_OSM",
@@ -92,7 +92,7 @@ export default function BusinessOwnerPickLocationScreen() {
                   style: "cancel",
                   onPress: () => {
                     navigation.navigate("BusinessOwnerDetailsForm", {
-                      userId,
+                      personalInfo,
                       lat: latitude,
                       lon: longitude,
                       source: "GPS_NO_OSM",
@@ -106,7 +106,7 @@ export default function BusinessOwnerPickLocationScreen() {
           } else {
             // NO_PLACE - can create new place
             navigation.navigate("BusinessOwnerDetailsForm", {
-              userId,
+              personalInfo,
               lat: latitude,
               lon: longitude,
               source: "GPS_NO_OSM",
@@ -161,7 +161,7 @@ export default function BusinessOwnerPickLocationScreen() {
               text: "Claim This Place",
               onPress: () => {
                 navigation.navigate("BusinessOwnerDetailsForm", {
-                  userId,
+                  personalInfo,
                   lat: selectedLat,
                   lon: selectedLon,
                   source: "MAP_PICK",
@@ -175,7 +175,7 @@ export default function BusinessOwnerPickLocationScreen() {
               style: "cancel",
               onPress: () => {
                 navigation.navigate("BusinessOwnerDetailsForm", {
-                  userId,
+                  personalInfo,
                   lat: selectedLat,
                   lon: selectedLon,
                   source: "MAP_PICK",
@@ -189,7 +189,7 @@ export default function BusinessOwnerPickLocationScreen() {
       } else {
         // NO_PLACE - can create new place
         navigation.navigate("BusinessOwnerDetailsForm", {
-          userId,
+          personalInfo,
           lat: selectedLat,
           lon: selectedLon,
           source: "MAP_PICK",

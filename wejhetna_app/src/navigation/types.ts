@@ -22,9 +22,23 @@ export type RootStackParamList = {
   AdminTabs: { adminUserId: number; role: "ADMIN" };
   AdminDriverDetails: { adminUserId: number; role: "ADMIN"; driver: DriverApplication };
   BusinessOwnerSignup: { email?: string };
-  BusinessOwnerPickLocation: { userId: number };
+  BusinessOwnerPickLocation: {
+    personalInfo: {
+      full_name: string;
+      username: string;
+      email: string;
+      phone: string;
+      password: string;
+    };
+  };
   BusinessOwnerDetailsForm: {
-    userId: number;
+    personalInfo: {
+      full_name: string;
+      username: string;
+      email: string;
+      phone: string;
+      password: string;
+    };
     lat: number;
     lon: number;
     source: string; // "MAP_PICK" | "GPS_NO_OSM" | "GPS_WITH_OSM"
