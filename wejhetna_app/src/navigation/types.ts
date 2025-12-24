@@ -6,10 +6,14 @@ export type RootStackParamList = {
   SignUp: undefined;
   AdminLogin: undefined;
   AdminDrivers: { adminUserId: number; role: "ADMIN";};
-  EnterEmail: undefined;
-  VerifyEmail: { email: string };
+  EnterEmail: { userType?: "regular" | "driver" | "owner" };
+  VerifyEmail: { email: string; userType?: "regular" | "driver" | "owner" };
   RegularSignup: { email: string };
+  DriverSignup: { email: string };
   UserLogin: { mode: "REGULAR" | "DRIVER" };
+  ForgotPasswordEnterEmail: undefined;
+  ForgotPasswordVerifyCode: { email: string };
+  ResetPassword: { email: string; code: string };
  
   AdminPanel: undefined;
   AdminHomeScreen: { adminUserId: number; role: "ADMIN" };
@@ -17,7 +21,7 @@ export type RootStackParamList = {
   RegularHome: undefined;
   AdminTabs: { adminUserId: number; role: "ADMIN" };
   AdminDriverDetails: { adminUserId: number; role: "ADMIN"; driver: DriverApplication };
-  BusinessOwnerSignup: undefined;
+  BusinessOwnerSignup: { email?: string };
   BusinessOwnerPickLocation: { userId: number };
   BusinessOwnerDetailsForm: {
     userId: number;
@@ -56,6 +60,10 @@ export type RootStackParamList = {
     adminUserId: number;
     role: "ADMIN";
   } | undefined;
+  Profile: {
+    userId?: number;
+  } | undefined;
+  UserTabs: undefined;
 };
 export type AuthStackParamList = {
   Login: undefined;

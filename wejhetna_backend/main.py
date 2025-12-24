@@ -51,6 +51,10 @@ from schemas import (
     VerifyEmailRequest,
     VerifyEmailResponse,
     ResendCodeRequest,
+    RequestPasswordResetRequest,
+    VerifyPasswordResetCodeRequest,
+    ResetPasswordRequest,
+    PasswordResetResponse,
 )
 import requests
 
@@ -172,21 +176,55 @@ def generate_verification_code() -> str:
     return str(random.randint(100000, 999999))
 
 
-def send_verification_email(to_email: str, code: str, full_name: str = ""):
-    """Send verification code email to user."""
-    subject = "Wejhetna - Email Verification Code"
-    body = f"""Hello {full_name if full_name else 'there'},
+def send_verification_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
+    """Send verification code email to user in their preferred language."""
+    
+    # Email templates for different languages
+    if language == "he":
+        # Hebrew
+        subject = "ווג'הטנה - קוד אימות אימייל"
+        body = f"""שלום {full_name if full_name else 'שלום'},
+
+תודה שנרשמת לוג'הטנה!
+
+קוד אימות האימייל שלך הוא: {code}
+
+קוד זה יפוג תוקף בעוד 2 דקות.
+
+אם לא נרשמת לוג'הטנה, אנא התעלם מהאימייל הזה.
+
+בברכה,
+צוות ווג'הטנה"""
+    elif language == "en":
+        # English
+        subject = "Wejhetna - Email Verification Code"
+        body = f"""Hello {full_name if full_name else 'there'},
 
 Thank you for signing up with Wejhetna!
 
 Your email verification code is: {code}
 
-This code will expire in 15 minutes.
+This code will expire in 2 minutes.
 
 If you didn't sign up for Wejhetna, please ignore this email.
 
 Best regards,
 Wejhetna Team"""
+    else:
+        # Arabic (default)
+        subject = "وجهتنا - رمز التحقق من البريد الإلكتروني"
+        body = f"""مرحباً {full_name if full_name else ''},
+
+شكراً لك على التسجيل في وجهتنا!
+
+رمز التحقق من بريدك الإلكتروني هو: {code}
+
+سينتهي هذا الرمز خلال دقيقتين.
+
+إذا لم تقم بالتسجيل في وجهتنا، يرجى تجاهل هذا البريد الإلكتروني.
+
+مع تحياتنا،
+فريق وجهتنا"""
     
     send_email(to_email, subject, body)
 
@@ -201,7 +239,7 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
     
     # Generate new code
     code = generate_verification_code()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
     
     verification = EmailVerification(
         user_id=user_id,
@@ -223,7 +261,57 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
 # =========================
 
 
+def send_password_reset_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
+    """Send password reset code email to user in their preferred language."""
 
+    # Email templates for different languages
+    if language == "he":
+        # Hebrew
+        subject = "ווג'הטנה - קוד איפוס סיסמה"
+        body = f"""שלום {full_name if full_name else 'שלום'},
+
+ביקשת לאפס את הסיסמה שלך בוג'הטנה.
+
+קוד איפוס הסיסמה שלך הוא: {code}
+
+קוד זה יפוג תוקף בעוד 2 דקות.
+
+אם לא ביקשת לאפס את הסיסמה, אנא התעלם מהאימייל הזה.
+
+בברכה,
+צוות ווג'הטנה"""
+    elif language == "en":
+        # English
+        subject = "Wejhetna - Password Reset Code"
+        body = f"""Hello {full_name if full_name else 'there'},
+
+You requested to reset your password on Wejhetna.
+
+Your password reset code is: {code}
+
+This code will expire in 2 minutes.
+
+If you didn't request a password reset, please ignore this email.
+
+Best regards,
+Wejhetna Team"""
+    else:
+        # Arabic (default)
+        subject = "وجهتنا - رمز إعادة تعيين كلمة المرور"
+        body = f"""مرحباً {full_name if full_name else ''},
+
+لقد طلبت إعادة تعيين كلمة المرور الخاصة بك في وجهتنا.
+
+رمز إعادة تعيين كلمة المرور هو: {code}
+
+سينتهي هذا الرمز خلال دقيقتين.
+
+إذا لم تطلب إعادة تعيين كلمة المرور، يرجى تجاهل هذا البريد الإلكتروني.
+
+مع تحياتنا،
+فريق وجهتنا"""
+
+    send_email(to_email, subject, body)
 
 
 
@@ -234,8 +322,7 @@ class RegularUserSignup(BaseModel):
     email: EmailStr
     phone: str
     password: str
-
-
+    password_confirmation: str
 class UserOut(BaseModel):
     id: int
     full_name: str
@@ -450,7 +537,68 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
         orm_mode = True
 
 
+# =========================
+# PROFILE RESPONSE MODELS
+# =========================
 
+class UserProfileOut(BaseModel):
+    id: int
+    full_name: str
+    username: str
+    email: str
+    phone: str
+    role: str
+    status: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+class DriverVehicleOut(BaseModel):
+    id: int
+    car_type: str
+    plate_number: str
+    production_year: int
+    car_license_image_url: str
+    car_insurance_image_url: str
+    car_photos_urls: Optional[List[str]] = None
+    status: str
+
+    class Config:
+        orm_mode = True
+
+class DriverProfileOut(BaseModel):
+    user: UserProfileOut
+    vehicle: Optional[DriverVehicleOut] = None
+    driver_status: str
+
+    class Config:
+        orm_mode = True
+
+class BusinessPlaceOut(BaseModel):
+    id: int
+    name: str
+    name_ar: Optional[str] = None
+    name_he: Optional[str] = None
+    city_name: Optional[str] = None
+    category_name: Optional[str] = None
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    opening_hours: Optional[str] = None
+    main_image_url: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+    class Config:
+        orm_mode = True
+
+class BusinessOwnerProfileOut(BaseModel):
+    user: UserProfileOut
+    place: Optional[BusinessPlaceOut] = None
+    request_status: Optional[str] = None
+
+    class Config:
+        orm_mode = True
 
 
 @app.get(
@@ -637,17 +785,96 @@ def reject_business_owner_request(
 
 @app.post("/auth/signup/regular", response_model=UserOut)
 def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
+    if data.password != data.password_confirmation:
+        raise HTTPException(
+            status_code=400,
+            detail="Passwords do not match",
+        )
+    import re
+    if not re.match(r'^[a-zA-Z\u0590-\u05FF\u0600-\u06FF\s]+$', data.full_name.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Full name should contain only letters"
+        )
+
+    # Validate username - at least 3 characters, alphanumeric and underscore
+    if len(data.username.strip()) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be at least 3 characters"
+        )
+    if not re.match(r'^[a-zA-Z0-9_]+$', data.username.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Username can only contain letters, numbers, and underscore"
+        )
+
+    # Validate phone - exactly 10 digits starting with 05
+    if not re.match(r'^05\d{8}$', data.phone.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone must be 10 digits starting with 05"
+        )
+
+    # Validate password - at least 8 chars, uppercase, lowercase, number, symbol
+    if len(data.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters"
+        )
+    if not re.search(r'[A-Z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one uppercase letter"
+        )
+    if not re.search(r'[a-z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one lowercase letter"
+        )
+    if not re.search(r'[0-9]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one number"
+        )
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one symbol"
+        )
+
     # Check username or email already exists
+    # Check username, email, or phone already exists
     existing_user = db.query(User).filter(
-        or_(User.username == data.username, User.email == data.email)
+        or_(
+            User.username == data.username,
+            User.email == data.email,
+            User.phone == data.phone.strip()
+        )
     ).first()
 
     if existing_user:
-        raise HTTPException(
-            status_code=400,
-            detail="Username or email already exists",
-        )
-
+        # Check which field caused the conflict
+        if existing_user.username == data.username:
+            raise HTTPException(
+                status_code=400,
+                detail="Username already exists",
+            )
+        elif existing_user.email == data.email:
+            raise HTTPException(
+                status_code=400,
+                detail="Email already exists",
+            )
+        elif existing_user.phone == data.phone.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number already exists",
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="User already exists",
+            )
     # Hash password
     password_hash = hash_password(data.password)
     verified = db.query(EmailVerification).filter(
@@ -681,6 +908,94 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 @app.post("/auth/signup/driver", response_model=DriverSignupOut)
 def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
+    import re
+
+    # ============================
+    # VALIDATION
+    # ============================
+
+    # Validate ID number - exactly 9 digits
+    id_trimmed = data.id_card_image_url.strip()
+    if not re.match(r'^[0-9]{9}$', id_trimmed):
+        raise HTTPException(
+            status_code=400,
+            detail="ID number must be exactly 9 digits"
+        )
+
+    # Validate car type - at least 2 characters
+    car_type_trimmed = data.car_type.strip()
+    if len(car_type_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Car type should be at least 2 characters"
+        )
+
+    # Validate plate number - at least 5 characters and must include a digit
+    plate_trimmed = data.plate_number.strip()
+    if len(plate_trimmed) < 5 or not re.search(r'\d', plate_trimmed):
+        raise HTTPException(
+            status_code=400,
+            detail="Plate number should be at least 5 characters and include a digit"
+        )
+
+    # Validate production year - between 1990 and current year + 1
+    current_year = datetime.now().year
+    if not isinstance(data.production_year,
+                      int) or data.production_year < 1990 or data.production_year > current_year + 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Production year must be a valid number between 1990 and {current_year + 1}"
+        )
+
+    # Validate basic user fields (same as regular signup)
+    if not re.match(r'^[a-zA-Z\u0590-\u05FF\u0600-\u06FF\s]+$', data.full_name.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Full name should contain only letters"
+        )
+
+    if len(data.username.strip()) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be at least 3 characters"
+        )
+    if not re.match(r'^[a-zA-Z0-9_]+$', data.username.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Username can only contain letters, numbers, and underscore"
+        )
+
+    if not re.match(r'^05\d{8}$', data.phone.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone must be 10 digits starting with 05"
+        )
+
+    if len(data.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 8 characters"
+        )
+    if not re.search(r'[A-Z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one uppercase letter"
+        )
+    if not re.search(r'[a-z]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one lowercase letter"
+        )
+    if not re.search(r'[0-9]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one number"
+        )
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one symbol"
+        )
     # 1. Check if there is already a user with this username/email
     existing_user = (
         db.query(User)
@@ -876,9 +1191,9 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
             db.commit()
             db.refresh(existing_user)
 
-            # Send verification code
+            # Send verification code (default to Arabic if no language preference)
             verification = create_verification_code(existing_user.id, existing_user.email, db)
-            send_verification_email(existing_user.email, verification.code, existing_user.full_name)
+            send_verification_email(existing_user.email, verification.code, existing_user.full_name, language="ar")
 
             return BusinessOwnerSignupOut(
                 user=UserOut.model_validate(existing_user, from_attributes=True),
@@ -984,6 +1299,127 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     return {"success": True, "message": "Verification code has been resent"}
 
 
+@app.post("/auth/request-password-reset")
+def request_password_reset(data: RequestPasswordResetRequest, db: Session = Depends(get_db)):
+    """Request password reset code - sends email with verification code."""
+    # Check if email exists in database
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="Email not found. Please check your email address or sign up for a new account."
+        )
+
+    # Generate verification code
+    code = generate_verification_code()
+
+    # Create password reset verification record
+    verification = EmailVerification(
+        user_id=user.id,
+        email=data.email,
+        code=code,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+        is_used=False
+    )
+
+    db.add(verification)
+    db.commit()
+
+    # Send email with code
+    language = data.language if hasattr(data, 'language') and data.language else "ar"
+    send_password_reset_email(data.email, code, user.full_name, language=language)
+
+    return {"success": True, "message": "Password reset code has been sent to your email."}
+
+
+@app.post("/auth/verify-password-reset-code", response_model=PasswordResetResponse)
+def verify_password_reset_code(data: VerifyPasswordResetCodeRequest, db: Session = Depends(get_db)):
+    """Verify password reset code is valid."""
+    # Find the most recent unused verification code for this email
+    verification = (
+        db.query(EmailVerification)
+        .filter(
+            EmailVerification.email == data.email,
+            EmailVerification.code == data.code.strip(),
+            EmailVerification.is_used == False
+        )
+        .order_by(EmailVerification.created_at.desc())
+        .first()
+    )
+
+    if not verification:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    # Check if code is expired
+    if verification.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+
+    # Don't mark as used yet - will be marked when password is actually reset
+    # This allows user to verify code and then reset password
+
+    return PasswordResetResponse(
+        success=True,
+        message="Code verified successfully"
+    )
+
+
+@app.post("/auth/reset-password", response_model=PasswordResetResponse)
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Reset user password after code verification."""
+    # Find the most recent unused verification code
+    verification = (
+        db.query(EmailVerification)
+        .filter(
+            EmailVerification.email == data.email,
+            EmailVerification.code == data.code.strip(),
+            EmailVerification.is_used == False
+        )
+        .order_by(EmailVerification.created_at.desc())
+        .first()
+    )
+
+    if not verification:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    # Check if code is expired
+    if verification.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+
+    # Find user
+    user = db.query(User).filter(User.email == data.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate password requirements (same as signup)
+    import re
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not re.search(r'[A-Z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
+    if not re.search(r'[a-z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
+    if not re.search(r'[0-9]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one number")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one symbol")
+
+    # Hash new password
+    password_hash = hash_password(data.new_password)
+
+    # Update user password
+    user.password_hash = password_hash
+
+    # Mark verification code as used
+    verification.is_used = True
+
+    db.commit()
+
+    return PasswordResetResponse(
+        success=True,
+        message="Password has been reset successfully"
+    )
+
+
 @app.post("/auth/login", response_model=LoginResponse)
 def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = (
@@ -1027,14 +1463,15 @@ def request_email_verification(data: SendVerificationCodeRequest, db: Session = 
         user_id=None,
         email=data.email,
         code=code,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
         is_used=False
     )
 
     db.add(verification)
     db.commit()
 
-    send_verification_email(data.email, code)
+    language = data.language if hasattr(data, 'language') and data.language else "ar"
+    send_verification_email(data.email, code, full_name="", language=language)
 
     return {"success": True}
 
@@ -1751,7 +2188,49 @@ def create_business_owner_place_request(
                 status_code=400,
                 detail="This place already has an owner",
             )
+    # ===== VALIDATION: Business Details =====
+    # Validate business names (minimum 2 characters each)
+    name_trimmed = data.name.strip()
+    name_ar_trimmed = data.name_ar.strip()
+    name_he_trimmed = data.name_he.strip()
 
+    if len(name_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Business name (English) must be at least 2 characters"
+        )
+
+    if len(name_ar_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Business name (Arabic) must be at least 2 characters"
+        )
+
+    if len(name_he_trimmed) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Business name (Hebrew) must be at least 2 characters"
+        )
+
+    # Validate phone (if provided, must be 9 or 10 digits)
+    if data.phone:
+        phone_trimmed = data.phone.strip()
+        if phone_trimmed:
+            if not re.match(r'^[0-9]{9,10}$', phone_trimmed):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Phone number must be 9 or 10 digits (if provided)"
+                )
+
+    # Validate city_id and category_id exist
+    city = db.query(City).filter(City.id == data.city_id).first()
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+
+    category = db.query(Category).filter(Category.id == data.category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    # ===== END VALIDATION =====
     # יצירת רשומה לטבלת הבקשות (היסטוריית בקשות נשמרת)
     # NOTE: business_license_image_url, business_images_urls, social_media_account_name
     # are NOT set here because the database columns may not exist yet
@@ -1883,3 +2362,408 @@ def delete_user(
     db.commit()
 
     return {"detail": "User deleted successfully"}
+
+
+# =========================
+# USER PROFILE ENDPOINTS
+# =========================
+
+@app.get("/users/{user_id}", response_model=UserProfileOut)
+def get_user_profile(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get basic user profile information.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return UserProfileOut(
+        id=user.id,
+        full_name=user.full_name,
+        username=user.username,
+        email=user.email,
+        phone=user.phone,
+        role=user.role.value,
+        status=user.status.value,
+        created_at=user.created_at,
+    )
+
+
+@app.get("/users/{user_id}/driver-profile", response_model=DriverProfileOut)
+def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get driver profile with vehicle information.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.role != UserRole.DRIVER:
+        raise HTTPException(status_code=400, detail="User is not a driver")
+
+    driver_profile = db.query(DriverProfile).filter(DriverProfile.user_id == user_id).first()
+    if not driver_profile:
+        return DriverProfileOut(
+            user=UserProfileOut(
+                id=user.id,
+                full_name=user.full_name,
+                username=user.username,
+                email=user.email,
+                phone=user.phone,
+                role=user.role.value,
+                status=user.status.value,
+                created_at=user.created_at,
+            ),
+            vehicle=None,
+            driver_status="N/A",
+        )
+
+    # Get the most recent vehicle
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == driver_profile.id)
+        .order_by(DriverVehicle.id.desc())
+        .first()
+    )
+
+    vehicle_out = None
+    if vehicle:
+        vehicle_out = DriverVehicleOut(
+            id=vehicle.id,
+            car_type=vehicle.car_type,
+            plate_number=vehicle.plate_number,
+            production_year=vehicle.production_year,
+            car_license_image_url=vehicle.car_license_image_url,
+            car_insurance_image_url=vehicle.car_insurance_image_url,
+            car_photos_urls=vehicle.car_photos_urls,
+            status=vehicle.status.value,
+        )
+
+    return DriverProfileOut(
+        user=UserProfileOut(
+            id=user.id,
+            full_name=user.full_name,
+            username=user.username,
+            email=user.email,
+            phone=user.phone,
+            role=user.role.value,
+            status=user.status.value,
+            created_at=user.created_at,
+        ),
+        vehicle=vehicle_out,
+        driver_status=driver_profile.driver_status.value,
+    )
+
+
+@app.get("/users/{user_id}/business-owner-profile", response_model=BusinessOwnerProfileOut)
+def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get business owner profile with place information.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.role != UserRole.BUSINESS_OWNER:
+        raise HTTPException(status_code=400, detail="User is not a business owner")
+
+    # Get the most recent place request
+    place_request = (
+        db.query(BusinessOwnerPlaceRequest)
+        .filter(BusinessOwnerPlaceRequest.user_id == user_id)
+        .order_by(BusinessOwnerPlaceRequest.id.desc())
+        .first()
+    )
+
+    place_out = None
+    request_status = None
+
+    if place_request:
+        request_status = place_request.status.value
+
+        # If request is APPROVED, try to find the actual Place record by owner_user_id
+        # This handles both cases: existing place (existing_place_id) and new place (created on approval)
+        if place_request.status == OwnerPlaceRequestStatus.APPROVED:
+            # First, try to find place by owner_user_id (works for both existing and new places)
+            place = db.query(Place).filter(Place.owner_user_id == user_id).first()
+            
+            if place:
+                city = db.query(City).filter(City.id == place.city_id).first()
+                category = db.query(Category).filter(
+                    Category.id == place.category_id).first() if place.category_id else None
+
+                # Get location coordinates if available
+                location = db.query(Location).filter(Location.id == place.location_id).first()
+                lat, lon = None, None
+                if location and location.geom:
+                    try:
+                        result = db.execute(
+                            func.ST_AsText(func.ST_Transform(location.geom, 4326))
+                        ).scalar()
+                        if result:
+                            import re
+                            match = re.search(r'POINT\(([\d.]+)\s+([\d.]+)\)', result)
+                            if match:
+                                lon, lat = float(match.group(1)), float(match.group(2))
+                    except:
+                        pass
+
+                place_out = BusinessPlaceOut(
+                    id=place.id,
+                    name=place.name,
+                    name_ar=place.name_ar,
+                    name_he=place.name_he,
+                    city_name=city.name_ar if city else None,
+                    category_name=category.name_ar if category else None,
+                    description=place.description,
+                    phone=place.phone,
+                    opening_hours=place.opening_hours,
+                    main_image_url=place.main_image_url,
+                    lat=lat,
+                    lon=lon,
+                )
+        elif place_request.existing_place_id:
+            # If there's an existing place ID (for pending requests that claim existing places)
+            place = db.query(Place).filter(Place.id == place_request.existing_place_id).first()
+            if place:
+                city = db.query(City).filter(City.id == place.city_id).first()
+                category = db.query(Category).filter(
+                    Category.id == place.category_id).first() if place.category_id else None
+
+                # Get location coordinates if available
+                location = db.query(Location).filter(Location.id == place.location_id).first()
+                lat, lon = None, None
+                if location and location.geom:
+                    try:
+                        result = db.execute(
+                            func.ST_AsText(func.ST_Transform(location.geom, 4326))
+                        ).scalar()
+                        if result:
+                            import re
+                            match = re.search(r'POINT\(([\d.]+)\s+([\d.]+)\)', result)
+                            if match:
+                                lon, lat = float(match.group(1)), float(match.group(2))
+                    except:
+                        pass
+
+                place_out = BusinessPlaceOut(
+                    id=place.id,
+                    name=place.name,
+                    name_ar=place.name_ar,
+                    name_he=place.name_he,
+                    city_name=city.name_ar if city else None,
+                    category_name=category.name_ar if category else None,
+                    description=place.description,
+                    phone=place.phone,
+                    opening_hours=place.opening_hours,
+                    main_image_url=place.main_image_url,
+                    lat=lat,
+                    lon=lon,
+                )
+        
+        # If still no place found, use data from the request itself (for pending requests)
+        if not place_out:
+            city = db.query(City).filter(City.id == place_request.city_id).first()
+            category = db.query(Category).filter(
+                Category.id == place_request.category_id).first() if place_request.category_id else None
+
+            place_out = BusinessPlaceOut(
+                id=0,
+                name=place_request.name,
+                name_ar=place_request.name_ar,
+                name_he=place_request.name_he,
+                city_name=city.name_ar if city else None,
+                category_name=category.name_ar if category else None,
+                description=place_request.description,
+                phone=place_request.phone,
+                opening_hours=place_request.opening_hours,
+                main_image_url=place_request.main_image_url,
+                lat=place_request.lat,
+                lon=place_request.lon,
+            )
+
+    return BusinessOwnerProfileOut(
+        user=UserProfileOut(
+            id=user.id,
+            full_name=user.full_name,
+            username=user.username,
+            email=user.email,
+            phone=user.phone,
+            role=user.role.value,
+            status=user.status.value,
+            created_at=user.created_at,
+        ),
+        place=place_out,
+        request_status=request_status,
+    )
+
+
+# =========================
+# CHANGE PASSWORD ENDPOINT
+# =========================
+
+class ChangePasswordRequest(BaseModel):
+    user_id: int
+    current_password: str
+    new_password: str
+
+class ChangePasswordResponse(BaseModel):
+    success: bool
+    message: str
+
+@app.post("/auth/change-password", response_model=ChangePasswordResponse)
+def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
+    """Change user password - requires current password verification."""
+    # Find user
+    user = db.query(User).filter(User.id == data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify current password
+    if not verify_password(data.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    
+    # Validate new password requirements (same as signup)
+    import re
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if not re.search(r'[A-Z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
+    if not re.search(r'[a-z]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
+    if not re.search(r'[0-9]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one number")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.new_password):
+        raise HTTPException(status_code=400, detail="Password must contain at least one symbol")
+    
+    # Check if new password is same as current password
+    if verify_password(data.new_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+    
+    # Hash new password
+    password_hash = hash_password(data.new_password)
+    
+    # Update user password
+    user.password_hash = password_hash
+    
+    db.commit()
+    
+    return ChangePasswordResponse(
+        success=True,
+        message="Password has been changed successfully"
+    )
+
+
+# =========================
+# UPDATE PHONE NUMBER ENDPOINT
+# =========================
+
+class UpdatePhoneRequest(BaseModel):
+    user_id: int
+    new_phone: str
+
+class UpdatePhoneResponse(BaseModel):
+    success: bool
+    message: str
+
+@app.put("/users/{user_id}/phone", response_model=UpdatePhoneResponse)
+def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depends(get_db)):
+    """Update user phone number - validates that phone is not already in use by another user."""
+    # Verify user_id matches
+    if data.user_id != user_id:
+        raise HTTPException(status_code=400, detail="User ID mismatch")
+    
+    # Find user
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if phone number is the same (no change needed)
+    if user.phone == data.new_phone.strip():
+        raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
+    
+    # Check if phone number already exists for another user
+    existing_user = db.query(User).filter(
+        User.phone == data.new_phone.strip(),
+        User.id != user_id
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="Phone number is already in use by another user"
+        )
+    
+    # Validate phone format (exactly 10 digits starting with 05)
+    import re
+    phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
+    if len(phone_cleaned) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must be exactly 10 digits"
+        )
+    if not phone_cleaned.startswith('05'):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must start with 05"
+        )
+    
+    # Update phone number
+    user.phone = data.new_phone.strip()
+    
+    db.commit()
+    db.refresh(user)
+    
+    return UpdatePhoneResponse(
+        success=True,
+        message="Phone number has been updated successfully"
+    )
+
+
+# =========================
+# UPDATE BUSINESS PLACE PHONE NUMBER ENDPOINT
+# =========================
+
+class UpdateBusinessPhoneRequest(BaseModel):
+    new_phone: str
+
+class UpdateBusinessPhoneResponse(BaseModel):
+    success: bool
+    message: str
+
+@app.put("/places/{place_id}/phone", response_model=UpdateBusinessPhoneResponse)
+def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: Session = Depends(get_db)):
+    """Update business place phone number - validates format (10 digits starting with 05)."""
+    # Find place
+    place = db.query(Place).filter(Place.id == place_id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+    
+    # Check if phone number is the same (no change needed)
+    if place.phone == data.new_phone.strip():
+        raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
+    
+    # Validate phone format (exactly 10 digits starting with 05)
+    import re
+    phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
+    if len(phone_cleaned) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must be exactly 10 digits"
+        )
+    if not phone_cleaned.startswith('05'):
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must start with 05"
+        )
+    
+    # Update phone number
+    place.phone = data.new_phone.strip()
+    
+    db.commit()
+    db.refresh(place)
+    
+    return UpdateBusinessPhoneResponse(
+        success=True,
+        message="Business phone number has been updated successfully"
+    )

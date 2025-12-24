@@ -1,9 +1,9 @@
-// src/navigation/AdminTabNavigator.tsx
+// src/navigation/UserTabNavigator.tsx
 
 import React, { useEffect, useCallback } from 'react';
 import { View, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { createBottomTabNavigator, BottomTabBarProps } from "@react-navigation/bottom-tabs";
-import { AdminTabParamList, RootStackParamList } from "./types";
+import { RootStackParamList } from "./types";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
 import Animated, {
@@ -14,29 +14,27 @@ import Animated, {
   SharedValue,
 } from 'react-native-reanimated';
 
-import AdminHomeScreen from '../screens/Admin/AdminHomeScreen';
-import NewUsersScreen from '../screens/Admin/NewUsersScreen';
-import UsersSelectorScreen from '../screens/Admin/UsersSelectorScreen';
+import RegularHomeScreen from '../screens/RegularAccount/RegularHomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 
-import Feather from 'react-native-vector-icons/Feather';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-type AdminTabsProps = NativeStackScreenProps<RootStackParamList, "AdminTabs">;
+type UserTabsProps = NativeStackScreenProps<RootStackParamList, "UserTabs">;
 
-const Tab = createBottomTabNavigator<AdminTabParamList>();
+const Tab = createBottomTabNavigator();
 
-const INDICATOR_SIZE = SCREEN_WIDTH / 6;
+const DARK_TEAL = "#0f5b63";
+const SOFT_TEAL = "#3a8d96";
+const MINT = "#9bd3d8";
+const INDICATOR_SIZE = SCREEN_WIDTH / 3;
 const ANIMATION_DURATION = 350;
 
-const ICONS_MAP: { [key: string]: { name: string; Library: any } } = {
-  fitnessDummy: { name: 'tool', Library: Feather },
-  alreadyUsers: { name: 'users', Library: Feather },
-  AdminHome: { name: 'location-sharp', Library: Ionicons },
-  newUsers: { name: 'user-plus', Library: Feather },
-  profileDummy: { name: 'person', Library: Ionicons },
+const ICONS_MAP: { [key: string]: { name: string } } = {
+  Home: { name: 'home' },
+  Search: { name: 'search' },
+  Profile: { name: 'person' },
 };
 
 const MovingIndicator = ({ translateX }: { translateX: SharedValue<number> }) => {
@@ -51,7 +49,7 @@ const MovingIndicator = ({ translateX }: { translateX: SharedValue<number> }) =>
   );
 };
 
-const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
+const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
   const tabWidth = SCREEN_WIDTH / state.routes.length;
   const translateX = useSharedValue(0);
 
@@ -78,7 +76,7 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
           const { name } = route;
           const focused = state.index === index;
 
-          const { name: iconName, Library: Icon } = ICONS_MAP[name];
+          const { name: iconName } = ICONS_MAP[name] || { name: 'ellipse' };
 
           const onPress = () => {
             const event = navigation.emit({
@@ -88,9 +86,16 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
             });
 
             if (!focused && !event.defaultPrevented) {
-              navigation.navigate(name);
+              navigation.navigate(name as never);
             }
           };
+
+          // For Profile tab, use different icon names - ensure it's always visible
+          let displayIconName = focused ? iconName : `${iconName}-outline`;
+          if (name === 'Profile') {
+            // Use simpler, more reliable icon names
+            displayIconName = focused ? 'person' : 'person-outline';
+          }
 
           return (
             <TouchableOpacity
@@ -99,12 +104,34 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
               style={[styles.tabItem, { width: tabWidth }]}
               activeOpacity={0.8}
             >
-              <Icon
-                name={iconName}
-                size={24}
-                color={focused ? '#FFF' : '#5E5A8A'}
-                style={focused ? styles.activeIcon : styles.inactiveIcon}
-              />
+              <View style={focused ? styles.activeIconWrapper : styles.inactiveIconWrapper}>
+                {/* Multiple shadow layers for strong visibility */}
+                {focused && (
+                  <>
+                    {/* Outer dark shadow */}
+                    <Ionicons
+                      name={displayIconName}
+                      size={36}
+                      color="#000000"
+                      style={styles.iconShadowOuter}
+                    />
+                    {/* Middle shadow */}
+                    <Ionicons
+                      name={displayIconName}
+                      size={35}
+                      color={DARK_TEAL}
+                      style={styles.iconShadowMiddle}
+                    />
+                  </>
+                )}
+                {/* Active icon with app color (mint) on top */}
+                <Ionicons
+                  name={displayIconName}
+                  size={focused ? 34 : 26}
+                  color={focused ? MINT : DARK_TEAL}
+                  style={focused ? styles.activeIcon : styles.inactiveIcon}
+                />
+              </View>
             </TouchableOpacity>
           );
         })}
@@ -113,43 +140,28 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
   );
 };
 
-export default function AdminTabNavigator({ route }: AdminTabsProps) {
-  const { adminUserId, role } = route.params;
-
+export default function UserTabNavigator() {
   return (
     <Tab.Navigator
-      id="AdminTabs"
-      tabBar={(props) => <CustomAdminTabBar {...props} />}
+      id="UserTabs"
+      tabBar={(props) => <CustomUserTabBar {...props} />}
       screenOptions={{
         headerShown: false,
         tabBarHideOnKeyboard: true,
       }}
-      initialRouteName="AdminHome"
+      initialRouteName="Home"
     >
       <Tab.Screen
-        name="fitnessDummy"
-        component={UsersSelectorScreen}
-        initialParams={{ adminUserId, role }}
+        name="Home"
+        component={RegularHomeScreen}
       />
       <Tab.Screen
-        name="alreadyUsers"
-        component={UsersSelectorScreen}
-        initialParams={{ adminUserId, role }}
+        name="Search"
+        component={RegularHomeScreen}
       />
       <Tab.Screen
-        name="AdminHome"
-        component={AdminHomeScreen}
-        initialParams={{ adminUserId, role }}
-      />
-      <Tab.Screen
-        name="newUsers"
-        component={NewUsersScreen}
-        initialParams={{ adminUserId, role }}
-      />
-      <Tab.Screen
-        name="profileDummy"
+        name="Profile"
         component={ProfileScreen}
-        initialParams={{ userId: adminUserId }}
       />
     </Tab.Navigator>
   );
@@ -165,7 +177,7 @@ const styles = StyleSheet.create({
   },
   tabBarBackground: {
     flexDirection: 'row',
-    height: 65,
+    height: 70,
     width: '100%',
     backgroundColor: '#FFF',
     position: 'absolute',
@@ -173,22 +185,51 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 25,
     borderTopRightRadius: 25,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -5 },
+    shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.1,
-    shadowRadius: 10,
+    shadowRadius: 8,
     elevation: 10,
   },
   tabItem: {
     justifyContent: 'center',
     alignItems: 'center',
+    position: 'relative',
+  },
+  inactiveIconWrapper: {
+    paddingTop: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   inactiveIcon: {
+    // No special styling needed
+  },
+  activeIconWrapper: {
+    // Keep icon in same position as inactive icons - no jumping up
     paddingTop: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
   },
   activeIcon: {
+    // Mint color icon on top of shadow layers
+    zIndex: 13,
+    position: 'relative',
+  },
+  iconShadowOuter: {
+    // Outer black shadow for strong contrast
     position: 'absolute',
-    top: -10,
-    zIndex: 2,
+    top: 10, // Match paddingTop: 10
+    left: 2,
+    zIndex: 11,
+    opacity: 0.5,
+  },
+  iconShadowMiddle: {
+    // Middle dark teal shadow
+    position: 'absolute',
+    top: 10, // Match paddingTop: 10
+    left: 1,
+    zIndex: 12,
+    opacity: 0.7,
   },
   indicatorContainer: {
     position: 'absolute',
@@ -201,8 +242,9 @@ const styles = StyleSheet.create({
   indicatorBackground: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#ED1C7B',
+    backgroundColor: DARK_TEAL,
     borderRadius: INDICATOR_SIZE / 2,
     transform: [{ scaleY: 1.1 }],
   },
 });
+
