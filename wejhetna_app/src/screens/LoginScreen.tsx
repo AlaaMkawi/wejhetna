@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView, 
   Platform
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
@@ -102,6 +103,10 @@ export default function LoginScreen({ navigation }: Props) {
       const status = data.status;
       const userId = data.id;
 
+      // Store userId and role in AsyncStorage for profile access
+      await AsyncStorage.setItem("userId", userId.toString());
+      await AsyncStorage.setItem("userRole", role);
+
       if (role === "ADMIN") {
         if (status !== "ACTIVE") {
           setError(t("admin_not_active"));
@@ -121,9 +126,10 @@ export default function LoginScreen({ navigation }: Props) {
           setError(t("account_not_active"));
           return;
         }
+        // Navigate to UserTabs instead of RegularHome to show bottom navigation
         navigation.reset({
           index: 0,
-          routes: [{ name: "RegularHome" }],
+          routes: [{ name: "UserTabs" }],
         });
       }
     } catch (e: any) {
