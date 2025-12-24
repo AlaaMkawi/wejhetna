@@ -50,7 +50,13 @@ export interface BusinessOwnerNearbyCheckResponse {
 }
 
 export interface BusinessOwnerPlaceRequestPayload {
-  user_id: number;
+  // Personal info to create user (if user doesn't exist yet)
+  full_name: string;
+  username: string;
+  email: string;
+  phone: string; // User's personal phone
+  password: string;
+  // Business and location info
   existing_place_id?: number | null;
   lat: number;
   lon: number;
@@ -62,7 +68,7 @@ export interface BusinessOwnerPlaceRequestPayload {
   city_id: number;
   category_id: number;
   description?: string | null;
-  phone?: string | null;
+  business_phone?: string | null; // Business phone (different from user's personal phone)
   opening_hours?: string | null;
   main_image_url?: string | null;
   social_links?: string | null;
