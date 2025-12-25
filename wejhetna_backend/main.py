@@ -59,6 +59,7 @@ from schemas import (
 )
 import requests
 
+
 def find_osm_poi(lat: float, lon: float):
     """
     מחפש אובייקט OSM ליד הנקודה.
@@ -89,6 +90,7 @@ def find_osm_poi(lat: float, lon: float):
         print("OSM lookup failed:", e)
 
     return None
+
 
 app = FastAPI(
     title="Wejhetna Backend",
@@ -132,6 +134,8 @@ def send_email(to_email: str, subject: str, body: str):
         print("Subject:", subject)
         print("Body:", body)
         print("=============")
+
+
 # CORS (לאפליקציית React Native)
 app.add_middleware(
     CORSMiddleware,
@@ -140,6 +144,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 # --- Database session ---
 def get_db():
     db = SessionLocal()
@@ -147,7 +153,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 
 # ----- File uploads (local for now) -----
@@ -161,7 +166,6 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Import random for verification codes
 import random
-
 
 
 def hash_password(password: str) -> str:
@@ -179,7 +183,7 @@ def generate_verification_code() -> str:
 
 def send_verification_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
     """Send verification code email to user in their preferred language."""
-    
+
     # Email templates for different languages
     if language == "he":
         # Hebrew
@@ -226,7 +230,7 @@ Wejhetna Team"""
 
 مع تحياتنا،
 فريق وجهتنا"""
-    
+
     send_email(to_email, subject, body)
 
 
@@ -237,11 +241,11 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
         EmailVerification.user_id == user_id,
         EmailVerification.is_used == False
     ).update({"is_used": True})
-    
+
     # Generate new code
     code = generate_verification_code()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
-    
+
     verification = EmailVerification(
         user_id=user_id,
         email=email,
@@ -249,11 +253,11 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
         expires_at=expires_at,
         is_used=False
     )
-    
+
     db.add(verification)
     db.commit()
     db.refresh(verification)
-    
+
     return verification
 
 
@@ -315,8 +319,6 @@ Wejhetna Team"""
     send_email(to_email, subject, body)
 
 
-
-
 class RegularUserSignup(BaseModel):
     full_name: str
     username: str
@@ -324,6 +326,8 @@ class RegularUserSignup(BaseModel):
     phone: str
     password: str
     password_confirmation: str
+
+
 class UserOut(BaseModel):
     id: int
     full_name: str
@@ -335,6 +339,7 @@ class UserOut(BaseModel):
 
     class Config:
         orm_mode = True
+
 
 class UserListOut(BaseModel):
     id: int
@@ -350,6 +355,7 @@ class UserListOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverSignupRequest(BaseModel):
     # basic user info
     full_name: str
@@ -359,21 +365,22 @@ class DriverSignupRequest(BaseModel):
     password: str
 
     # driver documents
-    driver_license_image_url: str   # רישיון נהיגה
-    id_card_image_url: str          # תעודת זהות
+    driver_license_image_url: str  # רישיון נהיגה
+    id_card_image_url: str  # תעודת זהות
 
     # car info + docs
-    car_type: str                   # סוג רכב
-    plate_number: str               # מספר רכב
-    production_year: int            # שנת יצור
-    car_license_image_url: str      # רישיון רכב
-    car_insurance_image_url: str    # ביטוח רכב
+    car_type: str  # סוג רכב
+    plate_number: str  # מספר רכב
+    production_year: int  # שנת יצור
+    car_license_image_url: str  # רישיון רכב
+    car_insurance_image_url: str  # ביטוח רכב
 
     # optional photos
     car_photos_urls: Optional[List[str]] = None  # צילומים לרכב (לא חובה)
 
 
 from typing import Optional  # make sure this exists near the top
+
 
 class DriverSignupOut(BaseModel):
     user: UserOut
@@ -386,11 +393,10 @@ class DriverSignupOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
-
-
 
 
 class LoginRequest(BaseModel):
@@ -405,7 +411,8 @@ class LoginResponse(BaseModel):
     status: str
 
     class Config:
-        orm_mode = True    
+        orm_mode = True
+
 
 class BusinessOwnerSignup(BaseModel):
     full_name: str
@@ -414,12 +421,14 @@ class BusinessOwnerSignup(BaseModel):
     phone: str
     password: str
 
+
 class BusinessOwnerSignupOut(BaseModel):
     user: UserOut
     message: Optional[str] = None
 
     class Config:
         orm_mode = True
+
 
 class NearbyPlaceInfo(BaseModel):
     place_id: int
@@ -434,13 +443,19 @@ class BusinessOwnerNearbyCheckResponse(BaseModel):
     status: str  # "NO_PLACE" / "CAN_CLAIM" / "HAS_OWNER"
     candidate: Optional[NearbyPlaceInfo] = None
 
+
 class BusinessOwnerPlaceRequestCreate(BaseModel):
     """
     מה שהאפליקציה של בעל העסק תשלח
     אחרי שבחר מיקום + מילא פרטי העסק.
     """
 
-    user_id: int                          # ה-id של המשתמש (BUSINESS_OWNER)
+    # Personal info to create user (user will be created here if doesn't exist)
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str  # User's personal phone
+    password: str  # ה-id של המשתמש (BUSINESS_OWNER)
 
     # אם זה קליים על מקום קיים → existing_place_id != None
     existing_place_id: Optional[int] = None
@@ -448,7 +463,7 @@ class BusinessOwnerPlaceRequestCreate(BaseModel):
     # מיקום שבחר
     lat: float
     lon: float
-    source: str                           # "MAP_PICK" / "GPS_NO_OSM" / ...
+    source: str  # "MAP_PICK" / "GPS_NO_OSM" / ...
     osm_id: Optional[str] = None
 
     # פרטי העסק
@@ -456,10 +471,10 @@ class BusinessOwnerPlaceRequestCreate(BaseModel):
     name_ar: str
     name_he: str
     city_id: int
-    category_id: int                      # תמיד עסק → חובה קטגוריה
+    category_id: int  # תמיד עסק → חובה קטגוריה
 
     description: Optional[str] = None
-    phone: Optional[str] = None
+    business_phone: Optional[str] = None  # Business phone (different from user's personal phone)
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
     # NOTE: These fields are accepted in API but not saved to DB yet (UI-only)
@@ -467,8 +482,6 @@ class BusinessOwnerPlaceRequestCreate(BaseModel):
     business_images_urls: Optional[List[str]] = None  # תמונות העסק (UI only)
     social_links: Optional[str] = None
     social_media_account_name: Optional[str] = None  # שם חשבון רשתות חברתיות (UI only)
-
-
 
 
 class BusinessOwnerRequestReview(BaseModel):
@@ -499,8 +512,9 @@ class DriverApplicationOut(BaseModel):
 
     class Config:
         orm_mode = True
-from typing import List  # make sure this import exists at the top
 
+
+from typing import List  # make sure this import exists at the top
 
 
 class BusinessOwnerPlaceRequestOut(BaseModel):
@@ -555,6 +569,7 @@ class UserProfileOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverVehicleOut(BaseModel):
     id: int
     car_type: str
@@ -568,6 +583,7 @@ class DriverVehicleOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverProfileOut(BaseModel):
     user: UserProfileOut
     vehicle: Optional[DriverVehicleOut] = None
@@ -575,6 +591,7 @@ class DriverProfileOut(BaseModel):
 
     class Config:
         orm_mode = True
+
 
 class BusinessPlaceOut(BaseModel):
     id: int
@@ -593,6 +610,7 @@ class BusinessPlaceOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class BusinessOwnerProfileOut(BaseModel):
     user: UserProfileOut
     place: Optional[BusinessPlaceOut] = None
@@ -607,8 +625,8 @@ class BusinessOwnerProfileOut(BaseModel):
     response_model=List[BusinessOwnerPlaceRequestOut],
 )
 def list_business_owner_requests(
-    status: Optional[str] = None,
-    db: Session = Depends(get_db),
+        status: Optional[str] = None,
+        db: Session = Depends(get_db),
 ):
     """
     רשימת כל הבקשות מבעלי עסקים.
@@ -628,12 +646,11 @@ def list_business_owner_requests(
     return q.all()
 
 
-
 @app.post("/admin/business-owner/requests/{request_id}/approve")
 def approve_business_owner_request(
-    request_id: int,
-    data: BusinessOwnerRequestReview,
-    db: Session = Depends(get_db),
+        request_id: int,
+        data: BusinessOwnerRequestReview,
+        db: Session = Depends(get_db),
 ):
     admin = (
         db.query(User)
@@ -676,7 +693,7 @@ def approve_business_owner_request(
         place.main_image_url = req.main_image_url
         place.social_links = req.social_links
         place.owner_user_id = user.id
-        place.can_be_claimed = False   # יש בעלים עכשיו
+        place.can_be_claimed = False  # יש בעלים עכשיו
 
     # --- CASE 2: מקום חדש לגמרי ---
     else:
@@ -729,11 +746,12 @@ def approve_business_owner_request(
 
     return {"detail": "Business owner request approved"}
 
+
 @app.post("/admin/business-owner/requests/{request_id}/reject")
 def reject_business_owner_request(
-    request_id: int,
-    data: BusinessOwnerRequestReview,
-    db: Session = Depends(get_db),
+        request_id: int,
+        data: BusinessOwnerRequestReview,
+        db: Session = Depends(get_db),
 ):
     admin = (
         db.query(User)
@@ -778,8 +796,8 @@ def reject_business_owner_request(
 
     return {"detail": "Business owner request rejected"}
 
-# -
 
+# -
 
 
 # ---------- Regular user signup endpoint ----------
@@ -883,7 +901,7 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
         EmailVerification.is_used == True
     ).first()
     if not verified:
-        raise HTTPException(403,"Email not verified")
+        raise HTTPException(403, "Email not verified")
 
     # Create user
     user = User(
@@ -902,10 +920,12 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-
     return user
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
+
 
 @app.post("/auth/signup/driver", response_model=DriverSignupOut)
 def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
@@ -1017,8 +1037,8 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
 
         # Is this user a driver WITH a driver_profile that was REJECTED?
         is_rejected_driver = (
-            driver_profile is not None
-            and driver_profile.driver_status == DriverStatus.REJECTED
+                driver_profile is not None
+                and driver_profile.driver_status == DriverStatus.REJECTED
         )
 
         # 👉 1) REJECTED DRIVER RE-APPLYING → ALLOW
@@ -1114,7 +1134,6 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         status=UserStatus.PENDING,
         email_verified=True
 
-
     )
     db.add(user)
     db.flush()  # get user.id
@@ -1154,7 +1173,6 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
 
     # 8. Send verification code
 
-
     # 9. Return response
     return DriverSignupOut(
         user=UserOut.model_validate(user, from_attributes=True),
@@ -1164,8 +1182,10 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         vehicle_status=vehicle.status.value,
         message="Your request has been sent and is waiting for admin approval.",
     )
+
+
 @app.post("/auth/signup/business-owner", response_model=BusinessOwnerSignupOut)
-def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_db)):
+def signup_business_owner(data: BusinessOwnerSignup, db: Session = Depends(get_db)):
     """
     יצירת משתמש חדש עם ROLE = BUSINESS_OWNER.
     בתחילה status = PENDING → לא פעיל עד שהאדמין יאשר את הבקשה.
@@ -1178,8 +1198,8 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
 
     if existing_user:
         if (
-            existing_user.role == UserRole.BUSINESS_OWNER
-            and existing_user.status == UserStatus.REJECTED
+                existing_user.role == UserRole.BUSINESS_OWNER
+                and existing_user.status == UserStatus.REJECTED
         ):
             # Rejected business owner trying again - allow re-signup
             existing_user.full_name = data.full_name
@@ -1222,8 +1242,6 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
     db.commit()
     db.refresh(user)
 
-
-
     return BusinessOwnerSignupOut(
         user=UserOut.model_validate(user, from_attributes=True),
         message="Your business owner signup request has been created. Please choose your business location next.",
@@ -1244,8 +1262,6 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
         EmailVerification.is_used == False
     ).first()
 
-
-
     # Find the most recent unused verification code for this user
     verification = (
         db.query(EmailVerification)
@@ -1257,14 +1273,14 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
         .order_by(EmailVerification.created_at.desc())
         .first()
     )
-    
+
     if not verification:
         raise HTTPException(status_code=400, detail="Invalid verification code")
-    
+
     # Check if code is expired
     if verification.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Verification code has expired")
-    
+
     # Mark code as used and verify user's email
     verification.is_used = True
 
@@ -1275,7 +1291,7 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
     db.commit()
 
     db.commit()
-    
+
     return VerifyEmailResponse(
         success=True,
         message="Email verified successfully"
@@ -1289,14 +1305,13 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Check if already verified
     if user.email_verified:
         raise HTTPException(status_code=400, detail="Email is already verified")
-    
+
     # Create and send new verification code
 
-    
     return {"success": True, "message": "Verification code has been resent"}
 
 
@@ -1448,6 +1463,8 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         role=user.role.value,
         status=user.status.value,
     )
+
+
 @app.post("/auth/request-email-verification")
 def request_email_verification(data: SendVerificationCodeRequest, db: Session = Depends(get_db)):
     # check email not already used by verified user
@@ -1476,6 +1493,7 @@ def request_email_verification(data: SendVerificationCodeRequest, db: Session = 
 
     return {"success": True}
 
+
 # --- Health check ---
 @app.get("/")
 def root():
@@ -1490,6 +1508,7 @@ def health():
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
+
 
 @app.post("/files/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -1508,13 +1527,16 @@ async def upload_file(file: UploadFile = File(...)):
     # URL that the app can store in DB / display
     file_url = f"http://10.0.2.2:8000/uploads/{new_name}"  # for Android emulator
     return {"file_url": file_url}
+
+
 from datetime import datetime, timezone, timedelta  # make sure this import exists
+
 
 @app.post("/admin/drivers/{driver_profile_id}/approve")
 def approve_driver(
-    driver_profile_id: int,
-    data: DriverReviewRequest,
-    db: Session = Depends(get_db),
+        driver_profile_id: int,
+        data: DriverReviewRequest,
+        db: Session = Depends(get_db),
 ):
     # check admin exists and is ADMIN
     admin = (
@@ -1557,11 +1579,13 @@ def approve_driver(
     )
 
     return {"detail": "Driver approved"}
+
+
 @app.post("/admin/drivers/{driver_profile_id}/reject")
 def reject_driver(
-    driver_profile_id: int,
-    data: DriverReviewRequest,
-    db: Session = Depends(get_db),
+        driver_profile_id: int,
+        data: DriverReviewRequest,
+        db: Session = Depends(get_db),
 ):
     admin = (
         db.query(User)
@@ -1607,7 +1631,6 @@ def reject_driver(
     return {"detail": "Driver rejected"}
 
 
-
 @app.get("/admin/drivers/pending", response_model=List[DriverApplicationOut])
 def list_pending_drivers(db: Session = Depends(get_db)):
     # all drivers whose driver_status is PENDING
@@ -1643,11 +1666,13 @@ def list_pending_drivers(db: Session = Depends(get_db)):
         )
     return result
 
+
 # =========================
 # ADMIN – CATEGORIES
 # =========================
 
 from typing import List  # אם עדיין לא קיים למעלה
+
 
 @app.get("/admin/categories", response_model=List[CategoryResponse])
 def list_categories(db: Session = Depends(get_db)):
@@ -1674,9 +1699,9 @@ def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
 
 @app.put("/admin/categories/{category_id}", response_model=CategoryResponse)
 def update_category(
-    category_id: int,
-    data: CategoryCreate,   # משתמשים באותם שדות (name_ar, name_he, name_en, icon_name, is_active)
-    db: Session = Depends(get_db),
+        category_id: int,
+        data: CategoryCreate,  # משתמשים באותם שדות (name_ar, name_he, name_en, icon_name, is_active)
+        db: Session = Depends(get_db),
 ):
     """
     עדכון קטגוריה קיימת.
@@ -1695,6 +1720,8 @@ def update_category(
     db.commit()
     db.refresh(category)
     return category
+
+
 # =========================
 # ADMIN – CITIES
 # =========================
@@ -1723,9 +1750,9 @@ def create_city(data: CityCreate, db: Session = Depends(get_db)):
 
 @app.put("/admin/cities/{city_id}", response_model=CityResponse)
 def update_city(
-    city_id: int,
-    data: CityCreate,   # אותם שדות name_ar / name_he / name_en
-    db: Session = Depends(get_db),
+        city_id: int,
+        data: CityCreate,  # אותם שדות name_ar / name_he / name_en
+        db: Session = Depends(get_db),
 ):
     """
     עדכון שם עיר קיימת.
@@ -1742,6 +1769,7 @@ def update_city(
     db.commit()
     db.refresh(city)
     return city
+
 
 # =========================
 # LOCATIONS – POSTGIS POINT
@@ -1775,10 +1803,10 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
         detected_osm_id = find_osm_feature(data.lat, data.lon)
         print(">>> OSM RESULT:", detected_osm_id)
 
-        if detected_osm_id:                 # אם זיהינו אוטומטית
+        if detected_osm_id:  # אם זיהינו אוטומטית
             final_osm_id = detected_osm_id
             final_source = "MAP_PICK"
-        else:                               # לא מצאנו כלום
+        else:  # לא מצאנו כלום
             final_osm_id = None
             final_source = data.source or "MAP_PICK"
 
@@ -1795,6 +1823,7 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
 
     return location
 
+
 @app.get("/locations/{location_id}", response_model=LocationResponse)
 def get_location(location_id: int, db: Session = Depends(get_db)):
     """
@@ -1806,20 +1835,21 @@ def get_location(location_id: int, db: Session = Depends(get_db)):
 
     return location
 
-from sqlalchemy import func, or_, cast   # cast חדש
-from geoalchemy2 import Geography        # כדי לקסט ל-Geography
 
+from sqlalchemy import func, or_, cast  # cast חדש
+from geoalchemy2 import Geography  # כדי לקסט ל-Geography
 
-from sqlalchemy import func, or_, cast   # cast חדש
-from geoalchemy2 import Geography        # כדי לקסט ל-Geography
+from sqlalchemy import func, or_, cast  # cast חדש
+from geoalchemy2 import Geography  # כדי לקסט ל-Geography
+
 
 @app.get("/places/map", response_model=List[PlaceResponse])
 def get_places_in_bbox(
-    north: float,
-    south: float,
-    east: float,
-    west: float,
-    db: Session = Depends(get_db),
+        north: float,
+        south: float,
+        east: float,
+        west: float,
+        db: Session = Depends(get_db),
 ):
     envelope_geom = func.ST_MakeEnvelope(west, south, east, north, 4326)
     envelope_geog = cast(envelope_geom, Geography(geometry_type="POLYGON", srid=4326))
@@ -1837,10 +1867,10 @@ def get_places_in_bbox(
 # 👇👇 ADD THIS BLOCK HERE 👇👇
 @app.get("/business-owner/places/nearby", response_model=BusinessOwnerNearbyCheckResponse)
 def check_nearby_places_for_owner(
-    lat: float,
-    lon: float,
-    radius_m: float = 50,        # ברירת מחדל 50 מטר
-    db: Session = Depends(get_db),
+        lat: float,
+        lon: float,
+        radius_m: float = 50,  # ברירת מחדל 50 מטר
+        db: Session = Depends(get_db),
 ):
     """
     בודקת האם יש עסק קיים במרחק radius_m מטר
@@ -1888,8 +1918,9 @@ def check_nearby_places_for_owner(
         return BusinessOwnerNearbyCheckResponse(status="HAS_OWNER", candidate=candidate)
 
     return BusinessOwnerNearbyCheckResponse(status="CAN_CLAIM", candidate=candidate)
-# 👆👆 UNTIL HERE 👆👆
 
+
+# 👆👆 UNTIL HERE 👆👆
 
 
 # =========================
@@ -1948,6 +1979,8 @@ def create_place(data: PlaceCreate, db: Session = Depends(get_db)):
 
     # מחזירים FULL RESPONSE
     return place
+
+
 @app.get("/places/{place_id}", response_model=PlaceResponse)
 def get_place(place_id: int, db: Session = Depends(get_db)):
     """
@@ -1964,7 +1997,9 @@ def get_place(place_id: int, db: Session = Depends(get_db)):
 
     return place
 
+
 from typing import List
+
 
 @app.get("/admin/places", response_model=List[PlaceResponse])
 def admin_list_places(db: Session = Depends(get_db)):
@@ -1975,11 +2010,13 @@ def admin_list_places(db: Session = Depends(get_db)):
     places = db.query(Place).order_by(Place.id).all()
     return places
 
-import httpx
 
 import httpx
 
 import httpx
+
+import httpx
+
 
 def find_osm_feature(lat: float, lon: float, radius: int = 50):
     """
@@ -2110,6 +2147,7 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
     db.refresh(location)
     return place
 
+
 # ---------- GPS → OSM CHECK (לפני יצירת לוקיישן) ----------
 
 class GpsCheckRequest(BaseModel):
@@ -2136,10 +2174,11 @@ def gps_osm_check(data: GpsCheckRequest):
 
     return GpsCheckResponse(match_found=False, osm_id=None)
 
+
 @app.post("/business-owner/place-requests", response_model=BusinessOwnerPlaceRequestOut, status_code=201)
 def create_business_owner_place_request(
-    data: BusinessOwnerPlaceRequestCreate,
-    db: Session = Depends(get_db),
+        data: BusinessOwnerPlaceRequestCreate,
+        db: Session = Depends(get_db),
 ):
     """
     יצירת בקשה חדשה מבעל עסק:
@@ -2147,10 +2186,108 @@ def create_business_owner_place_request(
     - או בקשה ליצור מקום חדש (existing_place_id == None)
     """
 
-    user = db.query(User).filter(User.id == data.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Business owner user not found")
+    # ===== STEP 1: CREATE USER (if doesn't exist) =====
+    # Check if user already exists
+    existing_user = db.query(User).filter(
+        or_(User.username == data.username, User.email == data.email)
+    ).first()
 
+    if existing_user:
+        if (
+                existing_user.role == UserRole.BUSINESS_OWNER
+                and existing_user.status == UserStatus.REJECTED
+        ):
+            # Rejected business owner trying again - allow re-signup
+            existing_user.full_name = data.full_name
+            existing_user.phone = data.phone  # user's personal phone
+            existing_user.password_hash = hash_password(data.password)
+            existing_user.status = UserStatus.PENDING
+            existing_user.rejection_reason = None
+            existing_user.email_verified = True  # Email was verified in step 1
+            db.commit()
+            db.refresh(existing_user)
+            user = existing_user
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Username or email already exists",
+            )
+    else:
+        # Validate personal info before creating user
+        if not re.match(r'^[a-zA-Z\u0590-\u05FF\u0600-\u06FF\s]+$', data.full_name.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Full name should contain only letters"
+            )
+
+        if len(data.username.strip()) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Username must be at least 3 characters"
+            )
+        if not re.match(r'^[a-zA-Z0-9_]+$', data.username.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Username can only contain letters, numbers, and underscore"
+            )
+
+        if not re.match(r'^05\d{8}$', data.phone.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Phone must be 10 digits starting with 05"
+            )
+
+        if len(data.password) < 8:
+            raise HTTPException(
+                status_code=400,
+                detail="Password must be at least 8 characters"
+            )
+        if not re.search(r'[A-Z]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one uppercase letter"
+            )
+        if not re.search(r'[a-z]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one lowercase letter"
+            )
+        if not re.search(r'[0-9]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one number"
+            )
+        if not re.search(r'[!@#$%^&*()_+\-=\[\]{};:\'"\\|,.<>\/?]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one symbol"
+            )
+
+        # Check email was verified
+        verified = db.query(EmailVerification).filter(
+            EmailVerification.email == data.email,
+            EmailVerification.is_used == True
+        ).first()
+        if not verified:
+            raise HTTPException(403, "Email not verified")
+
+        # Create new user
+        user = User(
+            full_name=data.full_name,
+            username=data.username,
+            email=data.email,
+            phone=data.phone,  # user's personal phone
+            password_hash=hash_password(data.password),
+            role=UserRole.BUSINESS_OWNER,
+            status=UserStatus.PENDING,
+            email_verified=True
+        )
+        db.add(user)
+        db.flush()  # Get user.id without committing yet
+        db.refresh(user)
+
+    # ===== STEP 2: CONTINUE WITH PLACE REQUEST CREATION =====
+    # Check user role (should always be BUSINESS_OWNER at this point, but double-check)
     if user.role != UserRole.BUSINESS_OWNER:
         raise HTTPException(status_code=400, detail="User is not BUSINESS_OWNER")
 
@@ -2162,7 +2299,7 @@ def create_business_owner_place_request(
             status_code=400,
             detail="User is already an active business owner",
         )
-    
+
     # If user was REJECTED and is trying again, set status back to PENDING
     if user.status == UserStatus.REJECTED:
         user.status = UserStatus.PENDING
@@ -2213,14 +2350,14 @@ def create_business_owner_place_request(
             detail="Business name (Hebrew) must be at least 2 characters"
         )
 
-    # Validate phone (if provided, must be 9 or 10 digits)
-    if data.phone:
-        phone_trimmed = data.phone.strip()
-        if phone_trimmed:
-            if not re.match(r'^[0-9]{9,10}$', phone_trimmed):
+        # Validate business phone (if provided, must be 9 or 10 digits)
+    if data.business_phone:
+        business_phone_trimmed = data.business_phone.strip()
+        if business_phone_trimmed:
+            if not re.match(r'^[0-9]{9,10}$', business_phone_trimmed):
                 raise HTTPException(
                     status_code=400,
-                    detail="Phone number must be 9 or 10 digits (if provided)"
+                    detail="Business phone number must be 9 or 10 digits (if provided)"
                 )
 
     # Validate city_id and category_id exist
@@ -2249,7 +2386,7 @@ def create_business_owner_place_request(
         city_id=data.city_id,
         category_id=data.category_id,
         description=data.description,
-        phone=data.phone,
+        phone=data.business_phone,  # Business phone (mapped from business_phone field)
         opening_hours=data.opening_hours,
         main_image_url=data.main_image_url,
         social_links=data.social_links,
@@ -2265,14 +2402,15 @@ def create_business_owner_place_request(
 
     return req
 
+
 # =========================
 # ADMIN – USERS LIST
 # =========================
 
 @app.get("/admin/users", response_model=List[UserListOut])
 def list_all_users(
-    role_filter: Optional[str] = None,
-    db: Session = Depends(get_db),
+        role_filter: Optional[str] = None,
+        db: Session = Depends(get_db),
 ):
     """
     מחזיר את כל המשתמשים.
@@ -2294,6 +2432,7 @@ def list_all_users(
         print(f"Error in list_all_users: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")
 
+
 # =========================
 # ADMIN – DELETE USER
 # =========================
@@ -2301,11 +2440,12 @@ def list_all_users(
 class DeleteUserRequest(BaseModel):
     admin_user_id: int
 
+
 @app.delete("/admin/users/{user_id}")
 def delete_user(
-    user_id: int,
-    data: DeleteUserRequest,
-    db: Session = Depends(get_db),
+        user_id: int,
+        data: DeleteUserRequest,
+        db: Session = Depends(get_db),
 ):
     """
     מחק משתמש:
@@ -2335,14 +2475,14 @@ def delete_user(
         # שנה status ל-PENDING (לא יכול להתחבר)
         user.status = UserStatus.PENDING
         user.rejection_reason = "Account removed by admin. Business places remain on the map."
-        
+
         # השאר את המקומות על המפה (לא מוחקים אותם)
         # רק מסירים את owner_user_id מהמקומות
         places = db.query(Place).filter(Place.owner_user_id == user.id).all()
         for place in places:
             place.owner_user_id = None
             place.can_be_claimed = True  # אפשר לטעון מחדש
-        
+
         db.commit()
         return {"detail": "Business owner removed. Status set to PENDING. Places remain on map."}
 
@@ -2487,7 +2627,7 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
         if place_request.status == OwnerPlaceRequestStatus.APPROVED:
             # First, try to find place by owner_user_id (works for both existing and new places)
             place = db.query(Place).filter(Place.owner_user_id == user_id).first()
-            
+
             if place:
                 city = db.query(City).filter(City.id == place.city_id).first()
                 category = db.query(Category).filter(
@@ -2561,7 +2701,7 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                     lat=lat,
                     lon=lon,
                 )
-        
+
         # If still no place found, use data from the request itself (for pending requests)
         if not place_out:
             city = db.query(City).filter(City.id == place_request.city_id).first()
@@ -2608,9 +2748,11 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+
 class ChangePasswordResponse(BaseModel):
     success: bool
     message: str
+
 
 @app.post("/auth/change-password", response_model=ChangePasswordResponse)
 def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
@@ -2619,11 +2761,11 @@ def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == data.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Verify current password
     if not verify_password(data.current_password, user.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    
+
     # Validate new password requirements (same as signup)
     import re
     if len(data.new_password) < 8:
@@ -2636,19 +2778,19 @@ def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Password must contain at least one number")
     if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.new_password):
         raise HTTPException(status_code=400, detail="Password must contain at least one symbol")
-    
+
     # Check if new password is same as current password
     if verify_password(data.new_password, user.password_hash):
         raise HTTPException(status_code=400, detail="New password must be different from current password")
-    
+
     # Hash new password
     password_hash = hash_password(data.new_password)
-    
+
     # Update user password
     user.password_hash = password_hash
-    
+
     db.commit()
-    
+
     return ChangePasswordResponse(
         success=True,
         message="Password has been changed successfully"
@@ -2663,9 +2805,11 @@ class UpdatePhoneRequest(BaseModel):
     user_id: int
     new_phone: str
 
+
 class UpdatePhoneResponse(BaseModel):
     success: bool
     message: str
+
 
 @app.put("/users/{user_id}/phone", response_model=UpdatePhoneResponse)
 def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depends(get_db)):
@@ -2673,28 +2817,28 @@ def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depe
     # Verify user_id matches
     if data.user_id != user_id:
         raise HTTPException(status_code=400, detail="User ID mismatch")
-    
+
     # Find user
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Check if phone number is the same (no change needed)
     if user.phone == data.new_phone.strip():
         raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
-    
+
     # Check if phone number already exists for another user
     existing_user = db.query(User).filter(
         User.phone == data.new_phone.strip(),
         User.id != user_id
     ).first()
-    
+
     if existing_user:
         raise HTTPException(
             status_code=409,
             detail="Phone number is already in use by another user"
         )
-    
+
     # Validate phone format (exactly 10 digits starting with 05)
     import re
     phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
@@ -2708,13 +2852,13 @@ def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depe
             status_code=400,
             detail="Phone number must start with 05"
         )
-    
+
     # Update phone number
     user.phone = data.new_phone.strip()
-    
+
     db.commit()
     db.refresh(user)
-    
+
     return UpdatePhoneResponse(
         success=True,
         message="Phone number has been updated successfully"
@@ -2728,9 +2872,11 @@ def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depe
 class UpdateBusinessPhoneRequest(BaseModel):
     new_phone: str
 
+
 class UpdateBusinessPhoneResponse(BaseModel):
     success: bool
     message: str
+
 
 @app.put("/places/{place_id}/phone", response_model=UpdateBusinessPhoneResponse)
 def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: Session = Depends(get_db)):
@@ -2739,11 +2885,11 @@ def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: S
     place = db.query(Place).filter(Place.id == place_id).first()
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
-    
+
     # Check if phone number is the same (no change needed)
     if place.phone == data.new_phone.strip():
         raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
-    
+
     # Validate phone format (exactly 10 digits starting with 05)
     import re
     phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
@@ -2757,13 +2903,13 @@ def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: S
             status_code=400,
             detail="Phone number must start with 05"
         )
-    
+
     # Update phone number
     place.phone = data.new_phone.strip()
-    
+
     db.commit()
     db.refresh(place)
-    
+
     return UpdateBusinessPhoneResponse(
         success=True,
         message="Business phone number has been updated successfully"

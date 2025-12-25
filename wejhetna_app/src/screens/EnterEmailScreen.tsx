@@ -69,7 +69,7 @@ export default function EnterEmailScreen({ route, navigation }: any) {
       let json;
       try {
         json = await res.json();
-      } catch (e) {
+      } catch {
         // If JSON parsing fails, treat as network error
         setErrorModal({
           visible: true,
@@ -101,11 +101,11 @@ export default function EnterEmailScreen({ route, navigation }: any) {
       // ✅ Success → show success modal then go to VerifyEmail
       setShowSuccessModal(true);
 
-    } catch (e: any) {
+    } catch {
       setErrorModal({
         visible: true,
         title: t("error") || "Error",
-        message: t("network_error_message") || e?.message || t("network_error") || "Something went wrong",
+        message: t("network_error_message") || t("network_error") || "Something went wrong",
       });
     } finally {
       setLoading(false);

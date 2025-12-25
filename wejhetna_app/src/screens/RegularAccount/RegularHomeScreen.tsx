@@ -14,13 +14,19 @@ import {
 } from "react-native";
 import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
 import Geolocation from "@react-native-community/geolocation";
-import { fetchPlacesByBbox, PlaceForMap } from "../../api/places";
+import { fetchAllPlaces, PlaceForMap } from "../../api/places";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 const INITIAL_CENTER: [number, number] = [34.83, 31.24];
-const INITIAL_ZOOM = 13;
+const INITIAL_ZOOM = 12.5;
+const LABEL_VISIBLE_ZOOM_THRESHOLD = 14;
+
+const NEGEV_BOUNDS = {
+  ne: [35.10, 31.42],
+  sw: [34.72, 31.18],
+};
 
 type Props = {
   navigation: any;
@@ -48,6 +54,8 @@ export default function RegularHomeScreen({ navigation }: Props) {
 
   // Places
   const [places, setPlaces] = useState<PlaceForMap[]>([]);
+  const [selectedPlace, setSelectedPlace] = useState<PlaceForMap | null>(null);
+  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
 
   // Search
   const [searchQuery, setSearchQuery] = useState("");
@@ -72,14 +80,6 @@ export default function RegularHomeScreen({ navigation }: Props) {
   const [isNavigating, setIsNavigating] = useState(false);
   const [watchId, setWatchId] = useState<number | null>(null);
 
-  // Map bounds
-  const [mapBounds, setMapBounds] = useState({
-    north: 31.5,
-    south: 31.0,
-    east: 35.0,
-    west: 34.5,
-  });
-
   // Get user's GPS location
   useEffect(() => {
     setLocationLoading(true);
@@ -89,14 +89,7 @@ export default function RegularHomeScreen({ navigation }: Props) {
         setUserLocation({ lat: latitude, lon: longitude });
         setLocationLoading(false);
 
-        // Center map on user location
-        if (cameraRef.current) {
-          cameraRef.current.setCamera({
-            centerCoordinate: [longitude, latitude],
-            zoomLevel: INITIAL_ZOOM,
-            animationDuration: 1000,
-          });
-        }
+        // Don't auto-zoom to user location - let user navigate freely
       },
       (error) => {
         console.log("GPS error", error);
@@ -111,62 +104,35 @@ export default function RegularHomeScreen({ navigation }: Props) {
     );
   }, []);
 
-  // Fetch places when map bounds change
+  // Fetch all places on mount
   useEffect(() => {
-    const fetchPlacesForVisibleArea = async () => {
+    async function load() {
       try {
-        const data = await fetchPlacesByBbox(
-          mapBounds.north,
-          mapBounds.south,
-          mapBounds.east,
-          mapBounds.west
-        );
-        setPlaces(data || []);
-      } catch (error: any) {
-        console.error("Failed to fetch places:", error?.message || String(error) || "Unknown error");
-        // Set empty array on error to prevent crashes
-        setPlaces([]);
+        const data = await fetchAllPlaces();
+        setPlaces(data);
+      } catch (e) {
+        console.error("Failed to load places:", e);
       }
-    };
-
-    fetchPlacesForVisibleArea();
-  }, [mapBounds]);
+    }
+    load();
+  }, []);
 
   // Handle map region change
   const onRegionDidChange = (feature: any) => {
     try {
-      // Try to get bounds from different possible structures
-      let bounds = null;
-      
-      if (feature?.properties?.visibleBounds) {
-        bounds = feature.properties.visibleBounds;
-      } else if (feature?.properties?.bounds) {
-        bounds = feature.properties.bounds;
-      } else if (feature?.geometry?.coordinates) {
-        // If we have center coordinates, calculate approximate bounds
-        const [lon, lat] = feature.geometry.coordinates;
-        const zoom = feature.properties?.zoomLevel || INITIAL_ZOOM;
-        // Approximate bounds based on zoom level
-        const latDelta = 0.1 / Math.pow(2, zoom - 10);
-        const lonDelta = 0.1 / Math.pow(2, zoom - 10);
-        bounds = {
-          north: lat + latDelta,
-          south: lat - latDelta,
-          east: lon + lonDelta,
-          west: lon - lonDelta,
-        };
-      }
+      const [lon, lat] = feature.geometry.coordinates;
+      const newZoom = feature.properties.zoomLevel;
+      setCurrentZoom(newZoom);
 
-      if (bounds && bounds.north && bounds.south && bounds.east && bounds.west) {
-        setMapBounds({
-          north: bounds.north,
-          south: bounds.south,
-          east: bounds.east,
-          west: bounds.west,
+      // Keep map within Negev bounds
+      if (lon < 34.72 || lat > 31.43) {
+        cameraRef.current?.setCamera({
+          centerCoordinate: [34.75, 31.39],
+          animationDuration: 600,
         });
       }
     } catch (error) {
-      console.log("Error parsing map bounds:", error);
+      console.log("Error parsing map region:", error);
     }
   };
 
@@ -190,6 +156,7 @@ export default function RegularHomeScreen({ navigation }: Props) {
 
   // Handle place marker tap
   const handlePlaceTap = (place: PlaceForMap) => {
+    setSelectedPlace(place);
     setDestination({
       lat: place.location.lat,
       lon: place.location.lon,
@@ -299,16 +266,7 @@ export default function RegularHomeScreen({ navigation }: Props) {
           endAddress: destination.name || "Destination",
         });
 
-        // Center map on route
-        if (cameraRef.current) {
-          const midLat = (userLocation.lat + destination.lat) / 2;
-          const midLon = (userLocation.lon + destination.lon) / 2;
-          cameraRef.current.setCamera({
-            centerCoordinate: [midLon, midLat],
-            zoomLevel: 14,
-            animationDuration: 1000,
-          });
-        }
+        // Don't auto-zoom to route - let user navigate freely
       } else {
         const errorMsg = routeData.code === "NoRoute" 
           ? "No route found between these points"
@@ -501,7 +459,17 @@ export default function RegularHomeScreen({ navigation }: Props) {
         logoEnabled={false}
         attributionEnabled={false}
       >
-        <Camera ref={cameraRef} defaultSettings={{ centerCoordinate: INITIAL_CENTER, zoomLevel: INITIAL_ZOOM }} />
+        <Camera
+          ref={cameraRef}
+          defaultSettings={{
+            centerCoordinate: INITIAL_CENTER,
+            zoomLevel: INITIAL_ZOOM,
+          }}
+          maxBounds={NEGEV_BOUNDS}
+          minZoomLevel={10}
+          maxZoomLevel={18}
+          animationMode="flyTo"
+        />
 
         {/* User Location Marker */}
         {userLocation && (
@@ -513,20 +481,40 @@ export default function RegularHomeScreen({ navigation }: Props) {
         )}
 
         {/* Place Markers */}
-        {places.map((place) => (
-          <PointAnnotation
-            key={place.id}
-            id={`place_${place.id}`}
-            coordinate={[place.location.lon, place.location.lat]}
-            onSelected={() => handlePlaceTap(place)}
-          >
-            <View style={styles.placeMarker}>
-              <Text style={styles.placeMarkerText}>
-                {place.place_type === "BUSINESS" ? "🏪" : "🏛️"}
-              </Text>
-            </View>
-          </PointAnnotation>
-        ))}
+        {places.map((place) => {
+          if (!place.location) return null;
+          const isSelected = selectedPlace?.id === place.id;
+          const shouldShowLabel =
+            currentZoom >= LABEL_VISIBLE_ZOOM_THRESHOLD || isSelected;
+
+          return (
+            <PointAnnotation
+              key={place.id}
+              id={`place_${place.id}`}
+              coordinate={[place.location.lon, place.location.lat]}
+              onSelected={() => handlePlaceTap(place)}
+            >
+              <View style={styles.nativeMarkerContainer}>
+                <View
+                  style={[
+                    styles.dotContainer,
+                    isSelected && styles.dotSelected,
+                  ]}
+                >
+                  <View style={styles.innerDot} />
+                </View>
+
+                {shouldShowLabel && (
+                  <View style={styles.labelWrapper}>
+                    <Text style={styles.nativeMapLabel} numberOfLines={1}>
+                      {place.name}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </PointAnnotation>
+          );
+        })}
 
         {/* Custom Pin Marker */}
         {customPin && (
@@ -561,6 +549,40 @@ export default function RegularHomeScreen({ navigation }: Props) {
           </ShapeSource>
         )}
       </MapView>
+
+      {/* Selected Place Bottom Sheet */}
+      {selectedPlace && !routeInfo && (
+        <View style={styles.bottomSheetCard}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.cardHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {selectedPlace.name}
+              </Text>
+              <Text style={styles.cardSubtitle}>
+                {selectedPlace.place_type === "BUSINESS" ? "עסק" : "ציבורי"}
+                {selectedPlace.city?.name_he
+                  ? ` • ${selectedPlace.city.name_he}`
+                  : ""}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.closePlaceButton}
+              onPress={() => setSelectedPlace(null)}
+            >
+              <Text style={styles.closePlaceButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.cardContent}>
+            {selectedPlace.description && (
+              <Text style={styles.descriptionText} numberOfLines={3}>
+                {selectedPlace.description}
+              </Text>
+            )}
+          </View>
+        </View>
+      )}
 
       {/* Route Info Card - Floating above map */}
       {routeInfo && (
@@ -720,23 +742,52 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     backgroundColor: "#1e90ff",
   },
-  placeMarker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#1e90ff",
-    alignItems: "center",
-    justifyContent: "center",
+  // Marker styles from AdminHomeScreen
+  nativeMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  dotContainer: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
     elevation: 4,
+    zIndex: 2,
   },
-  placeMarkerText: {
-    fontSize: 18,
+  innerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#4285F4',
+  },
+  dotSelected: {
+    transform: [{ scale: 1.3 }],
+    borderWidth: 2,
+    borderColor: '#4285F4',
+  },
+  labelWrapper: {
+    marginTop: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,0,0,0.1)',
+    zIndex: 1,
+  },
+  nativeMapLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#333333',
+    textAlign: 'center',
   },
   customPinMarker: {
     width: 24,
@@ -992,5 +1043,72 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#999",
     fontSize: 14,
+  },
+  // Bottom sheet styles for selected place
+  bottomSheetCard: {
+    position: "absolute",
+    bottom: 24,
+    left: 16,
+    right: 16,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 28,
+    padding: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.03)",
+  },
+  sheetHandle: {
+    width: 36,
+    height: 5,
+    backgroundColor: "#E5E5EA",
+    borderRadius: 3,
+    alignSelf: "center",
+    marginBottom: 20,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  cardTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: "#1D1D1F",
+    marginBottom: 4,
+    letterSpacing: -0.5,
+  },
+  cardSubtitle: {
+    fontSize: 14,
+    color: "#86868B",
+    fontWeight: "500",
+  },
+  closePlaceButton: {
+    padding: 8,
+    backgroundColor: "#F2F2F7",
+    borderRadius: 50,
+    marginLeft: 10,
+  },
+  closePlaceButtonText: {
+    fontSize: 12,
+    color: "#8E8E93",
+    fontWeight: "bold",
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#F2F2F7",
+    marginVertical: 18,
+  },
+  cardContent: {
+    marginBottom: 20,
+  },
+  descriptionText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: "#636366",
+    lineHeight: 20,
   },
 });

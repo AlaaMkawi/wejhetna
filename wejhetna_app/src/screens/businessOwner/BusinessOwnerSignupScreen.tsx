@@ -19,10 +19,8 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 // ✅ correct paths from src/screens/businessOwner/
-import { BusinessOwnerSignupPayload, signupBusinessOwner } from "../../api/businessOwnerApi";
 import { RootStackParamList } from "../../navigation/types";
 import Ionicons from "react-native-vector-icons/Ionicons";
-import MessageModal from "../MessageModal";
 
 const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
@@ -46,7 +44,6 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
   
   // Field-specific error states
   const [fullNameError, setFullNameError] = useState<string | null>(null);
@@ -55,24 +52,6 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [confirmPasswordError, setConfirmPasswordError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
-  // Modal state
-  const [modalVisible, setModalVisible] = useState(false);
-  const [modalType, setModalType] = useState<"error" | "success">("error");
-  const [modalTitle, setModalTitle] = useState("");
-  const [modalMessage, setModalMessage] = useState("");
-  const [successUserId, setSuccessUserId] = useState<number | null>(null);
-
-  const showModal = (
-    type: "error" | "success",
-    title: string,
-    message: string
-  ) => {
-    setModalType(type);
-    setModalTitle(title);
-    setModalMessage(message);
-    setModalVisible(true);
-  };
 
   // Validation functions (same as RegularSignupForm)
   const validateFullName = (name: string): string | null => {
@@ -198,7 +177,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
     return !nameErr && !userErr && !phoneErr && !pwdErr && !confirmErr;
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     setError(null);
     
     // ✅ Validate email exists if coming from verification flow
@@ -216,91 +195,17 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
       return;
     }
 
-    const payload: BusinessOwnerSignupPayload = {
-      full_name: fullName.trim(),
-      username: username.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      password: password.trim(),
-    };
-
-    try {
-      setLoading(true);
-      const res = await signupBusinessOwner(payload);
-
-      // user is created with status=PENDING (backend)
-      const userId = res.user.id;
-      setSuccessUserId(userId);
-      
-      // Show success message first
-      showModal(
-        "success",
-        t("success") || "Success",
-        t("business_owner_signup_success") || t("signup_created_successfully") || "Your business owner signup request has been created. Please choose your business location next."
-      );
-    } catch (err: any) {
-      console.log("signupBusinessOwner error:", err?.response?.data || err?.message);
-      
-      // Extract error message properly
-      let errorMessage = t("could_not_signup_business_owner") || "Could not sign up business owner";
-      
-      if (err?.response?.data) {
-        const errorData = err.response.data;
-        const errorMsg = typeof errorData.detail === "string" ? errorData.detail : errorMessage;
-        const errorMsgLower = errorMsg.toLowerCase();
-        
-        // Handle specific backend validation errors
-        if (errorMsgLower.includes("username") && errorMsgLower.includes("exists")) {
-          setUsernameError(t("username_taken") || "Username already exists");
-          return;
-        } else if (errorMsgLower.includes("email") && errorMsgLower.includes("exists")) {
-          setError(t("email_already_exists") || "Email already exists");
-          return;
-        } else if (errorMsgLower.includes("phone") && (errorMsgLower.includes("exists") || errorMsgLower.includes("already"))) {
-          setPhoneError(t("phone_taken") || "Phone number already exists");
-          return;
-        } else if (errorMsgLower.includes("full_name") || errorMsgLower.includes("name")) {
-          setFullNameError(errorMsg);
-          return;
-        } else if (errorMsgLower.includes("phone")) {
-          setPhoneError(errorMsg);
-          return;
-        } else if (errorMsgLower.includes("password")) {
-          setPasswordError(errorMsg);
-          return;
-        }
-        
-        // Handle different error response formats
-        if (typeof errorData.detail === "string") {
-          errorMessage = errorData.detail;
-        } else if (typeof errorData.detail === "object" && errorData.detail !== null) {
-          if (errorData.detail.message) {
-            errorMessage = errorData.detail.message;
-          } else if (errorData.detail.msg) {
-            errorMessage = errorData.detail.msg;
-          } else if (Array.isArray(errorData.detail)) {
-            const msgs = errorData.detail
-              .map((d: any) => d?.msg || "")
-              .filter(Boolean);
-            if (msgs.length > 0) {
-              errorMessage = msgs.join(", ");
-            }
-          } else {
-            errorMessage = JSON.stringify(errorData.detail);
-          }
-        } else if (typeof errorData.message === "string") {
-          errorMessage = errorData.message;
-        } else if (typeof errorData.error === "string") {
-          errorMessage = errorData.error;
-        }
-      } else if (err?.message && typeof err.message === "string") {
-        errorMessage = err.message;
-      }
-      
-      setError(errorMessage);
-    } finally {
-      setLoading(false);
-    }
+    // ✅ Don't create user yet - just navigate to location picker with personal info
+    // User will be created only after completing the entire signup process
+    navigation.navigate("BusinessOwnerPickLocation", {
+      personalInfo: {
+        full_name: fullName.trim(),
+        username: username.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        password: password.trim(),
+      },
+    });
   };
 
   return (
@@ -513,41 +418,18 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
               {error && <Text style={styles.error}>{error}</Text>}
 
               <TouchableOpacity
-                style={[styles.primaryButton, loading && styles.buttonDisabled]}
+                style={styles.primaryButton}
                 onPress={handleSubmit}
-                disabled={loading}
                 activeOpacity={0.85}
               >
-                {loading ? (
-                  <ActivityIndicator color={DARK_TEAL} />
-                ) : (
-                  <Text style={styles.primaryButtonText}>
-                    {t("continue") || "Continue"}
-                  </Text>
-                )}
+                <Text style={styles.primaryButtonText}>
+                  {t("pick_location") || "Next: Pick Location"}
+                </Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
       </View>
-      
-      {/* Success/Error Modal */}
-      <MessageModal
-        visible={modalVisible}
-        type={modalType}
-        title={modalTitle}
-        message={modalMessage}
-        onClose={() => {
-          setModalVisible(false);
-          // If success modal, navigate to location picker
-          if (modalType === "success" && successUserId) {
-            navigation.navigate("BusinessOwnerPickLocation", {
-              userId: successUserId,
-            });
-            setSuccessUserId(null);
-          }
-        }}
-      />
     </ImageBackground>
   );
 }
