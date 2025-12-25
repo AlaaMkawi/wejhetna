@@ -20,6 +20,7 @@ import models
 import smtplib
 from email.message import EmailMessage
 import os
+import re
 from models import (
     User,
     UserRole,
