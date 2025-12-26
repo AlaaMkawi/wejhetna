@@ -15,7 +15,10 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import RegularHomeScreen from '../screens/RegularAccount/RegularHomeScreen';
+import DriverHomeScreen from '../screens/DriverAccount/DriverHomeScreen';
+import BusinessOwnerHomeScreen from '../screens/businessOwner/BusinessOwnerHomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
@@ -141,6 +144,67 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
 };
 
 export default function UserTabNavigator() {
+  const [userRole, setUserRole] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  // Get user role from AsyncStorage
+  React.useEffect(() => {
+    async function loadUserRole() {
+      try {
+        const role = await AsyncStorage.getItem("userRole");
+        setUserRole(role);
+      } catch (error) {
+        console.error("Error loading user role:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadUserRole();
+  }, []);
+
+  // Determine which home screen to use based on role
+  const HomeScreenComponent = React.useMemo(() => {
+    if (loading) return RegularHomeScreen; // Default while loading
+    
+    switch (userRole) {
+      case "DRIVER":
+        return DriverHomeScreen;
+      case "BUSINESS_OWNER":
+        return BusinessOwnerHomeScreen;
+      case "REGULAR":
+      default:
+        return RegularHomeScreen;
+    }
+  }, [userRole, loading]);
+
+  if (loading) {
+    // Return a loading state or default screen while loading
+    return (
+      <Tab.Navigator
+        id="UserTabs"
+        tabBar={(props) => <CustomUserTabBar {...props} />}
+        screenOptions={{
+          headerShown: false,
+          tabBarHideOnKeyboard: true,
+        }}
+        initialRouteName="Home"
+      >
+        <Tab.Screen
+          name="Home"
+          component={RegularHomeScreen}
+        />
+        <Tab.Screen
+          name="Search"
+          component={RegularHomeScreen}
+        />
+        <Tab.Screen
+          name="Profile"
+          component={ProfileScreen}
+        />
+      </Tab.Navigator>
+    );
+  }
+
   return (
     <Tab.Navigator
       id="UserTabs"
@@ -153,11 +217,11 @@ export default function UserTabNavigator() {
     >
       <Tab.Screen
         name="Home"
-        component={RegularHomeScreen}
+        component={HomeScreenComponent}
       />
       <Tab.Screen
         name="Search"
-        component={RegularHomeScreen}
+        component={HomeScreenComponent}
       />
       <Tab.Screen
         name="Profile"

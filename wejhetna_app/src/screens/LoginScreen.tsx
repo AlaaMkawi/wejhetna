@@ -132,7 +132,7 @@ export default function LoginScreen({ navigation }: Props) {
           routes: [{ name: "UserTabs" }],
         });
       }
-    } catch (e: any) {
+    } catch {
       // Use a fully translated network error message
       setError(t("network_error_message") || t("network_error"));
     } finally {
@@ -188,7 +188,7 @@ export default function LoginScreen({ navigation }: Props) {
                        name="person-outline" 
                        size={20} 
                        color="#0f5b63" 
-                       style={{ marginLeft: 10 }} 
+                       style={styles.iconMargin} 
                    />
                 </View>
 
@@ -218,7 +218,7 @@ export default function LoginScreen({ navigation }: Props) {
                         name="lock-closed-outline" 
                         size={20} 
                         color="#0f5b63" 
-                        style={{ marginLeft: 10 }} 
+                        style={styles.iconMargin} 
                     />
                 </View>
 
@@ -457,5 +457,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#0f5b63",
     padding: 0,
+  },
+  iconMargin: {
+    marginLeft: 10,
   },
 });

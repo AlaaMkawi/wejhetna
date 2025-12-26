@@ -1,11 +1,10 @@
-import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from "react-native";
+import React, { useRef } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, StatusBar, Platform, Animated } from "react-native";
+import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
-const { width } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
-const MINT = "#9bd3d8";
 
 type Props = {
   route: any;
@@ -13,45 +12,134 @@ type Props = {
 };
 
 export default function NewUsersScreen({ route, navigation }: Props) {
+  const { t } = useTranslation();
   const { adminUserId, role } = route.params || {};
 
+  // Animation values for driver card
+  const driverScale = useRef(new Animated.Value(1)).current;
+  const driverOpacity = useRef(new Animated.Value(1)).current;
+
+  // Animation values for business card
+  const businessScale = useRef(new Animated.Value(1)).current;
+  const businessOpacity = useRef(new Animated.Value(1)).current;
+
+  const animatePress = (scale: Animated.Value, opacity: Animated.Value, callback: () => void) => {
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 0.95,
+        useNativeDriver: true,
+        tension: 300,
+        friction: 10,
+      }),
+      Animated.timing(opacity, {
+        toValue: 0.8,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      Animated.parallel([
+        Animated.spring(scale, {
+          toValue: 1,
+          useNativeDriver: true,
+          tension: 300,
+          friction: 10,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      callback();
+    });
+  };
+
   const handleDriverRequestsPress = () => {
-    navigation.navigate("AdminDrivers", { adminUserId, role });
+    animatePress(driverScale, driverOpacity, () => {
+      navigation.navigate("AdminDrivers", { adminUserId, role });
+    });
   };
 
   const handleBusinessRequestsPress = () => {
-    navigation.navigate("AdminBusinessOwnerRequests", { adminUserId, role });
+    animatePress(businessScale, businessOpacity, () => {
+      navigation.navigate("AdminBusinessOwnerRequests", { adminUserId, role });
+    });
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Requests</Text>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      <View style={styles.buttonsContainer}>
-        <TouchableOpacity
-          style={[styles.button, styles.primaryButton]}
-          onPress={handleDriverRequestsPress}
-          activeOpacity={0.85}
-        >
-          <View style={styles.buttonContent}>
-            <Ionicons name="car-outline" size={32} color="#fff" />
-            <Text style={styles.buttonTextPrimary}>Drivers requests</Text>
-            <Ionicons name="arrow-forward" size={24} color="#fff" />
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.secondaryButton]}
-          onPress={handleBusinessRequestsPress}
-          activeOpacity={0.85}
-        >
-          <View style={styles.buttonContent}>
-            <Ionicons name="business-outline" size={32} color={DARK_TEAL} />
-            <Text style={styles.buttonText}>Business owner requests</Text>
-            <Ionicons name="arrow-forward" size={24} color={DARK_TEAL} />
-          </View>
-        </TouchableOpacity>
+      {/* Modern Centered Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>{t("requests")}</Text>
       </View>
+
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Driver Requests Card */}
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={handleDriverRequestsPress}
+        >
+          <Animated.View
+            style={[
+              styles.card,
+              {
+                transform: [{ scale: driverScale }],
+                opacity: driverOpacity,
+              },
+            ]}
+          >
+          <View style={styles.cardContent}>
+            <View style={styles.cardIconContainer}>
+              <View style={[styles.iconCircle, styles.driverIconCircle]}>
+                <Ionicons name="car" size={32} color="#fff" />
+              </View>
+            </View>
+            <View style={styles.cardTextContainer}>
+              <Text style={styles.cardTitle}>{t("drivers_requests")}</Text>
+              <Text style={styles.cardSubtitle}>
+                {t("view_and_manage_driver_requests") || "View and manage driver requests"}
+              </Text>
+            </View>
+          </View>
+          </Animated.View>
+        </TouchableOpacity>
+
+        {/* Business Owner Requests Card */}
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={handleBusinessRequestsPress}
+        >
+          <Animated.View
+            style={[
+              styles.card,
+              {
+                transform: [{ scale: businessScale }],
+                opacity: businessOpacity,
+              },
+            ]}
+          >
+          <View style={styles.cardContent}>
+            <View style={styles.cardIconContainer}>
+              <View style={[styles.iconCircle, styles.businessIconCircle]}>
+                <Ionicons name="business" size={32} color="#fff" />
+              </View>
+            </View>
+            <View style={styles.cardTextContainer}>
+              <Text style={styles.cardTitle}>{t("business_owner_requests")}</Text>
+              <Text style={styles.cardSubtitle}>
+                {t("view_and_manage_business_requests") || "View and manage business owner requests"}
+              </Text>
+            </View>
+          </View>
+          </Animated.View>
+        </TouchableOpacity>
+      </ScrollView>
     </View>
   );
 }
@@ -59,59 +147,92 @@ export default function NewUsersScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 24,
-    backgroundColor: "#F7F7FB",
+    backgroundColor: "#FFFFFF",
+  },
+  header: {
+    paddingTop: Platform.OS === "ios" ? 12 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
+    paddingBottom: 0,
+    paddingHorizontal: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
   },
   title: {
-    fontSize: 28,
-    fontWeight: "800",
-    marginBottom: 40,
+    fontSize: 32,
+    fontWeight: "700",
     color: DARK_TEAL,
+    letterSpacing: -0.3,
     textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  buttonsContainer: {
+  scrollView: {
     flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: "center",
-    gap: 24,
+    paddingTop: 4,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    gap: 22,
   },
-  button: {
-    flex: 1,
-    minHeight: 120,
-    borderRadius: 20,
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    marginBottom: 18,
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+    overflow: "hidden",
+  },
+  cardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 22,
+    backgroundColor: "#F8F9FA",
+  },
+  cardIconContainer: {
+    marginRight: 16,
+  },
+  iconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 32,
-    paddingHorizontal: 24,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.2,
+    shadowRadius: 9,
+    elevation: 5,
   },
-  primaryButton: {
+  driverIconCircle: {
     backgroundColor: DARK_TEAL,
   },
-  secondaryButton: {
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: SOFT_TEAL,
+  businessIconCircle: {
+    backgroundColor: SOFT_TEAL,
   },
-  buttonContent: {
-    alignItems: "center",
+  cardTextContainer: {
+    flex: 1,
     justifyContent: "center",
-    gap: 12,
-    width: "100%",
   },
-  buttonText: {
-    color: DARK_TEAL,
-    fontWeight: "700",
+  cardTitle: {
     fontSize: 18,
-    textAlign: "center",
+    fontWeight: "600",
+    color: "#1A1A1A",
+    marginBottom: 6,
+    letterSpacing: -0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  buttonTextPrimary: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 18,
-    textAlign: "center",
+  cardSubtitle: {
+    fontSize: 13,
+    color: "#6B7280",
+    fontWeight: "400",
+    lineHeight: 18,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
 });

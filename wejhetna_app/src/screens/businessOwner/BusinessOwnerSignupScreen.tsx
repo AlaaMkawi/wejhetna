@@ -7,7 +7,6 @@ import {
   TextInput,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
   ImageBackground,
   StatusBar,
@@ -89,7 +88,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
   const passwordMeetsUppercase = (pwd: string): boolean => /[A-Z]/.test(pwd);
   const passwordMeetsLowercase = (pwd: string): boolean => /[a-z]/.test(pwd);
   const passwordMeetsNumber = (pwd: string): boolean => /[0-9]/.test(pwd);
-  const passwordMeetsSymbol = (pwd: string): boolean => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(pwd);
+  const passwordMeetsSymbol = (pwd: string): boolean => /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pwd);
 
   const validatePassword = (pwd: string): string | null => {
     if (!pwd) return null;
@@ -251,7 +250,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
                     name="person-outline" 
                     size={20} 
                     color={DARK_TEAL} 
-                    style={{ marginLeft: 10 }} 
+                    style={styles.iconMargin} 
                   />
                 </View>
                 {fullNameError && <Text style={styles.fieldError}>{fullNameError}</Text>}
@@ -272,7 +271,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
                     name="person-circle-outline" 
                     size={20} 
                     color={DARK_TEAL} 
-                    style={{ marginLeft: 10 }} 
+                    style={styles.iconMargin} 
                   />
                 </View>
                 {usernameError && <Text style={styles.fieldError}>{usernameError}</Text>}
@@ -295,7 +294,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
                     name="mail-outline" 
                     size={20} 
                     color={DARK_TEAL} 
-                    style={{ marginLeft: 10 }} 
+                    style={styles.iconMargin} 
                   />
                 </View>
               </View>
@@ -316,7 +315,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
                     name="call-outline" 
                     size={20} 
                     color={DARK_TEAL} 
-                    style={{ marginLeft: 10 }} 
+                    style={styles.iconMargin} 
                   />
                 </View>
                 {phoneError && <Text style={styles.fieldError}>{phoneError}</Text>}
@@ -344,7 +343,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
                     name="lock-closed-outline" 
                     size={20} 
                     color={DARK_TEAL} 
-                    style={{ marginLeft: 10 }} 
+                    style={styles.iconMargin} 
                   />
                 </View>
                 
@@ -409,7 +408,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
                     name="lock-closed-outline" 
                     size={20} 
                     color={DARK_TEAL} 
-                    style={{ marginLeft: 10 }} 
+                    style={styles.iconMargin} 
                   />
                 </View>
                 {confirmPasswordError && <Text style={styles.fieldError}>{confirmPasswordError}</Text>}
@@ -542,5 +541,8 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 10,
     fontSize: 13,
+  },
+  iconMargin: {
+    marginLeft: 10,
   },
 });
