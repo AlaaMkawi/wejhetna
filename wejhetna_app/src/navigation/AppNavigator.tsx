@@ -22,6 +22,7 @@ import BusinessOwnerPickLocationScreen from "../screens/businessOwner/BusinessOw
 import BusinessOwnerDetailsFormScreen from "../screens/businessOwner/BusinessOwnerDetailsFormScreen";
 import ExistingUsersScreen from "../screens/Admin/ExistingUsersScreen";
 import RejectedUsersScreen from "../screens/Admin/RejectedUsersScreen";
+import UserDetailsScreen from "../screens/Admin/UserDetailsScreen";
 import VerifyEmailScreen from "../screens/VerifyEmailScreen";
 import EnterEmailScreen from "../screens/EnterEmailScreen";
 import RegularSignupScreen from "../screens/RegularSignupScreen";
@@ -60,7 +61,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="AdminDrivers"
         component={AdminDriversScreen}
-        options={{ title: "Pending Drivers" }}
+        options={{ headerShown: false }}
       />
       
       <Stack.Screen
@@ -153,19 +154,19 @@ export default function AppNavigator() {
       <Stack.Screen
   name="AdminDriverDetails"
   component={AdminDriverDetailsScreen}
-  options={{ title: "Driver details" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="AdminBusinessOwnerRequests"
   component={AdminBusinessOwnerRequestsScreen}
-  options={{ title: "Business Owner Requests" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="AdminBusinessOwnerRequestDetails"
   component={AdminBusinessOwnerRequestDetailsScreen}
-  options={{ title: "Request Details" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
@@ -189,13 +190,19 @@ export default function AppNavigator() {
 <Stack.Screen
   name="ExistingUsers"
   component={ExistingUsersScreen}
-  options={{ title: "Existing Users" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="RejectedUsers"
   component={RejectedUsersScreen}
-  options={{ title: "Rejected Users" }}
+  options={{ headerShown: false }}
+/>
+
+<Stack.Screen
+  name="UserDetails"
+  component={UserDetailsScreen}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen

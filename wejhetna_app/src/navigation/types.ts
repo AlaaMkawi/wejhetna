@@ -53,6 +53,11 @@ export type RootStackParamList = {
   };
   ExistingUsers: { adminUserId: number; role: "ADMIN" };
   RejectedUsers: { adminUserId: number; role: "ADMIN" };
+  UserDetails: {
+    adminUserId: number;
+    role: "ADMIN";
+    user: import("../screens/Admin/ExistingUsersScreen").UserListItem;
+  };
   // 🔹 מסכי ניהול חדשים
   AdminCities: { adminUserId: number; role: "ADMIN" };
   AdminCategories: { adminUserId: number; role: "ADMIN" };

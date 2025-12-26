@@ -588,6 +588,8 @@ class DriverProfileOut(BaseModel):
     user: UserProfileOut
     vehicle: Optional[DriverVehicleOut] = None
     driver_status: str
+    driver_license_image_url: Optional[str] = None
+    id_card_image_url: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -1202,24 +1204,48 @@ def signup_business_owner(data: BusinessOwnerSignup, db: Session = Depends(get_d
                 and existing_user.status == UserStatus.REJECTED
         ):
             # Rejected business owner trying again - allow re-signup
-            existing_user.full_name = data.full_name
-            existing_user.phone = data.phone
-            existing_user.password_hash = hash_password(data.password)
-            existing_user.status = UserStatus.PENDING
-            existing_user.rejection_reason = None  # Clear old rejection reason
-            existing_user.email_verified = False
+            # Check if email was verified (user should verify email again after rejection)
+            verified = db.query(EmailVerification).filter(
+                EmailVerification.email == data.email,
+                EmailVerification.is_used == True
+            ).order_by(EmailVerification.created_at.desc()).first()
+            
+            if not verified:
+                # Email not verified - set to unverified and send verification code
+                existing_user.full_name = data.full_name
+                existing_user.phone = data.phone
+                existing_user.password_hash = hash_password(data.password)
+                existing_user.status = UserStatus.PENDING
+                existing_user.rejection_reason = None  # Clear old rejection reason
+                existing_user.email_verified = False
 
-            db.commit()
-            db.refresh(existing_user)
+                db.commit()
+                db.refresh(existing_user)
 
-            # Send verification code (default to Arabic if no language preference)
-            verification = create_verification_code(existing_user.id, existing_user.email, db)
-            send_verification_email(existing_user.email, verification.code, existing_user.full_name, language="ar")
+                # Send verification code (default to Arabic if no language preference)
+                verification = create_verification_code(existing_user.id, existing_user.email, db)
+                send_verification_email(existing_user.email, verification.code, existing_user.full_name, language="ar")
 
-            return BusinessOwnerSignupOut(
-                user=UserOut.model_validate(existing_user, from_attributes=True),
-                message="Your business owner signup request has been sent again. Please choose your business location next.",
-            )
+                return BusinessOwnerSignupOut(
+                    user=UserOut.model_validate(existing_user, from_attributes=True),
+                    message="Your business owner signup request has been sent again. Please verify your email and then choose your business location next.",
+                )
+            else:
+                # Email already verified - proceed with signup
+                existing_user.full_name = data.full_name
+                existing_user.phone = data.phone
+                existing_user.password_hash = hash_password(data.password)
+                existing_user.status = UserStatus.PENDING
+                existing_user.rejection_reason = None  # Clear old rejection reason
+                existing_user.email_verified = True  # Email was verified
+
+                db.commit()
+                db.refresh(existing_user)
+
+                return BusinessOwnerSignupOut(
+                    user=UserOut.model_validate(existing_user, from_attributes=True),
+                    message="Your business owner signup request has been sent again. Please choose your business location next.",
+                )
 
         raise HTTPException(
             status_code=400,
@@ -1306,11 +1332,20 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if already verified
+    # Check if already verified (but allow rejected business owners to re-verify)
     if user.email_verified:
-        raise HTTPException(status_code=400, detail="Email is already verified")
+        # Allow rejected business owners to request new verification code
+        if user.role == UserRole.BUSINESS_OWNER and user.status == UserStatus.REJECTED:
+            # Reset email_verified to False so they can verify again
+            user.email_verified = False
+            db.commit()
+        else:
+            raise HTTPException(status_code=400, detail="Email is already verified")
 
     # Create and send new verification code
+    verification = create_verification_code(user.id, user.email, db)
+    language = data.language if hasattr(data, 'language') and data.language else "ar"
+    send_verification_email(user.email, verification.code, user.full_name, language=language)
 
     return {"success": True, "message": "Verification code has been resent"}
 
@@ -1467,29 +1502,48 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/auth/request-email-verification")
 def request_email_verification(data: SendVerificationCodeRequest, db: Session = Depends(get_db)):
-    # check email not already used by verified user
-    existing = db.query(User).filter(
-        User.email == data.email,
-        User.email_verified == True
-    ).first()
-    if existing:
-        raise HTTPException(400, "Email already registered")
-
-    code = generate_verification_code()
-
-    verification = EmailVerification(
-        user_id=None,
-        email=data.email,
-        code=code,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
-        is_used=False
-    )
-
-    db.add(verification)
-    db.commit()
-
-    language = data.language if hasattr(data, 'language') and data.language else "ar"
-    send_verification_email(data.email, code, full_name="", language=language)
+    # Check if user exists with this email
+    existing_user = db.query(User).filter(User.email == data.email).first()
+    
+    if existing_user:
+        # Allow rejected business owners to always request new verification code
+        if existing_user.role == UserRole.BUSINESS_OWNER and existing_user.status == UserStatus.REJECTED:
+            # Rejected business owner can re-verify email - reset email_verified
+            existing_user.email_verified = False
+            db.commit()
+        elif existing_user.email_verified:
+            # For other verified users, block the request
+            raise HTTPException(400, "Email already registered")
+        
+        # Create verification code with user_id if user exists
+        code = generate_verification_code()
+        verification = EmailVerification(
+            user_id=existing_user.id,
+            email=data.email,
+            code=code,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+            is_used=False
+        )
+        db.add(verification)
+        db.commit()
+        
+        language = data.language if hasattr(data, 'language') and data.language else "ar"
+        send_verification_email(data.email, code, existing_user.full_name, language=language)
+    else:
+        # New user - create verification code without user_id
+        code = generate_verification_code()
+        verification = EmailVerification(
+            user_id=None,
+            email=data.email,
+            code=code,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+            is_used=False
+        )
+        db.add(verification)
+        db.commit()
+        
+        language = data.language if hasattr(data, 'language') and data.language else "ar"
+        send_verification_email(data.email, code, full_name="", language=language)
 
     return {"success": True}
 
@@ -2198,6 +2252,15 @@ def create_business_owner_place_request(
                 and existing_user.status == UserStatus.REJECTED
         ):
             # Rejected business owner trying again - allow re-signup
+            # Check if email was verified (user should verify email again after rejection)
+            verified = db.query(EmailVerification).filter(
+                EmailVerification.email == data.email,
+                EmailVerification.is_used == True
+            ).order_by(EmailVerification.created_at.desc()).first()
+            
+            if not verified:
+                raise HTTPException(403, "Email not verified. Please verify your email first.")
+            
             existing_user.full_name = data.full_name
             existing_user.phone = data.phone  # user's personal phone
             existing_user.password_hash = hash_password(data.password)
@@ -2593,6 +2656,8 @@ def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
         ),
         vehicle=vehicle_out,
         driver_status=driver_profile.driver_status.value,
+        driver_license_image_url=driver_profile.driver_license_image_url,
+        id_card_image_url=driver_profile.id_card_image_url,
     )
 
 
