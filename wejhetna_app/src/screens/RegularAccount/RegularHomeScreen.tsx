@@ -6,102 +6,164 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
-  Modal,
   Alert,
-  ActivityIndicator,
   ScrollView,
+  Image,
+  PanResponder,
+  Platform,
+  StatusBar,
+  Dimensions,
 } from "react-native";
-import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
-import Geolocation from "@react-native-community/geolocation";
-import { fetchAllPlaces, PlaceForMap } from "../../api/places";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { useRoute, RouteProp } from "@react-navigation/native";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved } from "../../api/places";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import i18n from "../../i18n";
+import { useTranslation } from "react-i18next";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 const INITIAL_CENTER: [number, number] = [34.83, 31.24];
 const INITIAL_ZOOM = 12.5;
-const LABEL_VISIBLE_ZOOM_THRESHOLD = 14;
+
+// Zoom thresholds for displaying different types of places
+// At zoom < 13: Only roads and city outlines (handled by MapTiler style)
+// At zoom 13-14: Road names appear (handled by MapTiler style)
+// At zoom 15-16.4: Only PUBLIC_SERVICE places appear with icons
+// At zoom 16.5+: All places (PUBLIC_SERVICE + BUSINESS) appear with icons
+const PUBLIC_SERVICE_ZOOM_THRESHOLD = 15; // Show public services (mosques, schools, clinics) at zoom 15+
+const BUSINESS_ZOOM_THRESHOLD = 16.5; // Show businesses at zoom 16.5+ (only after public services are already visible)
+
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-rounded corners)
+const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
+const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי (75% מהמסך)
+const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
 
 const NEGEV_BOUNDS = {
   ne: [35.10, 31.42],
   sw: [34.72, 31.18],
 };
 
+// Helper function to get place name based on current language
+const getPlaceName = (place: PlaceForMap): string => {
+  const currentLanguage = i18n.language || "ar";
+  
+  if (currentLanguage === "he" && place.name_he) {
+    return place.name_he;
+  } else if (currentLanguage === "ar" && place.name_ar) {
+    return place.name_ar;
+  } else if (place.name) {
+    return place.name; // fallback to English name
+  }
+  
+  // Ultimate fallback
+  return place.name_he || place.name_ar || place.name || "";
+};
+
+// Helper function to get city name based on current language
+const getCityName = (city: { name_ar?: string; name_he?: string; name_en?: string } | undefined): string => {
+  if (!city) return "";
+  
+  const currentLanguage = i18n.language || "ar";
+  
+  if (currentLanguage === "he" && city.name_he) {
+    return city.name_he;
+  } else if (currentLanguage === "ar" && city.name_ar) {
+    return city.name_ar;
+  } else if (city.name_en) {
+    return city.name_en;
+  }
+  
+  return city.name_ar || city.name_he || city.name_en || "";
+};
+
+// Helper function to get icon for a place based on category and type
+const getPlaceIcon = (place: PlaceForMap) => {
+  const categoryName = place.category?.name_ar?.toLowerCase() || place.category?.name_en?.toLowerCase() || '';
+  const iconName = place.category?.icon_name?.toLowerCase() || '';
+  
+  // For public services
+  if (place.place_type === 'PUBLIC_SERVICE') {
+    if (categoryName.includes('מסגד') || categoryName.includes('mosque') || iconName.includes('mosque')) {
+      return { type: 'mosque', color: '#4285F4' };
+    }
+    if (categoryName.includes('בית ספר') || categoryName.includes('school') || iconName.includes('school')) {
+      return { type: 'school', color: '#34A853' };
+    }
+    if (categoryName.includes('קופת חולים') || categoryName.includes('clinic') || categoryName.includes('מרפאה') || iconName.includes('clinic') || iconName.includes('hospital')) {
+      return { type: 'clinic', color: '#EA4335' };
+    }
+    if (categoryName.includes('גן ילדים') || categoryName.includes('kindergarten') || iconName.includes('kindergarten')) {
+      return { type: 'kindergarten', color: '#FBBC04' };
+    }
+    if (categoryName.includes('מרכז קהילתי') || categoryName.includes('community') || iconName.includes('community')) {
+      return { type: 'community', color: '#9AA0A6' };
+    }
+    if (categoryName.includes('בית') || categoryName.includes('home') || categoryName.includes('منزل') || iconName.includes('home') || iconName.includes('house')) {
+      return { type: 'home', color: '#FF9800' };
+    }
+    // Default public service icon
+    return { type: 'public', color: '#4285F4' };
+  }
+  
+  // For businesses - use category icon or default business icon
+  if (place.place_type === 'BUSINESS') {
+    if (iconName) {
+      return { type: 'business', color: '#EA4335', iconName: iconName };
+    }
+    return { type: 'business', color: '#EA4335' };
+  }
+  
+  return { type: 'default', color: '#4285F4' };
+};
+
 type Props = {
   navigation: any;
+  route?: RouteProp<any, any>;
 };
 
-type RouteCoordinates = {
-  type: "FeatureCollection";
-  features: Array<{
-    type: "Feature";
-    geometry: {
-      type: "LineString";
-      coordinates: [number, number][];
-    };
-    properties: Record<string, any>;
-  }>;
-};
-
-export default function RegularHomeScreen({ navigation }: Props) {
+export default function RegularHomeScreen({ navigation, route }: Props) {
+  const { t } = useTranslation();
+  const routeParams = useRoute();
+  const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
   const cameraRef = useRef<any>(null);
-  const mapRef = useRef<any>(null);
-
-  // GPS Location
-  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
-  const [locationLoading, setLocationLoading] = useState(true);
 
   // Places
   const [places, setPlaces] = useState<PlaceForMap[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<PlaceForMap | null>(null);
   const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
 
-  // Search
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
-  const [showSearchModal, setShowSearchModal] = useState(false);
+  // Save/Unsave place
+  const [isPlaceSaved, setIsPlaceSaved] = useState(false);
+  const [savingPlace, setSavingPlace] = useState(false);
+  const [userId, setUserId] = useState<number | null>(null);
 
-  // Destination
-  const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
-  const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
+  // Ref for ScrollView to reset scroll position when place changes
+  const scrollViewRef = useRef<ScrollView>(null);
 
-  // Route
-  const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinates | null>(null);
-  const [routeLoading, setRouteLoading] = useState(false);
-  const [routeInfo, setRouteInfo] = useState<{
-    distance: number; // in meters
-    duration: number; // in seconds
-    startAddress?: string;
-    endAddress?: string;
-  } | null>(null);
-
-  // Navigation (tracking movement)
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [watchId, setWatchId] = useState<number | null>(null);
-
-  // Get user's GPS location
+  // Load user ID from AsyncStorage
   useEffect(() => {
-    setLocationLoading(true);
-    Geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        setUserLocation({ lat: latitude, lon: longitude });
-        setLocationLoading(false);
-
-        // Don't auto-zoom to user location - let user navigate freely
-      },
-      (error) => {
-        console.log("GPS error", error);
-        Alert.alert("Location Error", "Could not get your location. Using default location.");
-        setLocationLoading(false);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 10000,
+    async function loadUserId() {
+      try {
+        const storedUserId = await AsyncStorage.getItem("userId");
+        if (storedUserId) {
+          setUserId(parseInt(storedUserId, 10));
+        }
+      } catch (error) {
+        console.error("Error loading user ID:", error);
       }
-    );
+    }
+    loadUserId();
   }, []);
 
   // Fetch all places on mount
@@ -117,347 +179,202 @@ export default function RegularHomeScreen({ navigation }: Props) {
     load();
   }, []);
 
-  // Handle map region change
-  const onRegionDidChange = (feature: any) => {
-    try {
-      const [lon, lat] = feature.geometry.coordinates;
-      const newZoom = feature.properties.zoomLevel;
-      setCurrentZoom(newZoom);
-
-      // Keep map within Negev bounds
-      if (lon < 34.72 || lat > 31.43) {
-        cameraRef.current?.setCamera({
-          centerCoordinate: [34.75, 31.39],
-          animationDuration: 600,
-        });
-      }
-    } catch (error) {
-      console.log("Error parsing map region:", error);
-    }
-  };
-
-  // Handle map long press (drop custom pin)
-  const handleMapLongPress = (e: any) => {
-    try {
-      const coords = e?.geometry?.coordinates;
-      if (Array.isArray(coords) && coords.length >= 2) {
-        const [lon, lat] = coords;
-        setCustomPin({ lat, lon });
-        setDestination({ lat, lon, name: `📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}` });
-        setRouteCoordinates(null); // Clear any existing route
-        setRouteInfo(null); // Clear route info
-        setSearchResults([]);
-        setShowSearchModal(false);
-      }
-    } catch (error) {
-      console.error("Error handling long press:", error);
-    }
-  };
-
-  // Handle place marker tap
-  const handlePlaceTap = (place: PlaceForMap) => {
-    setSelectedPlace(place);
-    setDestination({
-      lat: place.location.lat,
-      lon: place.location.lon,
-      name: place.name,
-    });
-    setCustomPin(null);
-    setRouteCoordinates(null); // Clear any existing route
-    setRouteInfo(null); // Clear route info
-    setShowSearchModal(false);
-  };
-
-  // Search places by name
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-    if (query.trim().length === 0) {
-      setSearchResults([]);
-      return;
-    }
-
-    try {
-      const filtered = places.filter(
-        (place) =>
-          (place.name && place.name.toLowerCase().includes(query.toLowerCase())) ||
-          (place.name_ar && place.name_ar.toLowerCase().includes(query.toLowerCase())) ||
-          (place.name_he && place.name_he.toLowerCase().includes(query.toLowerCase()))
-      );
-      setSearchResults(filtered);
-    } catch (error) {
-      console.error("Search error:", error);
-      setSearchResults([]);
-    }
-  };
-
-  // Get route from user location to destination using MapTiler
-  const getRoute = async () => {
-    if (!userLocation || !destination) {
-      Alert.alert("Error", "Please select a destination first");
-      return;
-    }
-
-    setRouteLoading(true);
-    setRouteInfo(null);
-    
-    try {
-      // Using MapTiler Directions API for driving directions
-      // To get a free MapTiler API key:
-      // 1. Go to https://cloud.maptiler.com/account/keys/ and sign up/login
-      // 2. Copy your API key
-      // 3. Replace "YOUR_MAPTILER_API_KEY" below with your key
-      // 
-      // Note: Free tier includes generous limits
-      // Using OSRM (Open Source Routing Machine) - free, no API key needed
-      // OSRM provides driving directions with detailed route information
-      // Format: /route/v1/{profile}/{coordinates}?overview=full&geometries=geojson
-      const profile = "driving"; // driving, walking, or cycling
-      const coordinates = `${userLocation.lon},${userLocation.lat};${destination.lon},${destination.lat}`;
-      
-      // Using OSRM public server (free, no API key required)
-      const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=false&steps=false`;
-      
-      console.log("Requesting route from OSRM:", url);
-      
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("OSRM API error:", response.status, errorText);
-        throw new Error(`Routing service error: ${response.status} - ${errorText}`);
-      }
-      
-      const routeData = await response.json();
-      
-      // OSRM response format: { code: "Ok", routes: [{ distance, duration, geometry }] }
-      if (routeData.code === "Ok" && routeData.routes && routeData.routes.length > 0) {
-        const route = routeData.routes[0];
-        
-        // Extract route information
-        const distance = route.distance || 0; // in meters
-        const duration = route.duration || 0; // in seconds
-        
-        // OSRM geometry format is already GeoJSON LineString
-        const routeGeometry = route.geometry || {
-          type: "LineString",
-          coordinates: [
-            [userLocation.lon, userLocation.lat],
-            [destination.lon, destination.lat],
-          ],
-        };
-        
-        // Set route geometry for display
-        setRouteCoordinates({
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              geometry: routeGeometry,
-              properties: {},
-            },
-          ],
-        });
-
-        // Store route info (distance, duration)
-        setRouteInfo({
-          distance,
-          duration,
-          startAddress: "Your Location",
-          endAddress: destination.name || "Destination",
-        });
-
-        // Don't auto-zoom to route - let user navigate freely
-      } else {
-        const errorMsg = routeData.code === "NoRoute" 
-          ? "No route found between these points"
-          : routeData.message || "No route found in response";
-        throw new Error(errorMsg);
-      }
-    } catch (error: any) {
-      console.error("Route error:", error?.message || String(error));
-      Alert.alert(
-        "Route Error",
-        error?.message || "Could not get driving directions. Please check your MapTiler API key and try again."
-      );
-      setRouteCoordinates(null);
-      setRouteInfo(null);
-    } finally {
-      setRouteLoading(false);
-    }
-  };
-
-  // Start navigation (track movement)
-  const startNavigation = () => {
-    if (!userLocation || !destination) {
-      Alert.alert("Error", "Please select a destination and get directions first");
-      return;
-    }
-
-    setIsNavigating(true);
-
-    // Watch position updates
-    const id = Geolocation.watchPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        const newLocation = { lat: latitude, lon: longitude };
-        setUserLocation(newLocation); // Update user location marker
-
-        // Update map camera to follow user
-        if (cameraRef.current) {
+  // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)
+  useEffect(() => {
+    if (selectedPlaceIdFromParams && places.length > 0) {
+      const place = places.find(p => p.id === selectedPlaceIdFromParams);
+      if (place) {
+        setSelectedPlace(place);
+        // Center camera on the place location
+        if (place.location && cameraRef.current) {
           cameraRef.current.setCamera({
-            centerCoordinate: [longitude, latitude],
-            zoomLevel: 16, // Closer zoom when navigating
-            animationDuration: 500,
+            centerCoordinate: [place.location.lon, place.location.lat],
+            zoomLevel: 16.5,
+            animationDuration: 1000,
           });
         }
-      },
-      (error) => {
-        console.error("GPS tracking error:", error);
-        Alert.alert("Location Error", "Could not track your location. Navigation stopped.");
-        stopNavigation();
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 1000,
-        distanceFilter: 5, // Update every 5 meters
       }
-    );
-
-    setWatchId(id);
-  };
-
-  // Stop navigation
-  const stopNavigation = () => {
-    if (watchId !== null) {
-      Geolocation.clearWatch(watchId);
-      setWatchId(null);
     }
-    setIsNavigating(false);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlaceIdFromParams, places]);
 
-  // Clear route
-  const clearRoute = () => {
-    stopNavigation();
-    setRouteCoordinates(null);
-    setRouteInfo(null);
-    setDestination(null);
-    setCustomPin(null);
-  };
-
-  // Format distance
-  const formatDistance = (meters: number): string => {
-    if (meters < 1000) {
-      return `${Math.round(meters)} m`;
+  // Check if place is saved when selected
+  useEffect(() => {
+    async function checkSaved() {
+      if (selectedPlace && userId) {
+        try {
+          const saved = await checkIfPlaceSaved(userId, selectedPlace.id);
+          setIsPlaceSaved(saved);
+        } catch (error) {
+          console.error("Error checking if place is saved:", error);
+          setIsPlaceSaved(false);
+        }
+      } else {
+        setIsPlaceSaved(false);
+      }
     }
-    return `${(meters / 1000).toFixed(1)} km`;
+    checkSaved();
+  }, [selectedPlace, userId]);
+
+  // Handle save/unsave place
+  const handleToggleSave = async () => {
+    if (!selectedPlace || !userId) return;
+    
+    setSavingPlace(true);
+    try {
+      if (isPlaceSaved) {
+        await unsavePlace(userId, selectedPlace.id);
+        setIsPlaceSaved(false);
+        Alert.alert(
+          t("success") || "הצלחה",
+          t("place_removed_from_saved") || "המקום הוסר מהשמורים"
+        );
+      } else {
+        await savePlace(userId, selectedPlace.id);
+        setIsPlaceSaved(true);
+        Alert.alert(
+          t("success") || "הצלחה",
+          t("place_saved_successfully") || "המקום נשמר בהצלחה"
+        );
+      }
+    } catch (error: any) {
+      Alert.alert(
+        t("error") || "שגיאה",
+        error.message || t("failed_to_save_place") || "נכשל בשמירת המקום"
+      );
+    } finally {
+      setSavingPlace(false);
+    }
   };
 
-  // Format duration
-  const formatDuration = (seconds: number): string => {
-    const minutes = Math.round(seconds / 60);
-    if (minutes < 60) {
-      return `${minutes} min`;
+  // Bottom sheet animation values
+  const translateY = useSharedValue(SCREEN_HEIGHT);
+
+  // Reset bottom sheet position and scroll when place is selected/deselected
+  useEffect(() => {
+    if (selectedPlace) {
+      // Position above tab bar with additional offset
+      const targetY = SCREEN_HEIGHT - BOTTOM_TAB_HEIGHT - BOTTOM_SHEET_MIN_HEIGHT - BOTTOM_SHEET_OFFSET;
+      translateY.value = withSpring(targetY, {
+        damping: 20,
+        stiffness: 90,
+      });
+      // Reset scroll position to top when place changes
+      setTimeout(() => {
+        scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+      }, 100);
+    } else {
+      // Hide below screen (accounting for tab bar and offset)
+      translateY.value = withTiming(SCREEN_HEIGHT - BOTTOM_TAB_HEIGHT - BOTTOM_SHEET_OFFSET, {
+        duration: 300,
+      });
     }
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlace]);
+
+  // Pan responder for bottom sheet drag
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only respond to vertical drags
+        return Math.abs(gestureState.dy) > 5 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
+      },
+      onPanResponderGrant: () => {
+        // Start dragging
+      },
+      onPanResponderMove: (_, gestureState) => {
+        // Calculate new position based on drag
+        const currentTranslateY = translateY.value;
+        const newTranslateY = currentTranslateY + gestureState.dy;
+        
+        // Clamp to min/max positions (accounting for tab bar and offset)
+        const minY = SCREEN_HEIGHT - BOTTOM_TAB_HEIGHT - BOTTOM_SHEET_MAX_HEIGHT - BOTTOM_SHEET_OFFSET;
+        const maxY = SCREEN_HEIGHT - BOTTOM_TAB_HEIGHT - BOTTOM_SHEET_MIN_HEIGHT - BOTTOM_SHEET_OFFSET;
+        const clampedY = Math.max(minY, Math.min(maxY, newTranslateY));
+        
+        translateY.value = clampedY;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const velocity = gestureState.vy;
+        const currentTranslateY = translateY.value;
+        const currentHeight = SCREEN_HEIGHT - currentTranslateY;
+        
+        // Determine target height based on position and velocity
+        let targetHeight = BOTTOM_SHEET_MIN_HEIGHT;
+        
+        if (velocity < -0.5 || (currentHeight > SCREEN_HEIGHT * 0.4 && velocity < 0)) {
+          // Swipe up - expand to max
+          targetHeight = BOTTOM_SHEET_MAX_HEIGHT;
+        } else if (velocity > 0.5 || currentHeight < SCREEN_HEIGHT * 0.3) {
+          // Swipe down - collapse to min
+          targetHeight = BOTTOM_SHEET_MIN_HEIGHT;
+        } else {
+          // Stay at current position (snap to nearest)
+          if (currentHeight > (BOTTOM_SHEET_MIN_HEIGHT + BOTTOM_SHEET_MAX_HEIGHT) / 2) {
+            targetHeight = BOTTOM_SHEET_MAX_HEIGHT;
+          } else {
+            targetHeight = BOTTOM_SHEET_MIN_HEIGHT;
+          }
+        }
+        
+        const targetY = SCREEN_HEIGHT - BOTTOM_TAB_HEIGHT - targetHeight - BOTTOM_SHEET_OFFSET;
+        translateY.value = withSpring(targetY, {
+          damping: 20,
+          stiffness: 90,
+        });
+      },
+    })
+  ).current;
+
+  // Animated styles for bottom sheet
+  const bottomSheetAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateY: translateY.value }],
+    };
+  });
+
+  const onRegionDidChange = async (feature: any) => {
+    const [lon, lat] = feature.geometry.coordinates;
+    const newZoom = feature.properties.zoomLevel;
+    setCurrentZoom(newZoom);
+
+    if (lon < 34.72 || lat > 31.43) {
+      cameraRef.current?.setCamera({
+        centerCoordinate: [34.75, 31.39],
+        animationDuration: 600,
+      });
+    }
+  };
+
+  const resetCamera = () => {
+    cameraRef.current?.setCamera({
+      centerCoordinate: INITIAL_CENTER,
+      zoomLevel: INITIAL_ZOOM,
+      animationDuration: 1000,
+    });
   };
 
   return (
     <View style={styles.container}>
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search places..."
-          placeholderTextColor="#666"
-          value={searchQuery}
-          onChangeText={handleSearch}
-          onFocus={() => setShowSearchModal(true)}
-        />
-        {locationLoading && (
-          <ActivityIndicator size="small" color="#1e90ff" style={styles.loader} />
-        )}
-      </View>
+      <StatusBar barStyle="dark-content" />
 
-      {/* Search Results Modal */}
-      <Modal
-        visible={showSearchModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSearchModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Search Places</Text>
-              <TouchableOpacity onPress={() => setShowSearchModal(false)}>
-                <Text style={styles.closeButton}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.searchResultsList}>
-              {searchResults.length === 0 && searchQuery.trim().length > 0 && (
-                <Text style={styles.noResults}>No places found</Text>
-              )}
-              {searchResults.map((place) => (
-                <TouchableOpacity
-                  key={place.id}
-                  style={styles.searchResultItem}
-                  onPress={() => {
-                    handlePlaceTap(place);
-                    setSearchQuery("");
-                    setShowSearchModal(false);
-                  }}
-                >
-                  <Text style={styles.searchResultName}>{place.name || "Unnamed Place"}</Text>
-                  {place.name_ar && (
-                    <Text style={styles.searchResultNameAr}>{place.name_ar}</Text>
-                  )}
-                  {place.city && place.city.name_ar && (
-                    <Text style={styles.searchResultCity}>{place.city.name_ar}</Text>
-                  )}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Map */}
       <MapView
-        ref={mapRef}
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
-        onLongPress={handleMapLongPress}
-        onPress={(e: any) => {
-          // Handle regular tap - check if tapping near a place
-          try {
-            const coords = e?.geometry?.coordinates;
-            if (Array.isArray(coords) && coords.length >= 2) {
-              const [lon, lat] = coords;
-              // Find nearest place within reasonable distance
-              const nearestPlace = places.find((place) => {
-                if (!place.location) return false;
-                const distance = Math.sqrt(
-                  Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
-                );
-                return distance < 0.001; // ~100 meters
-              });
-              if (nearestPlace) {
-                handlePlaceTap(nearestPlace);
-              }
-            }
-          } catch {
-            // Ignore tap errors
-          }
-        }}
         scrollEnabled={true}
         rotateEnabled={false}
         pitchEnabled={false}
         logoEnabled={false}
         attributionEnabled={false}
+        onDidFailLoadingMap={() => {
+          // Log error but don't show to user - map might still work
+          // These timeout errors are usually non-critical and the map still functions
+          if (__DEV__) {
+            console.log("Map loading warning (non-critical) - map may still work");
+          }
+        }}
       >
         <Camera
           ref={cameraRef}
@@ -471,644 +388,709 @@ export default function RegularHomeScreen({ navigation }: Props) {
           animationMode="flyTo"
         />
 
-        {/* User Location Marker */}
-        {userLocation && (
-          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
-              <View style={styles.userLocationDot} />
-            </View>
-          </PointAnnotation>
-        )}
-
-        {/* Place Markers */}
         {places.map((place) => {
           if (!place.location) return null;
+          
           const isSelected = selectedPlace?.id === place.id;
-          const shouldShowLabel =
-            currentZoom >= LABEL_VISIBLE_ZOOM_THRESHOLD || isSelected;
+          const placeIcon = getPlaceIcon(place);
+          
+          // Determine visibility based on zoom level and place type
+          let shouldShow = false;
+          let shouldShowLabel = false;
+          
+          if (place.place_type === 'PUBLIC_SERVICE') {
+            shouldShow = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
+            shouldShowLabel = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
+          } else if (place.place_type === 'BUSINESS') {
+            shouldShow = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
+            shouldShowLabel = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
+          }
+          
+          if (!shouldShow) return null;
 
           return (
             <PointAnnotation
               key={place.id}
-              id={`place_${place.id}`}
+              id={String(place.id)}
               coordinate={[place.location.lon, place.location.lat]}
-              onSelected={() => handlePlaceTap(place)}
+              onSelected={() => {
+                console.log("Place selected:", place.id, place.name);
+                setSelectedPlace(place);
+              }}
             >
               <View style={styles.nativeMarkerContainer}>
-                <View
-                  style={[
-                    styles.dotContainer,
-                    isSelected && styles.dotSelected,
-                  ]}
-                >
-                  <View style={styles.innerDot} />
+                {/* Icon/Marker based on place type - Google Maps style */}
+                {place.place_type === 'PUBLIC_SERVICE' ? (
+                  <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
+                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
+                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
+                      {/* Icon circle - גדול יותר אם נבחר */}
+                      <View style={[
+                        styles.iconContainer, 
+                        isSelected && styles.iconContainerSelected,
+                        { backgroundColor: placeIcon.color }
+                      ]}>
+                        {placeIcon.type === 'mosque' && (
+                          <MaterialCommunityIcons name="mosque" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                        {placeIcon.type === 'school' && (
+                          <Ionicons name="school" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                        {placeIcon.type === 'clinic' && (
+                          <MaterialCommunityIcons name="hospital-building" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                        {placeIcon.type === 'kindergarten' && (
+                          <MaterialCommunityIcons name="baby-face-outline" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                        {placeIcon.type === 'community' && (
+                          <MaterialCommunityIcons name="account-group" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                        {placeIcon.type === 'home' && (
+                          <Ionicons name="home" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                        {placeIcon.type === 'public' && (
+                          <Ionicons name="location" size={isSelected ? 26 : 18} color="#FFFFFF" />
+                        )}
+                      </View>
+                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
+                      <View style={[
+                        styles.pinPoint, 
+                        isSelected && styles.pinPointSelected,
+                        { borderTopColor: placeIcon.color }
+                      ]} />
+                    </View>
+                  </View>
+                ) : (
+                  <View style={[styles.businessMarker, isSelected && styles.markerSelected]}>
+                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
+                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
+                      {/* Icon circle - גדול יותר אם נבחר */}
+                      <View style={[
+                        styles.iconContainer, 
+                        isSelected && styles.iconContainerSelected,
+                        { backgroundColor: placeIcon.color }
+                      ]}>
+                        <Ionicons name="business" size={isSelected ? 24 : 16} color="#FFFFFF" />
+                      </View>
+                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
+                      <View style={[
+                        styles.pinPoint, 
+                        isSelected && styles.pinPointSelected,
+                        { borderTopColor: placeIcon.color }
+                      ]} />
+                    </View>
                 </View>
+                )}
 
+                {/* Label with icon - Google Maps style */}
                 {shouldShowLabel && (
-                  <View style={styles.labelWrapper}>
+                  <View style={[styles.labelWrapper, isSelected && styles.labelSelected]}>
+                    <View style={styles.labelContent}>
+                      {/* Small icon next to text */}
+                      <View style={[styles.labelIconContainer, { backgroundColor: placeIcon.color }]}>
+                        {place.place_type === 'PUBLIC_SERVICE' && (
+                          <>
+                            {placeIcon.type === 'mosque' && (
+                              <MaterialCommunityIcons name="mosque" size={12} color="#FFFFFF" />
+                            )}
+                            {placeIcon.type === 'school' && (
+                              <Ionicons name="school" size={12} color="#FFFFFF" />
+                            )}
+                            {placeIcon.type === 'clinic' && (
+                              <MaterialCommunityIcons name="hospital-building" size={12} color="#FFFFFF" />
+                            )}
+                            {placeIcon.type === 'kindergarten' && (
+                              <MaterialCommunityIcons name="baby-face-outline" size={12} color="#FFFFFF" />
+                            )}
+                            {placeIcon.type === 'community' && (
+                              <MaterialCommunityIcons name="account-group" size={12} color="#FFFFFF" />
+                            )}
+                            {placeIcon.type === 'home' && (
+                              <Ionicons name="home" size={12} color="#FFFFFF" />
+                            )}
+                            {placeIcon.type === 'public' && (
+                              <Ionicons name="location" size={12} color="#FFFFFF" />
+                            )}
+                          </>
+                        )}
+                        {place.place_type === 'BUSINESS' && (
+                          <Ionicons name="business" size={12} color="#FFFFFF" />
+                        )}
+                      </View>
                     <Text style={styles.nativeMapLabel} numberOfLines={1}>
-                      {place.name}
+                        {getPlaceName(place)}
                     </Text>
+                    </View>
                   </View>
                 )}
               </View>
             </PointAnnotation>
           );
         })}
-
-        {/* Custom Pin Marker */}
-        {customPin && (
-          <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
-              <View style={styles.customPinDot} />
-            </View>
-          </PointAnnotation>
-        )}
-
-        {/* Destination Marker */}
-        {destination && !customPin && (
-          <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
-              <Text style={styles.destinationMarkerText}>📍</Text>
-            </View>
-          </PointAnnotation>
-        )}
-
-        {/* Route Line */}
-        {routeCoordinates && (
-          <ShapeSource id="route" shape={routeCoordinates}>
-            <LineLayer
-              id="routeLine"
-              style={{
-                lineColor: "#1e90ff",
-                lineWidth: 4,
-                lineCap: "round",
-                lineJoin: "round",
-              }}
-            />
-          </ShapeSource>
-        )}
       </MapView>
 
+      {!selectedPlace && (
+        <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
+          <Text style={styles.recenterButtonText}>🎯</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Selected Place Bottom Sheet */}
-      {selectedPlace && !routeInfo && (
-        <View style={styles.bottomSheetCard}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.cardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle} numberOfLines={1}>
-                {selectedPlace.name}
-              </Text>
-              <Text style={styles.cardSubtitle}>
-                {selectedPlace.place_type === "BUSINESS" ? "עסק" : "ציבורי"}
-                {selectedPlace.city?.name_he
-                  ? ` • ${selectedPlace.city.name_he}`
-                  : ""}
-              </Text>
+      {selectedPlace && (
+        <Animated.View 
+          style={[styles.bottomSheetContainer, bottomSheetAnimatedStyle]}
+          pointerEvents="auto"
+        >
+          <>
+            {/* Drag Handle */}
+            <View 
+              style={styles.dragHandleArea}
+              {...panResponder.panHandlers}
+            >
+              <View style={styles.dragHandle} />
             </View>
+
+            <ScrollView 
+              ref={scrollViewRef}
+              style={styles.bottomSheetScrollView}
+              contentContainerStyle={styles.bottomSheetContent}
+              showsVerticalScrollIndicator={true}
+            >
+            {/* Header with close button */}
+            <View style={styles.bottomSheetHeader}>
+              <View style={styles.bottomSheetHeaderLeft}>
             <TouchableOpacity
-              style={styles.closePlaceButton}
+              style={styles.closeButton}
               onPress={() => setSelectedPlace(null)}
             >
-              <Text style={styles.closePlaceButtonText}>✕</Text>
+                  <Ionicons name="close" size={24} color="#000" />
             </TouchableOpacity>
           </View>
-          <View style={styles.divider} />
-          <View style={styles.cardContent}>
-            {selectedPlace.description && (
-              <Text style={styles.descriptionText} numberOfLines={3}>
+              <View style={styles.bottomSheetHeaderRight}>
+                <TouchableOpacity style={styles.headerIconButton}>
+                  <Ionicons name="share-outline" size={24} color="#000" />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.headerIconButton}
+                  onPress={handleToggleSave}
+                  disabled={savingPlace || !userId}
+                >
+                  <Ionicons 
+                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"} 
+                    size={24} 
+                    color={isPlaceSaved ? "#0f5b63" : "#000"} 
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Title and Subtitle */}
+            <View style={styles.bottomSheetTitleSection}>
+              <Text style={styles.bottomSheetTitle} numberOfLines={2}>
+                {getPlaceName(selectedPlace)}
+              </Text>
+              <View style={styles.bottomSheetSubtitleRow}>
+                <Text style={styles.bottomSheetSubtitle}>
+                  {selectedPlace.place_type === "BUSINESS" 
+                    ? t("business_type") || (i18n.language === "ar" ? "عمل" : "עסק")
+                    : t("public") || (i18n.language === "ar" ? "عام" : "ציבורי")}
+                </Text>
+                {getCityName(selectedPlace.city) && (
+                  <>
+                    <Text style={styles.subtitleSeparator}> • </Text>
+                    <Text style={styles.bottomSheetSubtitle}>
+                      {getCityName(selectedPlace.city)}
+                    </Text>
+                  </>
+                )}
+              </View>
+            </View>
+
+            {/* Action Buttons Row */}
+            <View style={styles.actionButtonsRow}>
+              <TouchableOpacity style={styles.actionButtonSecondary}>
+                <Ionicons name="share-outline" size={20} color="#0f5b63" />
+                <Text style={styles.actionButtonSecondaryText}>
+                  {t("share") || "שיתוף"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.actionButtonSecondary}
+                onPress={handleToggleSave}
+                disabled={savingPlace || !userId}
+              >
+                <Ionicons 
+                  name={isPlaceSaved ? "bookmark" : "bookmark-outline"} 
+                  size={20} 
+                  color={isPlaceSaved ? "#0f5b63" : "#0f5b63"} 
+                />
+                <Text style={styles.actionButtonSecondaryText}>
+                  {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionButtonSecondary}>
+                <Ionicons name="navigate-outline" size={20} color="#0f5b63" />
+                <Text style={styles.actionButtonSecondaryText}>
+                  {t("start") || "התחלה"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionButtonPrimary}>
+                <Ionicons name="map-outline" size={20} color="#FFFFFF" />
+                <Text style={styles.actionButtonPrimaryText}>
+                  {t("route") || "מסלול"}
+                </Text>
+            </TouchableOpacity>
+          </View>
+
+            {/* Image Gallery */}
+            <View style={styles.imageGalleryContainer}>
+              <Text style={styles.sectionTitle}>
+                {t("photos") || "תמונות"}
+              </Text>
+              {selectedPlace.main_image_url ? (
+                <ScrollView 
+                  horizontal 
+                  showsHorizontalScrollIndicator={true}
+                  contentContainerStyle={styles.imageGalleryScrollContent}
+                >
+                  <Image 
+                    source={{ uri: selectedPlace.main_image_url }}
+                    style={styles.galleryImage}
+                    resizeMode="cover"
+                  />
+                </ScrollView>
+              ) : (
+                <View style={styles.noImagePlaceholder}>
+                  <Ionicons name="image-outline" size={40} color="#999" />
+                  <Text style={styles.noDataText}>
+                    {t("no_photos") || "אין תמונות"}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Details Section */}
+            <View style={styles.detailsSection}>
+              {/* Location */}
+              <View style={styles.detailRow}>
+                <Ionicons name="location-outline" size={20} color="#0f5b63" />
+                <Text style={styles.detailText}>
+                  {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
+                </Text>
+              </View>
+
+              {/* Category */}
+              <View style={styles.detailRow}>
+                <MaterialCommunityIcons 
+                  name={selectedPlace.category?.icon_name as any || "tag"} 
+                  size={20} 
+                  color="#0f5b63" 
+                />
+                <Text style={styles.detailText}>
+                  {selectedPlace.category
+                    ? (i18n.language === "he" && selectedPlace.category.name_he
+                        ? selectedPlace.category.name_he
+                        : i18n.language === "ar" && selectedPlace.category.name_ar
+                        ? selectedPlace.category.name_ar
+                        : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
+                    : (t("no_data") || "אין נתונים")}
+                </Text>
+              </View>
+
+              {/* Phone */}
+              <View style={styles.detailRow}>
+                <Ionicons name="call-outline" size={20} color="#0f5b63" />
+                <Text style={[styles.detailText, !selectedPlace.phone && styles.noDataText]}>
+                  {selectedPlace.phone || (t("no_data") || "אין נתונים")}
+                </Text>
+              </View>
+
+              {/* Opening Hours */}
+              <View style={styles.detailRow}>
+                <Ionicons name="time-outline" size={20} color="#0f5b63" />
+                <Text style={[styles.detailText, !selectedPlace.opening_hours && styles.noDataText]}>
+                  {selectedPlace.opening_hours || (t("no_data") || "אין נתונים")}
+                </Text>
+              </View>
+
+              {/* Description */}
+              <View style={styles.descriptionSection}>
+                <Text style={styles.descriptionTitle}>
+                  {t("description") || "תיאור"}
+                </Text>
+                {selectedPlace.description ? (
+                  <Text style={styles.descriptionText}>
                 {selectedPlace.description}
+              </Text>
+                ) : (
+                  <Text style={styles.noDataText}>
+                    {t("no_data") || "אין נתונים"}
               </Text>
             )}
           </View>
-        </View>
-      )}
 
-      {/* Route Info Card - Floating above map */}
-      {routeInfo && (
-        <View style={styles.routeInfoCard}>
-          <View style={styles.routeInfoHeader}>
-            <Text style={styles.routeInfoTitle}>Route Details</Text>
-            <TouchableOpacity onPress={clearRoute} style={styles.closeRouteButton}>
-              <Text style={styles.closeRouteText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.routeInfoContent}>
-            <View style={styles.routeInfoMain}>
-              <View style={styles.routeInfoMainItem}>
-                <Text style={styles.routeInfoMainLabel}>⏱️ Time</Text>
-                <Text style={styles.routeInfoMainValue}>{formatDuration(routeInfo.duration)}</Text>
-              </View>
-              <View style={styles.routeInfoDivider} />
-              <View style={styles.routeInfoMainItem}>
-                <Text style={styles.routeInfoMainLabel}>📏 Distance</Text>
-                <Text style={styles.routeInfoMainValue}>{formatDistance(routeInfo.distance)}</Text>
+              {/* Social Links */}
+              <View style={styles.detailRow}>
+                <Ionicons name="link-outline" size={20} color="#0f5b63" />
+                <Text style={[styles.detailText, !selectedPlace.social_links && styles.noDataText]} numberOfLines={1}>
+                  {selectedPlace.social_links || (t("no_data") || "אין נתונים")}
+                </Text>
               </View>
             </View>
-            <View style={styles.routeInfoAddresses}>
-              <View style={styles.routeAddressItem}>
-                <Text style={styles.routeAddressLabel}>📍 From:</Text>
-                <Text style={styles.routeAddressValue}>{routeInfo.startAddress}</Text>
-              </View>
-              <View style={styles.routeAddressItem}>
-                <Text style={styles.routeAddressLabel}>🎯 To:</Text>
-                <Text style={styles.routeAddressValue} numberOfLines={2}>{routeInfo.endAddress}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
+            </ScrollView>
+          </>
+        </Animated.View>
       )}
-
-      {/* Bottom Panel */}
-      <View style={styles.bottomPanel}>
-        {destination && !routeInfo && (
-          <View style={styles.destinationInfo}>
-            <Text style={styles.destinationLabel}>Destination:</Text>
-            <Text style={styles.destinationName} numberOfLines={1}>
-              {destination.name || "Custom Location"}
-            </Text>
-          </View>
-        )}
-
-        <View style={styles.actionsRow}>
-          {destination && !routeCoordinates && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.goButton]}
-              onPress={getRoute}
-              disabled={routeLoading}
-            >
-              {routeLoading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.actionButtonText}>Get Directions</Text>
-              )}
-            </TouchableOpacity>
-          )}
-
-          {routeCoordinates && !isNavigating && (
-            <>
-              <TouchableOpacity
-                style={[styles.actionButton, styles.navigateButton]}
-                onPress={startNavigation}
-              >
-                <Text style={styles.actionButtonText}>🚗 Start Navigation</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionButton, styles.clearButton]}
-                onPress={clearRoute}
-              >
-                <Text style={styles.actionButtonText}>Clear Route</Text>
-              </TouchableOpacity>
-            </>
-          )}
-
-          {isNavigating && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.stopButton]}
-              onPress={stopNavigation}
-            >
-              <Text style={styles.actionButtonText}>⏹️ Stop Navigation</Text>
-            </TouchableOpacity>
-          )}
-
-          {!isNavigating && (
-            <TouchableOpacity
-              style={[styles.actionButton, styles.logoutButton]}
-              onPress={() =>
-                navigation.reset({
-                  index: 0,
-                  routes: [{ name: "Home" }],
-                })
-              }
-            >
-              <Text style={styles.actionButtonText}>Log Out</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingBottom: 90, // Space for bottom tab bar
-    backgroundColor: "#fff",
-  },
-  searchContainer: {
-    position: "absolute",
-    top: 50,
-    left: 16,
-    right: 16,
-    zIndex: 1000,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  searchInput: {
-    flex: 1,
-    backgroundColor: "#fff",
-    borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    fontSize: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  loader: {
-    marginLeft: 8,
-  },
-  map: {
-    flex: 1,
-  },
-  userLocationMarker: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "#1e90ff",
-    borderWidth: 3,
-    borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  userLocationDot: {
-    flex: 1,
-    borderRadius: 7,
-    backgroundColor: "#1e90ff",
-  },
-  // Marker styles from AdminHomeScreen
+  container: { flex: 1, backgroundColor: "#F2F2F7" },
+  map: { flex: 1 },
+
+  // מרקר בסגנון גוגל מפות
   nativeMarkerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'visible',
+    overflow: 'visible', // חשוב כדי שהטקסט לא ייחתך
   },
-  dotContainer: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
+  
+  // מרקר למקומות ציבוריים (מסגד, בית ספר, קופת חולים)
+  publicServiceMarker: {
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-    zIndex: 2,
+    justifyContent: 'flex-start',
   },
-  innerDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#4285F4',
+  
+  // מרקר לעסקים
+  businessMarker: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
   },
-  dotSelected: {
-    transform: [{ scale: 1.3 }],
-    borderWidth: 2,
-    borderColor: '#4285F4',
-  },
-  labelWrapper: {
-    marginTop: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 0.5,
-    borderColor: 'rgba(0,0,0,0.1)',
-    zIndex: 1,
-  },
-  nativeMapLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#333333',
-    textAlign: 'center',
-  },
-  customPinMarker: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#ff6b6b",
-    borderWidth: 3,
-    borderColor: "#fff",
+  
+  // מיכל הפין המלא (עם הצל)
+  pinContainer: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
     shadowRadius: 4,
-    elevation: 4,
+    elevation: 5,
   },
-  customPinDot: {
-    flex: 1,
-    borderRadius: 9,
-    backgroundColor: "#ff6b6b",
-  },
-  destinationMarker: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#fff",
-    borderWidth: 3,
-    borderColor: "#28a745",
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  destinationMarkerText: {
-    fontSize: 24,
-  },
-  bottomPanel: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "#fff",
-    padding: 16,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
+  
+  // מיכל הפין למקום נבחר - צל חזק יותר
+  pinContainerSelected: {
+    shadowOpacity: 0.5,
     shadowRadius: 8,
     elevation: 8,
   },
-  destinationInfo: {
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  destinationLabel: {
-    fontSize: 12,
-    color: "#666",
-    marginBottom: 4,
-  },
-  destinationName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-  },
-  routeInfoCard: {
-    position: "absolute",
-    top: 100,
-    left: 16,
-    right: 16,
-    backgroundColor: "#FFFFFF",
+  
+  // מיכל האייקון (הצורה העגולה עם האייקון) - בסגנון Google Maps
+  iconContainer: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    padding: 16,
+    backgroundColor: '#4285F4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    zIndex: 2,
+  },
+  
+  // מיכל האייקון למקום נבחר - גדול יותר ובולט יותר
+  iconContainerSelected: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 4,
+    zIndex: 3,
+  },
+  
+  // הנקודה התחתונה (הפין - משולש מצביע למטה) - בסגנון Google Maps
+  pinPoint: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 8,
+    borderRightWidth: 8,
+    borderTopWidth: 12,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#4285F4',
+    marginTop: -3,
+    zIndex: 1,
+    // Shadow for the pin point
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3,
+  },
+  
+  // הפין למקום נבחר - גדול יותר
+  pinPointSelected: {
+    borderLeftWidth: 12,
+    borderRightWidth: 12,
+    borderTopWidth: 18,
+    marginTop: -4,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  
+  markerSelected: {
+    transform: [{ scale: 1.0 }], // לא משנה את הגודל הכללי, רק את האייקון והפין
+  },
+
+  // מעטפת לטקסט (בסגנון Google Maps)
+  labelWrapper: {
+    marginTop: 6,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: 'rgba(0,0,0,0.12)',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 3,
+    zIndex: 1,
+    maxWidth: 140,
+  },
+  labelSelected: {
+    backgroundColor: '#F8F9FA',
+    borderColor: 'rgba(0,0,0,0.2)',
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  labelContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  labelIconContainer: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#4285F4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
+  },
+  nativeMapLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#1A1A1A',
+    textAlign: 'left',
+    letterSpacing: -0.1,
+    flex: 1,
+  },
+  recenterButton: {
+    position: "absolute", right: 20, bottom: 100, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFF",
+    alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
+  },
+  recenterButtonText: {
+    fontSize: 20,
+  },
+  // Bottom Sheet Styles - Google Maps style
+  bottomSheetContainer: {
+    position: "absolute",
+    bottom: BOTTOM_TAB_HEIGHT + BOTTOM_SHEET_OFFSET, // Position above tab bar with offset
+    left: 0,
+    right: 0,
+    width: SCREEN_WIDTH,
+    height: BOTTOM_SHEET_MAX_HEIGHT,
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
     shadowRadius: 12,
-    elevation: 8,
-    zIndex: 1000,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
+    elevation: 20, // Higher than tab bar
+    zIndex: 9999, // Much higher than tab bar
+    overflow: "hidden",
   },
-  routeInfoHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F3F4F6",
-  },
-  routeInfoTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#111827",
-    letterSpacing: -0.5,
-  },
-  closeRouteButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#F3F4F6",
+  dragHandleArea: {
+    paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  closeRouteText: {
-    fontSize: 16,
-    color: "#6B7280",
-    fontWeight: "600",
+  dragHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: "#D1D1D6",
+    borderRadius: 2,
   },
-  routeInfoContent: {
-    gap: 12,
-  },
-  routeInfoMain: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-    backgroundColor: "#F9FAFB",
-    borderRadius: 16,
-    padding: 16,
-  },
-  routeInfoMainItem: {
-    alignItems: "center",
+  bottomSheetScrollView: {
     flex: 1,
   },
-  routeInfoMainLabel: {
-    fontSize: 12,
-    color: "#6B7280",
-    fontWeight: "600",
-    marginBottom: 6,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+  bottomSheetContent: {
+    paddingBottom: BOTTOM_TAB_HEIGHT + 20,
   },
-  routeInfoMainValue: {
+  bottomSheetHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  bottomSheetHeaderLeft: {
+    flex: 1,
+  },
+  bottomSheetHeaderRight: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  headerIconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F2F2F7",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bottomSheetTitleSection: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  bottomSheetTitle: {
     fontSize: 24,
-    fontWeight: "800",
-    color: "#111827",
-    letterSpacing: -0.5,
+    fontWeight: "700",
+    color: "#000",
+    marginBottom: 8,
+    lineHeight: 32,
   },
-  routeInfoDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: "#E5E7EB",
+  bottomSheetSubtitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
-  routeInfoAddresses: {
+  bottomSheetSubtitle: {
+    fontSize: 14,
+    color: "#666",
+    fontWeight: "500",
+  },
+  subtitleSeparator: {
+    fontSize: 14,
+    color: "#666",
+  },
+  actionButtonsRow: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingBottom: 16,
     gap: 8,
   },
-  routeAddressItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
-  routeAddressLabel: {
-    fontSize: 13,
-    color: "#6B7280",
-    fontWeight: "600",
-    marginRight: 8,
-    minWidth: 50,
-  },
-  routeAddressValue: {
-    fontSize: 14,
-    color: "#111827",
-    fontWeight: "500",
+  actionButtonSecondary: {
     flex: 1,
-  },
-  actionsRow: {
     flexDirection: "row",
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "#F2F2F7",
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 6,
   },
-  goButton: {
-    backgroundColor: "#28a745",
+  actionButtonSecondaryText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0f5b63",
   },
-  navigateButton: {
-    backgroundColor: "#1e90ff",
+  actionButtonPrimary: {
+    flex: 1.5,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f5b63",
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 6,
   },
-  stopButton: {
-    backgroundColor: "#ff6b6b",
-    flex: 2,
+  actionButtonPrimaryText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#FFFFFF",
   },
-  clearButton: {
-    backgroundColor: "#ff6b6b",
+  imageGalleryContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
   },
-  logoutButton: {
-    backgroundColor: "#6c757d",
-  },
-  actionButtonText: {
-    color: "#fff",
+  sectionTitle: {
     fontSize: 16,
     fontWeight: "600",
+    color: "#000",
+    marginBottom: 12,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
+  imageGalleryScrollContent: {
+    paddingRight: 16,
   },
-  modalContent: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: "70%",
-    padding: 16,
+  galleryImage: {
+    width: 280,
+    height: 200,
+    borderRadius: 12,
+    backgroundColor: "#F2F2F7",
+    marginRight: 12,
   },
-  modalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  noImagePlaceholder: {
+    width: "100%",
+    height: 200,
+    borderRadius: 12,
+    backgroundColor: "#F2F2F7",
     alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#E5E5EA",
+    borderStyle: "dashed",
+  },
+  noDataText: {
+    fontSize: 15,
+    color: "#999",
+    fontStyle: "italic",
+  },
+  detailsSection: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 12,
+  },
+  detailText: {
+    fontSize: 15,
+    color: "#000",
+    flex: 1,
+  },
+  descriptionSection: {
+    marginTop: 8,
     marginBottom: 16,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#333",
-  },
-  closeButton: {
-    fontSize: 24,
-    color: "#666",
-    fontWeight: "300",
-  },
-  searchResultsList: {
-    maxHeight: 400,
-  },
-  searchResultItem: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  searchResultName: {
+  descriptionTitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#333",
-    marginBottom: 4,
-  },
-  searchResultNameAr: {
-    fontSize: 14,
-    color: "#666",
-    marginBottom: 2,
-  },
-  searchResultCity: {
-    fontSize: 12,
-    color: "#999",
-  },
-  noResults: {
-    padding: 16,
-    textAlign: "center",
-    color: "#999",
-    fontSize: 14,
-  },
-  // Bottom sheet styles for selected place
-  bottomSheetCard: {
-    position: "absolute",
-    bottom: 24,
-    left: 16,
-    right: 16,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 28,
-    padding: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.18,
-    shadowRadius: 24,
-    elevation: 12,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.03)",
-  },
-  sheetHandle: {
-    width: 36,
-    height: 5,
-    backgroundColor: "#E5E5EA",
-    borderRadius: 3,
-    alignSelf: "center",
-    marginBottom: 20,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-  },
-  cardTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#1D1D1F",
-    marginBottom: 4,
-    letterSpacing: -0.5,
-  },
-  cardSubtitle: {
-    fontSize: 14,
-    color: "#86868B",
-    fontWeight: "500",
-  },
-  closePlaceButton: {
-    padding: 8,
-    backgroundColor: "#F2F2F7",
-    borderRadius: 50,
-    marginLeft: 10,
-  },
-  closePlaceButtonText: {
-    fontSize: 12,
-    color: "#8E8E93",
-    fontWeight: "bold",
-  },
-  divider: {
-    height: 1,
-    backgroundColor: "#F2F2F7",
-    marginVertical: 18,
-  },
-  cardContent: {
-    marginBottom: 20,
+    color: "#000",
+    marginBottom: 8,
   },
   descriptionText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: "#636366",
-    lineHeight: 20,
+    fontSize: 15,
+    color: "#333",
+    lineHeight: 22,
+  },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F2F2F7",
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

@@ -1,7 +1,8 @@
 // src/screens/businessOwner/BusinessOwnerPickLocationScreen.tsx
 
 import React, { useState } from "react";
-import { View, StyleSheet, Text, Alert, ActivityIndicator, TouchableOpacity } from "react-native";
+import { View, StyleSheet, Text, Alert, ActivityIndicator, TouchableOpacity, Platform, StatusBar, Dimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   MapView,
   Camera,
@@ -14,11 +15,10 @@ import Ionicons from "react-native-vector-icons/Ionicons";
 
 import { RootStackParamList } from "../../navigation/types";
 import { checkNearbyForOwner } from "../../api/businessOwnerApi";
+import { checkLocationInServiceCities } from "../../api/places";
 import Geolocation from "@react-native-community/geolocation";
 
 const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
-const MINT = "#9bd3d8";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -32,6 +32,7 @@ export default function BusinessOwnerPickLocationScreen() {
   const { t } = useTranslation();
   const route = useRoute<BusinessOwnerPickLocationRoute>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const insets = useSafeAreaInsets();
 
   // personalInfo will be passed to details form and used to create user
   const { personalInfo } = route.params;
@@ -40,12 +41,40 @@ export default function BusinessOwnerPickLocationScreen() {
   const [selectedLon, setSelectedLon] = useState<number | null>(34.8);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [checkingNearby, setCheckingNearby] = useState(false);
+  const [detectedCityId, setDetectedCityId] = useState<number | null>(null);
 
-  function handleMapPress(e: any) {
+  async function handleMapPress(e: any) {
     const coords = e?.geometry?.coordinates;
     if (Array.isArray(coords) && coords.length === 2) {
-      setSelectedLon(coords[0]);
-      setSelectedLat(coords[1]);
+      const lon = coords[0];
+      const lat = coords[1];
+      
+      // בדיקת גבולות הערים
+      try {
+        const boundaryCheck = await checkLocationInServiceCities(lat, lon);
+        if (!boundaryCheck.is_within) {
+          Alert.alert(
+            t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
+            t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום בתוך אחת מהערים.",
+            [{ text: t("ok") || "אישור" }]
+          );
+          return;
+        }
+        
+        // המיקום תקין - עדכון
+        setSelectedLon(lon);
+        setSelectedLat(lat);
+        // שמירת city_id שנמצא
+        if (boundaryCheck.city_id) {
+          setDetectedCityId(boundaryCheck.city_id);
+        }
+      } catch (error) {
+        console.error("Error checking boundary:", error);
+        // אם יש שגיאה בבדיקה, עדיין מאפשרים לבחור (לא חוסמים)
+        setSelectedLon(lon);
+        setSelectedLat(lat);
+        setDetectedCityId(null); // לא הצלחנו לזהות עיר
+      }
     }
   }
 
@@ -55,6 +84,36 @@ export default function BusinessOwnerPickLocationScreen() {
     Geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
+        
+        // בדיקת גבולות הערים קודם
+        try {
+          const boundaryCheck = await checkLocationInServiceCities(latitude, longitude);
+          if (!boundaryCheck.is_within) {
+            Alert.alert(
+              t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
+              t("current_location_outside_service_area") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nהמיקום הנוכחי שלך נמצא מחוץ לאזור השירות.",
+              [{ text: t("ok") || "אישור" }]
+            );
+            setGpsLoading(false);
+            return;
+          }
+          // שמירת city_id שנמצא
+          if (boundaryCheck.city_id) {
+            setDetectedCityId(boundaryCheck.city_id);
+          }
+        } catch (error: any) {
+          console.error("Error checking boundary:", error);
+          // אם יש שגיאה בבדיקה, מציגים הודעה למשתמש
+          const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
+          Alert.alert(
+            t("boundary_check_error") || "שגיאה בבדיקת גבולות",
+            `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
+            [{ text: t("ok") || "אישור" }]
+          );
+          setGpsLoading(false);
+          return;
+        }
+        
         setSelectedLat(latitude);
         setSelectedLon(longitude);
         setGpsLoading(false);
@@ -84,6 +143,7 @@ export default function BusinessOwnerPickLocationScreen() {
                       source: "GPS_WITH_OSM",
                       osmId: null,
                       existingPlaceId: nearbyResult.candidate?.place_id || null,
+                      detectedCityId: detectedCityId,
                     });
                   },
                 },
@@ -98,6 +158,7 @@ export default function BusinessOwnerPickLocationScreen() {
                       source: "GPS_NO_OSM",
                       osmId: null,
                       existingPlaceId: null,
+                      detectedCityId: detectedCityId,
                     });
                   },
                 },
@@ -112,6 +173,7 @@ export default function BusinessOwnerPickLocationScreen() {
               source: "GPS_NO_OSM",
               osmId: null,
               existingPlaceId: null,
+              detectedCityId: detectedCityId,
             });
           }
         } catch (err: any) {
@@ -143,6 +205,33 @@ export default function BusinessOwnerPickLocationScreen() {
       return;
     }
 
+    // בדיקת גבולות הערים לפני המשך
+    try {
+      const boundaryCheck = await checkLocationInServiceCities(selectedLat, selectedLon);
+      if (!boundaryCheck.is_within) {
+        Alert.alert(
+          t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
+          t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום אחר.",
+          [{ text: t("ok") || "אישור" }]
+        );
+        return;
+      }
+      // אם לא זיהינו עיר עדיין, ננסה שוב
+      const finalCityId = detectedCityId || boundaryCheck.city_id;
+      if (finalCityId) {
+        setDetectedCityId(finalCityId);
+      }
+    } catch (error: any) {
+      console.error("Error checking city boundary:", error);
+      const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
+      Alert.alert(
+        t("boundary_check_error") || "שגיאה בבדיקת גבולות",
+        `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
+        [{ text: t("ok") || "אישור" }]
+      );
+      return;
+    }
+
     try {
       setCheckingNearby(true);
       const nearbyResult = await checkNearbyForOwner(selectedLat, selectedLon);
@@ -167,6 +256,7 @@ export default function BusinessOwnerPickLocationScreen() {
                   source: "MAP_PICK",
                   osmId: null,
                   existingPlaceId: nearbyResult.candidate?.place_id || null,
+                  detectedCityId: detectedCityId,
                 });
               },
             },
@@ -181,6 +271,7 @@ export default function BusinessOwnerPickLocationScreen() {
                   source: "MAP_PICK",
                   osmId: null,
                   existingPlaceId: null,
+                  detectedCityId: detectedCityId,
                 });
               },
             },
@@ -195,6 +286,7 @@ export default function BusinessOwnerPickLocationScreen() {
           source: "MAP_PICK",
           osmId: null,
           existingPlaceId: null,
+          detectedCityId: detectedCityId,
         });
       }
     } catch (err: any) {
@@ -210,15 +302,22 @@ export default function BusinessOwnerPickLocationScreen() {
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, Platform.OS === 'ios' ? 50 : 16) + 8 }]}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            }
+          }}
+          activeOpacity={0.7}
         >
-          <Ionicons name="arrow-back" size={24} color={DARK_TEAL} />
+          <Ionicons name="arrow-forward" size={24} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t("pick_location") || "Pick Location"}</Text>
+        <Text style={styles.title}>{t("select_location_on_map") || "בחירת מיקום על המפה"}</Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -227,13 +326,20 @@ export default function BusinessOwnerPickLocationScreen() {
           style={StyleSheet.absoluteFill}
           mapStyle={MAP_STYLE_URL}
           onPress={handleMapPress}
+          scrollEnabled={true}
+          rotateEnabled={false}
+          pitchEnabled={false}
+          logoEnabled={false}
+          attributionEnabled={false}
         >
           <Camera
-            centerCoordinate={[
-              selectedLon ?? 34.8,
-              selectedLat ?? 31.25,
-            ]}
-            zoomLevel={13}
+            defaultSettings={{
+              centerCoordinate: [
+                selectedLon ?? 34.8,
+                selectedLat ?? 31.25,
+              ],
+              zoomLevel: 13,
+            }}
           />
 
           {selectedLat != null && selectedLon != null && (
@@ -247,47 +353,30 @@ export default function BusinessOwnerPickLocationScreen() {
         </MapView>
       </View>
 
-      {/* Bottom Panel with Design */}
       <View style={styles.bottomPanel}>
-        <View style={styles.coordinatesContainer}>
-          <Ionicons name="information-circle-outline" size={20} color={DARK_TEAL} />
-          <Text style={styles.coordinatesText}>
-            {selectedLat != null && selectedLon != null
-              ? `${t("latitude") || "Lat"}: ${selectedLat.toFixed(5)}, ${t("longitude") || "Lon"}: ${selectedLon.toFixed(5)}`
-              : t("tap_map_or_use_location") || "Tap on the map or use your location"}
-          </Text>
-        </View>
-
         <View style={styles.buttonsRow}>
           <TouchableOpacity
-            style={[styles.actionButton, styles.myLocationButton, gpsLoading && styles.buttonDisabled]}
+            style={[styles.secondaryButton, (gpsLoading || checkingNearby) && styles.buttonDisabled]}
             onPress={handleUseMyLocation}
             disabled={gpsLoading || checkingNearby}
           >
-            {gpsLoading ? (
-              <ActivityIndicator color={DARK_TEAL} />
-            ) : (
-              <>
-                <Ionicons name="location" size={20} color={DARK_TEAL} />
-                <Text style={styles.myLocationButtonText}>
-                  {t("my_location") || "My Location"}
-                </Text>
-              </>
-            )}
+            <Ionicons 
+              name="location" 
+              size={20} 
+              color={DARK_TEAL} 
+              style={styles.buttonIcon}
+            />
+            <Text style={styles.secondaryButtonText}>
+              {gpsLoading ? (t("loading_location") || "טוען מיקום...") : (t("my_location") || "המיקום שלי")}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.actionButton, styles.confirmButton, (checkingNearby || selectedLat == null || selectedLon == null) && styles.buttonDisabled]}
+            style={[styles.primaryButton, (checkingNearby || selectedLat == null || selectedLon == null) && styles.buttonDisabled]}
             onPress={handleConfirm}
             disabled={checkingNearby || selectedLat == null || selectedLon == null}
           >
-            {checkingNearby ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.confirmButtonText}>
-                {t("confirm_location") || "Confirm Location"}
-              </Text>
-            )}
+            <Text style={styles.primaryButtonText}>{t("confirm_location") || "אישור מיקום"}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -298,117 +387,102 @@ export default function BusinessOwnerPickLocationScreen() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: "#FFFFFF",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 50,
     paddingBottom: 12,
-    backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    borderBottomColor: "#E5E7EB",
+    backgroundColor: "#FFFFFF",
   },
   backButton: {
-    padding: 8,
+    padding: 4,
+    marginRight: 8,
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: DARK_TEAL,
+  title: {
+    fontSize: 24,
+    fontWeight: "700",
     flex: 1,
     textAlign: "center",
+    marginTop: 6,
+    color: "#1A1A1A",
   },
   headerSpacer: {
-    width: 40,
+    width: 40, // Same width as back button to center title
   },
   mapContainer: { 
     flex: 1,
   },
   bottomPanel: {
     padding: 16,
-    borderTopWidth: 2,
-    borderTopColor: MINT,
+    borderTopWidth: 1,
+    borderColor: "#E5E7EB",
     backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-  },
-  coordinatesContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f5fdff",
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#d6ebee",
-  },
-  coordinatesText: {
-    marginLeft: 8,
-    fontSize: 13,
-    color: DARK_TEAL,
-    flex: 1,
-    textAlign: "right",
+    paddingBottom: Platform.OS === 'ios' ? 30 : 16,
   },
   buttonsRow: {
     flexDirection: "row",
+    justifyContent: "space-between",
     gap: 12,
   },
-  actionButton: {
+  primaryButton: {
     flex: 1,
-    flexDirection: "row",
+    paddingVertical: 18,
+    borderRadius: 30,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    gap: 8,
-  },
-  myLocationButton: {
-    backgroundColor: "#f5fdff",
-    borderWidth: 2,
-    borderColor: SOFT_TEAL,
-  },
-  myLocationButtonText: {
-    color: DARK_TEAL,
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  confirmButton: {
     backgroundColor: DARK_TEAL,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 5,
   },
-  confirmButtonText: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "600",
+  primaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  secondaryButton: {
+    flex: 1,
+    paddingVertical: 18,
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: "rgba(15, 91, 99, 0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    flexDirection: "row",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  buttonIcon: {
+    marginRight: 8,
   },
   buttonDisabled: {
     opacity: 0.5,
   },
+  secondaryButtonText: {
+    color: DARK_TEAL,
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
   selectedDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: "#ED1C7B",
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
   },
 });
 

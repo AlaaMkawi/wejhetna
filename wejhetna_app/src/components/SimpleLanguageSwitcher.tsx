@@ -8,10 +8,9 @@ import { changeAppLanguage } from "../i18n";
 import { I18nManager } from "react-native";
 
 const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
 
 export default function SimpleLanguageSwitcher() {
-  const { t } = useTranslation();
+  const {  } = useTranslation();
   const currentLang = i18n.language || "ar";
 
   const selectLanguage = async (lang: string) => {

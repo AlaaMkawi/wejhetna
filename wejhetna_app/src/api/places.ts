@@ -39,6 +39,7 @@ export type PlaceForMap = {
   opening_hours?: string | null;
   main_image_url?: string | null;
   social_links?: string | null;
+  owner_user_id?: number | null; // ID of the business owner who owns this place
 
   city: City;
   category?: Category | null;
@@ -60,6 +61,44 @@ export async function fetchCities(): Promise<City[]> {
   const res = await fetch(`${BASE_URL}/admin/cities`);
   if (!res.ok) throw new Error("Failed to fetch cities");
   return res.json();
+}
+
+// =======================
+// CHECK LOCATION IN SERVICE CITIES
+// =======================
+export type BoundaryCheckResult = {
+  is_within: boolean;
+  city_id: number | null;
+  city_name_ar: string | null;
+  city_name_he: string | null;
+  city_name_en: string | null;
+};
+
+export async function checkLocationInServiceCities(
+  lat: number,
+  lon: number
+): Promise<BoundaryCheckResult> {
+  try {
+    const res = await fetch(`${BASE_URL}/cities/check-boundary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lat, lon }),
+    });
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error(`Boundary check failed: ${res.status} - ${errorText}`);
+      throw new Error(`Failed to check location boundary: ${res.status} ${errorText}`);
+    }
+    
+    return res.json();
+  } catch (error) {
+    // אם זה network error, נזרוק שגיאה ברורה יותר
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      throw new Error("Cannot connect to server. Please check if the backend is running.");
+    }
+    throw error;
+  }
 }
 
 // =======================
@@ -252,6 +291,47 @@ export async function fetchAllPlaces(): Promise<PlaceForMap[]> {
 // FETCH PLACES BY BBOX (for regular users)
 // =======================
 // Fetches places within visible map area (bounding box)
+// =======================
+// SAVED PLACES (BOOKMARKS)
+// =======================
+
+export async function savePlace(userId: number, placeId: number): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${BASE_URL}/places/${placeId}/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId, place_id: placeId }),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to save place");
+  }
+  return res.json();
+}
+
+export async function unsavePlace(userId: number, placeId: number): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${BASE_URL}/places/${placeId}/unsave?user_id=${userId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to unsave place");
+  }
+  return res.json();
+}
+
+export async function getSavedPlaces(userId: number): Promise<PlaceForMap[]> {
+  const res = await fetch(`${BASE_URL}/users/${userId}/saved-places`);
+  if (!res.ok) throw new Error("Failed to fetch saved places");
+  return res.json();
+}
+
+export async function checkIfPlaceSaved(userId: number, placeId: number): Promise<boolean> {
+  const res = await fetch(`${BASE_URL}/places/${placeId}/is-saved?user_id=${userId}`);
+  if (!res.ok) return false;
+  const data = await res.json();
+  return data.is_saved || false;
+}
+
 export async function fetchPlacesByBbox(
   north: number,
   south: number,

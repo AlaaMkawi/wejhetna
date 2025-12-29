@@ -55,6 +55,7 @@ export default function BusinessOwnerDetailsFormScreen() {
   const source = params?.source ?? "MAP_PICK";
   const osmId = params?.osmId ?? null;
   const existingPlaceId = params?.existingPlaceId ?? null;
+  const detectedCityId = params?.detectedCityId ?? null;
 
   const [name, setName] = useState("");
   const [nameAr, setNameAr] = useState("");
@@ -123,7 +124,10 @@ export default function BusinessOwnerDetailsFormScreen() {
         setCities(citiesRes);
         setCategories(categoriesRes);
 
-        if (citiesRes.length > 0) {
+        // אם יש detectedCityId, נשתמש בו (העיר שנמצאה לפי המיקום)
+        if (detectedCityId) {
+          setCityId(detectedCityId);
+        } else if (citiesRes.length > 0) {
           setCityId((prev) => prev ?? citiesRes[0].id);
         }
       } catch (err) {
@@ -568,11 +572,12 @@ export default function BusinessOwnerDetailsFormScreen() {
           <View style={styles.section}>
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("city") || "City"} *</Text>
-              <View style={[styles.pickerContainer, cityError && styles.inputError]}>
+              <View style={[styles.pickerContainer, cityError && styles.inputError, detectedCityId && styles.pickerDisabled]}>
                 <Picker
                   selectedValue={cityId}
                   onValueChange={handleCityChange}
                   style={styles.picker}
+                  enabled={!detectedCityId} // אם יש detectedCityId, לא ניתן לשנות
                 >
                   <Picker.Item label={t("select_city") || "Select a city..."} value={undefined} />
                   {cities.map((city) => (
@@ -584,6 +589,11 @@ export default function BusinessOwnerDetailsFormScreen() {
                   ))}
                 </Picker>
               </View>
+              {detectedCityId && (
+                <Text style={styles.infoText}>
+                  {t("city_auto_detected") || "העיר נקבעה אוטומטית לפי המיקום שנבחר"}
+                </Text>
+              )}
               {cityError && <Text style={styles.fieldError}>{cityError}</Text>}
             </View>
 
@@ -926,9 +936,20 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5fdff",
     overflow: "hidden",
   },
+  pickerDisabled: {
+    backgroundColor: "#e8f4f6",
+    opacity: 0.7,
+  },
   picker: {
     height: 50,
     color: DARK_TEAL,
+  },
+  infoText: {
+    color: SOFT_TEAL,
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: "right",
+    fontStyle: "italic",
   },
   submitButton: {
     backgroundColor: DARK_TEAL,

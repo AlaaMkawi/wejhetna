@@ -122,8 +122,9 @@ dependencies {
 
 project.ext.vectoricons = [
     iconFontNames: [
-        'Feather.ttf',   // Feather icons
-        'Ionicons.ttf',  // Ionicons
+        'Feather.ttf',              // Feather icons
+        'Ionicons.ttf',             // Ionicons
+        'MaterialCommunityIcons.ttf', // Material Community Icons - מגוון רחב למקומות עסקים וציבוריים
     ]
 ]
 

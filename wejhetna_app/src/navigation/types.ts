@@ -19,7 +19,7 @@ export type RootStackParamList = {
   AdminHomeScreen: { adminUserId: number; role: "ADMIN" };
   Login: undefined;
   RegularHome: undefined;
-  AdminTabs: { adminUserId: number; role: "ADMIN" };
+  AdminTabs: { adminUserId: number; role: "ADMIN"; selectedPlaceId?: number };
   AdminDriverDetails: { adminUserId: number; role: "ADMIN"; driver: DriverApplication };
   BusinessOwnerSignup: { email?: string };
   BusinessOwnerPickLocation: {
@@ -42,6 +42,7 @@ export type RootStackParamList = {
     lat: number;
     lon: number;
     source: string; // "MAP_PICK" | "GPS_NO_OSM" | "GPS_WITH_OSM"
+    detectedCityId?: number | null; // City ID detected from location
     osmId?: string | null;
     existingPlaceId?: number | null; // If claiming existing place
   };
@@ -67,7 +68,8 @@ export type RootStackParamList = {
     pickedLat?: number;
     pickedLon?: number;
     pickedSource?: string;         
-    pickedOsmId?: string | null;   
+    pickedOsmId?: string | null;
+    detectedCityId?: number; // העיר שנמצאה אוטומטית לפי הגבולות
     adminUserId: number; 
     role: "ADMIN";
   } | undefined;
@@ -82,7 +84,13 @@ export type RootStackParamList = {
   Profile: {
     userId?: number;
   } | undefined;
-  UserTabs: undefined;
+  UserTabs: { selectedPlaceId?: number } | undefined;
+  SavedPlaces: undefined;
+  EditPlace: {
+    placeId: number;
+    userRole: "ADMIN" | "BUSINESS_OWNER";
+    userId: number;
+  };
 };
 export type AuthStackParamList = {
   Login: undefined;
@@ -93,7 +101,7 @@ export type AuthStackParamList = {
 export type AdminTabParamList = {
   fitnessDummy: { adminUserId: number; role: "ADMIN" };
   alreadyUsers: { adminUserId: number; role: "ADMIN" };
-  AdminHome: { adminUserId: number; role: "ADMIN" };
+  AdminHome: { adminUserId: number; role: "ADMIN"; selectedPlaceId?: number };
   newUsers: { adminUserId: number; role: "ADMIN" };
   profileDummy: { adminUserId: number; role: "ADMIN" };
 };
