@@ -1,6 +1,6 @@
 // src/screens/ProfileScreen.tsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -14,10 +14,12 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import { useNavigation, useRoute, CommonActions } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Accordion from "../components/Accordion";
 import SimpleLanguageSwitcher from "../components/SimpleLanguageSwitcher";
+import { RootStackParamList } from "../navigation/types";
 import {
   getUserProfile,
   getDriverProfile,
@@ -28,12 +30,13 @@ import {
 } from "../api/profileApi";
 
 const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
 const MINT = "#9bd3d8";
+
+type NavType = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ProfileScreen() {
   const { t } = useTranslation();
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavType>();
   const route = useRoute();
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -69,11 +72,7 @@ export default function ProfileScreen() {
   const [businessPhoneError, setBusinessPhoneError] = useState<string | undefined>(undefined);
   const [changingBusinessPhone, setChangingBusinessPhone] = useState(false);
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
-
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     try {
       setLoading(true);
       
@@ -132,8 +131,12 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [route.params, t]);
 
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+  
   const handleLogout = () => {
     Alert.alert(
       t("logout") || "Logout",
@@ -176,32 +179,6 @@ export default function ProfileScreen() {
         },
       ]
     );
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status.toUpperCase()) {
-      case "ACTIVE":
-        return t("active") || "Active";
-      case "PENDING":
-        return t("pending") || "Pending";
-      case "REJECTED":
-        return t("rejected") || "Rejected";
-      default:
-        return status;
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status.toUpperCase()) {
-      case "ACTIVE":
-        return "#28a745";
-      case "PENDING":
-        return "#ffc107";
-      case "REJECTED":
-        return "#dc3545";
-      default:
-        return DARK_TEAL;
-    }
   };
 
   // Password validation helpers
@@ -988,6 +965,92 @@ export default function ProfileScreen() {
               </Accordion>
             )}
 
+            {/* Admin Actions - Only for ADMIN role */}
+            {userProfile.role === "ADMIN" && userId && (
+              <Accordion
+                title={t("admin_actions") || "Admin Actions"}
+                icon="build-outline"
+              >
+                <TouchableOpacity
+                  style={styles.actionButton}
+                  onPress={() =>
+                    navigation.navigate("AdminPlaceMapPicker", {
+                      initialLat: 31.24,
+                      initialLon: 34.83,
+                      adminUserId: userId,
+                      role: "ADMIN",
+                    })
+                  }
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.actionButtonContent}>
+                    <Ionicons name="location" size={20} color={DARK_TEAL} />
+                    <Text style={styles.actionButtonText}>{t("add_place") || "Add Place"}</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.actionButton}
+                  onPress={() =>
+                    navigation.navigate("AdminCategories", {
+                      adminUserId: userId,
+                      role: "ADMIN",
+                    })
+                  }
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.actionButtonContent}>
+                    <Ionicons name="grid" size={20} color={DARK_TEAL} />
+                    <Text style={styles.actionButtonText}>{t("add_category") || "Add Category"}</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.actionButton}
+                  onPress={() =>
+                    navigation.navigate("AdminCities", {
+                      adminUserId: userId,
+                      role: "ADMIN",
+                    })
+                  }
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.actionButtonContent}>
+                    <Ionicons name="business" size={20} color={DARK_TEAL} />
+                    <Text style={styles.actionButtonText}>{t("add_city") || "Add City"}</Text>
+                  </View>
+                </TouchableOpacity>
+              </Accordion>
+            )}
+
+            {/* Saved Places */}
+            <Accordion
+              title={t("saved_places") || "מקומות שמורים"}
+              icon="bookmark-outline"
+            >
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={() => {
+                  if (userId) {
+                    navigation.navigate("SavedPlaces");
+                  } else {
+                    Alert.alert(
+                      t("error") || "שגיאה",
+                      t("error_loading_profile") || "Could not load profile"
+                    );
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={styles.actionButtonContent}>
+                  <Ionicons name="bookmark" size={20} color={DARK_TEAL} />
+                  <Text style={styles.actionButtonText}>
+                    {t("view_saved_places") || "צפה במקומות שמורים"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </Accordion>
+
             {/* Account Settings */}
             <Accordion
               title={t("account_settings") || "Account Settings"}
@@ -1016,13 +1079,16 @@ export default function ProfileScreen() {
                 
                 {!showPasswordChange ? (
                   <TouchableOpacity
-                    style={styles.changePasswordButton}
+                    style={styles.actionButton}
                     onPress={() => setShowPasswordChange(true)}
                     activeOpacity={0.7}
                   >
-                    <Text style={styles.changePasswordButtonText}>
-                      {t("change_password") || "Change Password"}
-                    </Text>
+                    <View style={styles.actionButtonContent}>
+                      <Ionicons name="lock-closed" size={20} color={DARK_TEAL} />
+                      <Text style={styles.actionButtonText}>
+                        {t("change_password") || "Change Password"}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 ) : (
                   <View style={styles.passwordChangeForm}>
@@ -1295,6 +1361,23 @@ const styles = StyleSheet.create({
   sectionsContainer: {
     backgroundColor: "#ffffff",
   },
+  actionButton: {
+    backgroundColor: "#F2F2F7",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 8,
+  },
+  actionButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  actionButtonText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
+    color: DARK_TEAL,
+  },
   centerContainer: {
     flex: 1,
     justifyContent: "center",
@@ -1427,19 +1510,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     marginLeft: 16,
-  },
-  changePasswordButton: {
-    backgroundColor: "#f0f0f0",
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    marginTop: 8,
-    alignItems: "center",
-  },
-  changePasswordButtonText: {
-    color: "#333",
-    fontSize: 16,
-    fontWeight: "500",
   },
   passwordChangeForm: {
     marginTop: 12,

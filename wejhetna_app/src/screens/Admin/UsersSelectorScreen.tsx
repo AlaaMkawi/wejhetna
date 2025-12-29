@@ -1,71 +1,146 @@
 // src/screens/Admin/UsersSelectorScreen.tsx
 
-import React from "react";
+import React, { useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
+  StatusBar,
+  Platform,
+  Animated,
 } from "react-native";
+import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AdminTabParamList, RootStackParamList } from "../../navigation/types";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import Ionicons from "react-native-vector-icons/Ionicons";
+
+const DARK_TEAL = "#0f5b63";
 
 type Props = NativeStackScreenProps<AdminTabParamList, "alreadyUsers">;
 
 export default function UsersSelectorScreen({ route }: Props) {
+  const { t } = useTranslation();
   const { adminUserId, role } = route.params;
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
+  // Animation values
+  const existingScale = useRef(new Animated.Value(1)).current;
+  const existingOpacity = useRef(new Animated.Value(1)).current;
+  const rejectedScale = useRef(new Animated.Value(1)).current;
+  const rejectedOpacity = useRef(new Animated.Value(1)).current;
+
+  const animatePress = (scale: Animated.Value, opacity: Animated.Value, callback: () => void) => {
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 0.95,
+        useNativeDriver: true,
+        tension: 300,
+        friction: 10,
+      }),
+      Animated.timing(opacity, {
+        toValue: 0.8,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      Animated.parallel([
+        Animated.spring(scale, {
+          toValue: 1,
+          useNativeDriver: true,
+          tension: 300,
+          friction: 10,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      callback();
+    });
+  };
+
   const handleExistingUsers = () => {
-    navigation.navigate("ExistingUsers", { adminUserId, role });
+    animatePress(existingScale, existingOpacity, () => {
+      navigation.navigate("ExistingUsers", { adminUserId, role });
+    });
   };
 
   const handleRejectedUsers = () => {
-    navigation.navigate("RejectedUsers", { adminUserId, role });
+    animatePress(rejectedScale, rejectedOpacity, () => {
+      navigation.navigate("RejectedUsers", { adminUserId, role });
+    });
   };
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
+      {/* Modern Centered Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>User Management</Text>
-        <Text style={styles.subtitle}>Choose an option to manage users</Text>
+        <Text style={styles.title}>{t("user_management") || "User Management"}</Text>
       </View>
 
       <View style={styles.optionsContainer}>
         <TouchableOpacity
-          style={styles.optionCard}
+          activeOpacity={1}
           onPress={handleExistingUsers}
-          activeOpacity={0.8}
         >
-          <View style={styles.iconContainer}>
-            <Text style={styles.icon}>👥</Text>
-          </View>
-          <Text style={styles.optionTitle}>Existing Users</Text>
-          <Text style={styles.optionDescription}>
-            View and manage all active and pending users
-          </Text>
-          <View style={styles.arrowContainer}>
-            <Text style={styles.arrow}>→</Text>
-          </View>
+          <Animated.View
+            style={[
+              styles.optionCard,
+              {
+                transform: [{ scale: existingScale }],
+                opacity: existingOpacity,
+              },
+            ]}
+          >
+            <View style={styles.cardContent}>
+              <View style={styles.cardIconContainer}>
+                <View style={[styles.iconCircle, styles.existingIconCircle]}>
+                  <Ionicons name="people" size={32} color="#fff" />
+                </View>
+              </View>
+              <View style={styles.cardTextContainer}>
+                <Text style={styles.optionTitle}>{t("existing_users") || "Existing Users"}</Text>
+                <Text style={styles.optionDescription}>
+                  {t("view_and_manage_active_pending_users") || "View and manage all active and pending users"}
+                </Text>
+              </View>
+            </View>
+          </Animated.View>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.optionCard}
+          activeOpacity={1}
           onPress={handleRejectedUsers}
-          activeOpacity={0.8}
         >
-          <View style={[styles.iconContainer, styles.rejectedIconContainer]}>
-            <Text style={styles.icon}>🚫</Text>
-          </View>
-          <Text style={styles.optionTitle}>Rejected Users</Text>
-          <Text style={styles.optionDescription}>
-            View rejected users and their rejection reasons
-          </Text>
-          <View style={styles.arrowContainer}>
-            <Text style={styles.arrow}>→</Text>
-          </View>
+          <Animated.View
+            style={[
+              styles.optionCard,
+              {
+                transform: [{ scale: rejectedScale }],
+                opacity: rejectedOpacity,
+              },
+            ]}
+          >
+            <View style={styles.cardContent}>
+              <View style={styles.cardIconContainer}>
+                <View style={[styles.iconCircle, styles.rejectedIconCircle]}>
+                  <Ionicons name="close-circle" size={32} color="#fff" />
+                </View>
+              </View>
+              <View style={styles.cardTextContainer}>
+                <Text style={styles.optionTitle}>{t("rejected_users") || "Rejected Users"}</Text>
+                <Text style={styles.optionDescription}>
+                  {t("view_rejected_users_reasons") || "View rejected users and their rejection reasons"}
+                </Text>
+              </View>
+            </View>
+          </Animated.View>
         </TouchableOpacity>
       </View>
     </View>
@@ -75,79 +150,90 @@ export default function UsersSelectorScreen({ route }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F5F7FA",
-    padding: 20,
+    backgroundColor: "#FFFFFF",
   },
   header: {
-    marginTop: 40,
-    marginBottom: 32,
+    paddingTop: Platform.OS === "ios" ? 12 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
+    paddingBottom: 0,
+    paddingHorizontal: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
   },
   title: {
     fontSize: 32,
-    fontWeight: "800",
-    color: "#0F172A",
-    marginBottom: 8,
-    letterSpacing: -1,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: "#64748B",
-    fontWeight: "500",
+    fontWeight: "700",
+    color: DARK_TEAL,
+    letterSpacing: -0.3,
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   optionsContainer: {
-    gap: 20,
+    flex: 1,
+    paddingTop: 4,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    justifyContent: "center",
+    gap: 22,
   },
   optionCard: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
-    borderWidth: 0,
-    position: "relative",
+    borderRadius: 22,
+    marginBottom: 18,
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
     overflow: "hidden",
   },
-  iconContainer: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
-    backgroundColor: "#EEF2FF",
+  cardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 22,
+    backgroundColor: "#F8F9FA",
+  },
+  cardIconContainer: {
+    marginRight: 16,
+  },
+  iconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.2,
+    shadowRadius: 9,
+    elevation: 5,
   },
-  rejectedIconContainer: {
-    backgroundColor: "#FEF2F2",
+  existingIconCircle: {
+    backgroundColor: DARK_TEAL,
   },
-  icon: {
-    fontSize: 32,
+  rejectedIconCircle: {
+    backgroundColor: "#F44336",
+  },
+  cardTextContainer: {
+    flex: 1,
+    justifyContent: "center",
   },
   optionTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#0F172A",
-    marginBottom: 8,
-    letterSpacing: -0.5,
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#1A1A1A",
+    marginBottom: 6,
+    letterSpacing: -0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   optionDescription: {
-    fontSize: 15,
-    color: "#64748B",
+    fontSize: 13,
+    color: "#6B7280",
     fontWeight: "400",
-    lineHeight: 22,
-    marginBottom: 16,
-  },
-  arrowContainer: {
-    position: "absolute",
-    bottom: 24,
-    right: 24,
-  },
-  arrow: {
-    fontSize: 24,
-    color: "#6366F1",
-    fontWeight: "700",
+    lineHeight: 18,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
 });
 

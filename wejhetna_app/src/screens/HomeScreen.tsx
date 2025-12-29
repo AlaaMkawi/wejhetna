@@ -20,7 +20,6 @@ type Props = {
 
 const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
 // Watercolor palette - soft, transparent colors (less blue, more green/mint)
 const WATERCOLOR_MINT = "rgba(155, 211, 216, 0.5)"; // Soft mint green
 const WATERCOLOR_SAGE = "rgba(140, 180, 170, 0.45)"; // Sage green

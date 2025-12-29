@@ -1,18 +1,18 @@
-// src/screens/AdminHomeScreen.tsx
+// src/screens/businessOwner/BusinessOwnerHomeScreen.tsx
 
 import React, { useEffect, useState, useRef } from "react";
 import {
   View,
-  StyleSheet,
   Text,
+  StyleSheet,
   TouchableOpacity,
-  Platform,
-  StatusBar,
   Alert,
-  Dimensions,
   ScrollView,
   Image,
   PanResponder,
+  Platform,
+  StatusBar,
+  Dimensions,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -21,7 +21,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
-import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useRoute, useNavigation, RouteProp, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -36,12 +36,6 @@ const MAP_STYLE_URL =
 const INITIAL_CENTER: [number, number] = [34.83, 31.24];
 const INITIAL_ZOOM = 12.5;
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-rounded corners)
-const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
-const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי (75% מהמסך)
-const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
-
 // Zoom thresholds for displaying different types of places
 // At zoom < 13: Only roads and city outlines (handled by MapTiler style)
 // At zoom 13-14: Road names appear (handled by MapTiler style)
@@ -49,6 +43,12 @@ const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא �
 // At zoom 16.5+: All places (PUBLIC_SERVICE + BUSINESS) appear with icons
 const PUBLIC_SERVICE_ZOOM_THRESHOLD = 15; // Show public services (mosques, schools, clinics) at zoom 15+
 const BUSINESS_ZOOM_THRESHOLD = 16.5; // Show businesses at zoom 16.5+ (only after public services are already visible)
+
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-rounded corners)
+const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
+const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי (75% מהמסך)
+const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
 
 const NEGEV_BOUNDS = {
   ne: [35.10, 31.42],
@@ -128,26 +128,28 @@ const getPlaceIcon = (place: PlaceForMap) => {
   return { type: 'default', color: '#4285F4' };
 };
 
-export default function AdminHomeScreen() {
-  const { t } = useTranslation();
-  const route = useRoute();
-  const navigation = useNavigation<NativeStackNavigationProp<any>>();
-  const cameraRef = useRef<any>(null);
-  
-  // Get selectedPlaceId from route params (if navigating from SavedPlacesScreen)
-  const selectedPlaceIdFromParams = (route.params as any)?.selectedPlaceId as number | undefined;
+type Props = {
+  navigation: any;
+  route?: RouteProp<any, any>;
+};
 
+export default function BusinessOwnerHomeScreen({ navigation, route }: Props) {
+  const { t } = useTranslation();
+  const routeParams = useRoute();
+  const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
+  const cameraRef = useRef<any>(null);
+
+  // Places
   const [places, setPlaces] = useState<PlaceForMap[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<PlaceForMap | null>(null);
   const selectedPlaceIdRef = useRef<number | null>(null);
-  const [, setLoadingPlaces] = useState(false);
-  const [, setError] = useState<string | null>(null);
+  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
+
+  // Save/Unsave place
   const [isPlaceSaved, setIsPlaceSaved] = useState(false);
   const [savingPlace, setSavingPlace] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
 
-  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
-  
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -165,6 +167,66 @@ export default function AdminHomeScreen() {
     }
     loadUserId();
   }, []);
+
+  // Fetch all places on mount and when screen is focused
+  useFocusEffect(
+    React.useCallback(() => {
+      async function load() {
+        try {
+          const data = await fetchAllPlaces();
+          setPlaces(data);
+          
+          // Determine which place to select
+          let placeIdToSelect: number | undefined = selectedPlaceIdFromParams;
+          
+          // If no placeId from params but we have a selectedPlaceId in ref, keep it selected (update with fresh data)
+          if (!placeIdToSelect && selectedPlaceIdRef.current) {
+            placeIdToSelect = selectedPlaceIdRef.current;
+          }
+          
+          // Find and select the place
+          if (placeIdToSelect) {
+            const place = data.find(p => p.id === placeIdToSelect);
+            if (place) {
+              selectedPlaceIdRef.current = place.id;
+              setSelectedPlace(place);
+              // Center map on place location
+              if (cameraRef.current) {
+                cameraRef.current.setCamera({
+                  centerCoordinate: [place.location.lon, place.location.lat],
+                  zoomLevel: 16,
+                  animationDuration: 1000,
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Failed to load places:", e);
+        }
+      }
+      load();
+    }, [selectedPlaceIdFromParams, selectedPlace?.id])
+  );
+
+  // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)
+  useEffect(() => {
+    if (selectedPlaceIdFromParams && places.length > 0) {
+      const place = places.find(p => p.id === selectedPlaceIdFromParams);
+      if (place) {
+        selectedPlaceIdRef.current = place.id;
+        setSelectedPlace(place);
+        // Center camera on the place location
+        if (place.location && cameraRef.current) {
+          cameraRef.current.setCamera({
+            centerCoordinate: [place.location.lon, place.location.lat],
+            zoomLevel: 16.5,
+            animationDuration: 1000,
+          });
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlaceIdFromParams, places]);
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -214,6 +276,74 @@ export default function AdminHomeScreen() {
       setSavingPlace(false);
     }
   };
+
+  // Handle delete place (only for business owner's own places)
+  const handleDeletePlace = async () => {
+    if (!selectedPlace || !userId) return;
+
+    Alert.alert(
+      t("delete_place") || "מחיקת מקום",
+      `${t("delete_place_confirmation") || "האם אתה בטוח שברצונך למחוק את המקום"} "${getPlaceName(selectedPlace)}"?`,
+      [
+        {
+          text: t("cancel") || "ביטול",
+          style: "cancel",
+        },
+        {
+          text: t("delete") || "מחק",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const API_BASE_URL = "http://10.0.2.2:8000";
+              const res = await fetch(
+                `${API_BASE_URL}/admin/places/${selectedPlace.id}`,
+                {
+                  method: "DELETE",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                }
+              );
+
+              if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.detail || "Failed to delete place");
+              }
+
+              // Refresh places list
+              const data = await fetchAllPlaces();
+              setPlaces(data);
+              selectedPlaceIdRef.current = null;
+              setSelectedPlace(null);
+              Alert.alert(
+                t("success") || "הצלחה",
+                t("place_deleted_successfully") || "המקום נמחק בהצלחה"
+              );
+            } catch (error: any) {
+              Alert.alert(
+                t("error") || "שגיאה",
+                error.message || t("failed_to_delete_place") || "נכשל במחיקת המקום"
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Handle edit place (only for business owner's own places)
+  const handleEditPlace = () => {
+    if (!selectedPlace || !userId) return;
+    
+    navigation.navigate("EditPlace", {
+      placeId: selectedPlace.id,
+      userRole: "BUSINESS_OWNER",
+      userId: userId,
+    });
+  };
+
+  // Check if the selected place belongs to the current business owner
+  const isOwnPlace = selectedPlace && userId && selectedPlace.owner_user_id === userId;
 
   // Bottom sheet animation values
   const translateY = useSharedValue(SCREEN_HEIGHT);
@@ -302,53 +432,6 @@ export default function AdminHomeScreen() {
     };
   });
 
-  // Load places on mount and when screen is focused
-  useFocusEffect(
-    React.useCallback(() => {
-      async function load() {
-        try {
-          setLoadingPlaces(true);
-          setError(null);
-          const data = await fetchAllPlaces();
-          setPlaces(data);
-          
-          // Determine which place to select
-          let placeIdToSelect: number | undefined = selectedPlaceIdFromParams;
-          
-          // If no placeId from params but we have a selectedPlaceId in ref, keep it selected (update with fresh data)
-          if (!placeIdToSelect && selectedPlaceIdRef.current) {
-            placeIdToSelect = selectedPlaceIdRef.current;
-          }
-          
-          // Find and select the place
-          if (placeIdToSelect) {
-            const place = data.find(p => p.id === placeIdToSelect);
-            if (place) {
-              selectedPlaceIdRef.current = place.id;
-              setSelectedPlace(place);
-              // Center map on place location
-              if (cameraRef.current) {
-                cameraRef.current.setCamera({
-                  centerCoordinate: [place.location.lon, place.location.lat],
-                  zoomLevel: 16,
-                  animationDuration: 1000,
-                });
-              }
-            }
-          }
-        } catch (e) {
-          console.error(e);
-          setError("Failed to load places");
-        } finally {
-          setLoadingPlaces(false);
-        }
-      }
-      load();
-    }, [selectedPlaceIdFromParams])
-  );
-
-  // Note: selectedPlaceId handling is now done in useFocusEffect above
-
   const onRegionDidChange = async (feature: any) => {
     const [lon, lat] = feature.geometry.coordinates;
     const newZoom = feature.properties.zoomLevel;
@@ -368,53 +451,6 @@ export default function AdminHomeScreen() {
       zoomLevel: INITIAL_ZOOM,
       animationDuration: 1000,
     });
-  };
-
-  const handleDeletePlace = async () => {
-    if (!selectedPlace) return;
-
-    Alert.alert(
-      "מחיקת מקום",
-      `האם אתה בטוח שברצונך למחוק את המקום "${selectedPlace.name}"?`,
-      [
-        {
-          text: "ביטול",
-          style: "cancel",
-        },
-        {
-          text: "מחק",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const API_BASE_URL = "http://10.0.2.2:8000";
-              const res = await fetch(
-                `${API_BASE_URL}/admin/places/${selectedPlace.id}`,
-                {
-                  method: "DELETE",
-                  headers: {
-                    "Content-Type": "application/json",
-                  },
-                }
-              );
-
-              if (!res.ok) {
-                const errorData = await res.json().catch(() => ({}));
-                throw new Error(errorData.detail || "Failed to delete place");
-              }
-
-              // Refresh places list
-              const data = await fetchAllPlaces();
-              setPlaces(data);
-              selectedPlaceIdRef.current = null;
-              setSelectedPlace(null);
-              Alert.alert("הצלחה", "המקום נמחק בהצלחה");
-            } catch (error: any) {
-              Alert.alert("שגיאה", error.message || "Failed to delete place");
-            }
-          },
-        },
-      ]
-    );
   };
 
   return (
@@ -514,7 +550,7 @@ export default function AdminHomeScreen() {
                         {placeIcon.type === 'public' && (
                           <Ionicons name="location" size={isSelected ? 26 : 18} color="#FFFFFF" />
                         )}
-                </View>
+                      </View>
                       {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
                       <View style={[
                         styles.pinPoint, 
@@ -592,26 +628,18 @@ export default function AdminHomeScreen() {
         })}
       </MapView>
 
-      <View style={styles.topGlassBar}>
-        <View>
-          <Text style={styles.headerTitle}>Negev Community</Text>
-          <Text style={styles.headerSubtitle}>
-            {places.length} מקומות ביישובי הנגב
-          </Text>
-        </View>
-      </View>
-
       {!selectedPlace && (
         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
           <Text style={styles.recenterButtonText}>🎯</Text>
         </TouchableOpacity>
       )}
 
-      <Animated.View 
-        style={[styles.bottomSheetContainer, bottomSheetAnimatedStyle]}
-        pointerEvents={selectedPlace ? "auto" : "none"}
-      >
+      {/* Selected Place Bottom Sheet */}
       {selectedPlace && (
+        <Animated.View 
+          style={[styles.bottomSheetContainer, bottomSheetAnimatedStyle]}
+          pointerEvents="auto"
+        >
           <>
             {/* Drag Handle */}
             <View 
@@ -732,7 +760,6 @@ export default function AdminHomeScreen() {
                     style={styles.galleryImage}
                     resizeMode="cover"
                   />
-                  {/* אם יש עוד תמונות, אפשר להוסיף כאן */}
                 </ScrollView>
               ) : (
                 <View style={styles.noImagePlaceholder}>
@@ -813,21 +840,10 @@ export default function AdminHomeScreen() {
               </View>
             </View>
 
-            {/* Admin Actions - Only show edit/delete if place doesn't have an owner */}
-            {!selectedPlace.owner_user_id && (
+            {/* Business Owner Actions - Only for own places */}
+            {isOwnPlace && (
               <View style={styles.adminActionsSection}>
-                <TouchableOpacity 
-                  style={styles.editButton}
-                  onPress={() => {
-                    if (selectedPlace && userId) {
-                      navigation.navigate("EditPlace", {
-                        placeId: selectedPlace.id,
-                        userRole: "ADMIN",
-                        userId: userId,
-                      });
-                    }
-                  }}
-                >
+                <TouchableOpacity style={styles.editButton} onPress={handleEditPlace}>
                   <Ionicons name="create-outline" size={20} color="#FFFFFF" />
                   <Text style={styles.editButtonText}>
                     {t("edit_place_details") || "ערוך פרטי מקום"}
@@ -844,25 +860,13 @@ export default function AdminHomeScreen() {
                 </TouchableOpacity>
               </View>
             )}
-            
-            {/* Message if place has an owner */}
-            {selectedPlace.owner_user_id && (
-              <View style={styles.ownerInfoSection}>
-                <Ionicons name="information-circle-outline" size={20} color="#0f5b63" />
-                <Text style={styles.ownerInfoText}>
-                  {t("place_has_owner_cannot_edit") || "למקום זה יש בעל עסק - לא ניתן לערוך"}
-                </Text>
-              </View>
-            )}
             </ScrollView>
           </>
+        </Animated.View>
       )}
-      </Animated.View>
     </View>
   );
 }
-
-// --- סגנונות חדשים למראה של Google Maps ---
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F2F2F7" },
@@ -1010,47 +1014,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
     flex: 1,
   },
-
-  // --- שאר הסגנונות ללא שינוי ---
-  topGlassBar: {
-    position: "absolute",
-    top: Platform.OS === 'ios' ? 60 : 40,
-    left: 16,
-    right: 16,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.9)", 
-    borderRadius: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,1)",
-  },
-  headerTitle: { fontSize: 17, fontWeight: "800", color: "#1D1D1F", letterSpacing: -0.5 },
-  headerSubtitle: { fontSize: 12, color: "#86868B", marginTop: 2, fontWeight: "500" },
-  topButtonsRow: { flexDirection: "row" },
-  glassButtonSmall: {
-    backgroundColor: "#F2F2F7",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    borderWidth: 0.5,
-    borderColor: "rgba(0,0,0,0.05)",
-  },
-  glassButtonText: { fontSize: 13, fontWeight: "600", color: "#007AFF" },
-  fabButton: {
-    position: "absolute", bottom: 30, alignSelf: "center", backgroundColor: "#1D1D1F", 
-    flexDirection: "row", alignItems: "center", paddingVertical: 14, paddingHorizontal: 24, borderRadius: 32,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 16, elevation: 10,
-  },
-  fabIcon: { color: "#FFF", fontSize: 22, marginRight: 8, fontWeight: "300", marginTop: -2 },
-  fabText: { color: "#FFF", fontSize: 15, fontWeight: "600" },
   recenterButton: {
     position: "absolute", right: 20, bottom: 100, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFF",
     alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
@@ -1245,6 +1208,14 @@ const styles = StyleSheet.create({
     color: "#333",
     lineHeight: 22,
   },
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F2F2F7",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   adminActionsSection: {
     paddingHorizontal: 16,
     paddingTop: 8,
@@ -1280,30 +1251,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#FFFFFF",
-  },
-  ownerInfoSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#e8f4f6",
-    padding: 12,
-    borderRadius: 12,
-    marginTop: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: "#0f5b63",
-  },
-  ownerInfoText: {
-    fontSize: 14,
-    color: "#0f5b63",
-    marginLeft: 8,
-    flex: 1,
-    textAlign: "right",
-  },
-  closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#F2F2F7",
-    alignItems: "center",
-    justifyContent: "center",
   },
 });

@@ -12,15 +12,20 @@ import {
   TextInput,
   ActivityIndicator,
   Image,
+  StatusBar,
+  Platform,
 } from "react-native";
+import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
+const DARK_TEAL = "#0f5b63";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminBusinessOwnerRequestDetails">;
 
 export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigation }: Props) {
+  const { t } = useTranslation();
   const { adminUserId, request } = route.params;
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -37,27 +42,15 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     });
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "PENDING":
-        return "#FFA500";
-      case "APPROVED":
-        return "#4CAF50";
-      case "REJECTED":
-        return "#F44336";
-      default:
-        return "#757575";
-    }
-  };
 
   const handleApprove = async () => {
     Alert.alert(
-      "Approve Request",
-      "Are you sure you want to approve this business owner request? The location will be added to the map.",
+      t("accept"),
+      t("approve_request_message") || "Are you sure you want to approve this business owner request?",
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("cancel"), style: "cancel" },
         {
-          text: "Approve",
+          text: t("accept"),
           style: "default",
           onPress: async () => {
             try {
@@ -75,14 +68,14 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
               );
               const json = await res.json();
               if (!res.ok) {
-                Alert.alert("Error", json.detail || "Failed to approve request");
+                Alert.alert(t("error"), json.detail || t("approve_failed"));
               } else {
-                Alert.alert("Success", "Business owner request approved. The location has been added to the map.", [
-                  { text: "OK", onPress: () => navigation.goBack() },
+                Alert.alert(t("success"), t("business_request_approved") || "Business owner request approved.", [
+                  { text: t("ok"), onPress: () => navigation.goBack() },
                 ]);
               }
             } catch (e: any) {
-              Alert.alert("Network Error", e.message || "Failed to approve request");
+              Alert.alert(t("network_error"), e.message);
             } finally {
               setProcessing(false);
             }
@@ -98,7 +91,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
 
   const handleRejectConfirm = async () => {
     if (!rejectReason.trim()) {
-      Alert.alert("Missing Reason", "Please provide a reason for rejection.");
+      Alert.alert(t("missing_reason"), t("please_type_reason"));
       return;
     }
 
@@ -117,16 +110,16 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
       );
       const json = await res.json();
       if (!res.ok) {
-        Alert.alert("Error", json.detail || "Failed to reject request");
+        Alert.alert(t("error"), json.detail || t("reject_failed"));
       } else {
         setRejectModalVisible(false);
         setRejectReason("");
-        Alert.alert("Done", "Request rejected. The user has been notified via email.", [
-          { text: "OK", onPress: () => navigation.goBack() },
+        Alert.alert(t("done") || t("success"), t("business_request_rejected") || "Request rejected.", [
+          { text: t("ok"), onPress: () => navigation.goBack() },
         ]);
       }
     } catch (e: any) {
-      Alert.alert("Network Error", e.message || "Failed to reject request");
+      Alert.alert(t("network_error"), e.message);
     } finally {
       setProcessing(false);
     }
@@ -136,105 +129,104 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Status Badge */}
-        <View style={styles.statusContainer}>
-          <View
-            style={[
-              styles.statusBadge,
-              { backgroundColor: getStatusColor(request.status) + "20", borderColor: getStatusColor(request.status) },
-            ]}
-          >
-            <Text style={[styles.statusText, { color: getStatusColor(request.status) }]}>
-              {request.status}
-            </Text>
-          </View>
-        </View>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
+      {/* Modern Centered Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>{request.name}</Text>
+      </View>
+
+      <ScrollView 
+        style={styles.scrollView} 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Business Information */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Business Information</Text>
+          <Text style={styles.sectionTitle}>{t("business_information")}</Text>
           
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Business Name (English):</Text>
-            <Text style={styles.value}>{request.name}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("business_name")} ({t("english")})</Text>
+            <Text style={styles.infoValue}>{request.name}</Text>
           </View>
 
           {request.name_ar && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Business Name (Arabic):</Text>
-              <Text style={[styles.value, styles.rtlText]}>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("business_name")} ({t("arabic")})</Text>
+              <Text style={[styles.infoValue, styles.rtlText]}>
                 {request.name_ar}
               </Text>
             </View>
           )}
 
           {request.name_he && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Business Name (Hebrew):</Text>
-              <Text style={[styles.value, styles.rtlText]}>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("business_name")} ({t("hebrew")})</Text>
+              <Text style={[styles.infoValue, styles.rtlText]}>
                 {request.name_he}
               </Text>
             </View>
           )}
 
           {request.phone && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Phone:</Text>
-              <Text style={styles.value}>{request.phone}</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("phone")}</Text>
+              <Text style={styles.infoValue}>{request.phone}</Text>
             </View>
           )}
 
           {request.description && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Description:</Text>
-              <Text style={styles.value}>{request.description}</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("description")}</Text>
+              <Text style={styles.infoValue}>{request.description}</Text>
             </View>
           )}
 
           {request.opening_hours && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Opening Hours:</Text>
-              <Text style={styles.value}>{request.opening_hours}</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("opening_hours")}</Text>
+              <Text style={styles.infoValue}>{request.opening_hours}</Text>
             </View>
           )}
 
           {request.social_media_account_name && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Social Media Account:</Text>
-              <Text style={styles.value}>{request.social_media_account_name}</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("social_media_account")}</Text>
+              <Text style={styles.infoValue}>{request.social_media_account_name}</Text>
             </View>
           )}
 
           {request.main_image_url && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Main Image:</Text>
+            <View style={styles.imageRow}>
+              <Text style={styles.imageLabel}>{t("main_image") || "Main Image"}</Text>
               <Image
                 source={{ uri: request.main_image_url }}
-                style={styles.detailImage}
+                style={styles.documentImage}
               />
             </View>
           )}
 
           {request.business_license_image_url && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>📄 Business License:</Text>
+            <View style={styles.imageRow}>
+              <Text style={styles.imageLabel}>{t("business_license")}</Text>
               <Image
                 source={{ uri: request.business_license_image_url }}
-                style={styles.detailImage}
+                style={styles.documentImage}
               />
             </View>
           )}
 
           {request.business_images_urls && request.business_images_urls.length > 0 && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>📷 Business Pictures ({request.business_images_urls.length}):</Text>
+            <View style={styles.imageRow}>
+              <Text style={styles.imageLabel}>
+                {t("business_pictures")} ({request.business_images_urls.length})
+              </Text>
               <View style={styles.imagesGrid}>
                 {request.business_images_urls.map((url, index) => (
                   <View key={index} style={styles.imageWrapper}>
                     <Image
                       source={{ uri: url }}
-                      style={styles.detailImageGrid}
+                      style={styles.carPhotoImage}
                     />
                   </View>
                 ))}
@@ -245,35 +237,35 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
 
         {/* Location Information */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Location Information</Text>
+          <Text style={styles.sectionTitle}>{t("location")}</Text>
           
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Latitude:</Text>
-            <Text style={styles.value}>{request.lat.toFixed(6)}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("latitude")}</Text>
+            <Text style={styles.infoValue}>{request.lat.toFixed(6)}</Text>
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Longitude:</Text>
-            <Text style={styles.value}>{request.lon.toFixed(6)}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("longitude")}</Text>
+            <Text style={styles.infoValue}>{request.lon.toFixed(6)}</Text>
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Source:</Text>
-            <Text style={styles.value}>{request.source}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("source") || "Source"}</Text>
+            <Text style={styles.infoValue}>{request.source}</Text>
           </View>
 
           {request.existing_place_id ? (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Type:</Text>
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>📍 Claiming Existing Place</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("type") || "Type"}</Text>
+              <View style={styles.statusBadge}>
+                <Text style={styles.statusText}>{t("claiming_existing_place") || "Claiming Existing Place"}</Text>
               </View>
             </View>
           ) : (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Type:</Text>
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>➕ New Place Request</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("type") || "Type"}</Text>
+              <View style={styles.statusBadge}>
+                <Text style={styles.statusText}>{t("new_place_request") || "New Place Request"}</Text>
               </View>
             </View>
           )}
@@ -281,67 +273,69 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
 
         {/* Request Details */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Request Details</Text>
+          <Text style={styles.sectionTitle}>{t("request_details") || "Request Details"}</Text>
           
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Request ID:</Text>
-            <Text style={styles.value}>#{request.id}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("request_id") || "Request ID"}</Text>
+            <Text style={styles.infoValue}>#{request.id}</Text>
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>User ID:</Text>
-            <Text style={styles.value}>#{request.user_id}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("user_id") || "User ID"}</Text>
+            <Text style={styles.infoValue}>#{request.user_id}</Text>
           </View>
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Submitted:</Text>
-            <Text style={styles.value}>{formatDate(request.created_at)}</Text>
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("submitted") || "Submitted"}</Text>
+            <Text style={styles.infoValue}>{formatDate(request.created_at)}</Text>
           </View>
 
           {request.reviewed_at && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Reviewed:</Text>
-              <Text style={styles.value}>{formatDate(request.reviewed_at)}</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("reviewed") || "Reviewed"}</Text>
+              <Text style={styles.infoValue}>{formatDate(request.reviewed_at)}</Text>
             </View>
           )}
 
           {request.rejection_reason && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Rejection Reason:</Text>
-              <Text style={[styles.value, styles.rejectionReason]}>{request.rejection_reason}</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.infoLabel}>{t("rejection_reason") || "Rejection Reason"}</Text>
+              <Text style={[styles.infoValue, styles.rejectionReason]}>{request.rejection_reason}</Text>
             </View>
           )}
         </View>
 
         {/* Action Buttons */}
         {canReview && (
-          <View style={styles.actionsContainer}>
-            <TouchableOpacity
-              style={[styles.actionButton, styles.approveButton]}
-              onPress={handleApprove}
-              disabled={processing}
-            >
-              {processing ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.actionButtonText}>✓ Approve Request</Text>
-              )}
-            </TouchableOpacity>
-
+          <View style={styles.actionsRow}>
             <TouchableOpacity
               style={[styles.actionButton, styles.rejectButton]}
               onPress={handleReject}
               disabled={processing}
+              activeOpacity={0.8}
             >
-              <Text style={styles.actionButtonText}>✗ Reject Request</Text>
+              <Text style={styles.actionText}>{t("reject")}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionButton, styles.acceptButton]}
+              onPress={handleApprove}
+              disabled={processing}
+              activeOpacity={0.8}
+            >
+              {processing ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.actionText}>{t("accept")}</Text>
+              )}
             </TouchableOpacity>
           </View>
         )}
 
         {!canReview && (
-          <View style={styles.actionsContainer}>
+          <View style={styles.actionsRow}>
             <Text style={styles.reviewedText}>
-              This request has already been {request.status.toLowerCase()}.
+              {t("request_already_reviewed") || `This request has already been ${request.status.toLowerCase()}.`}
             </Text>
           </View>
         )}
@@ -356,42 +350,39 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Reject Request</Text>
-            <Text style={styles.modalSubtitle}>
-              Please provide a reason for rejection. This will be sent to the user via email.
-            </Text>
-
+            <Text style={styles.modalTitle}>{t("reject_reason")}</Text>
             <TextInput
-              style={styles.reasonInput}
-              placeholder="Enter rejection reason..."
-              placeholderTextColor="#999"
+              style={styles.modalInput}
+              placeholder={t("type_reject_reason")}
+              placeholderTextColor="#94A3B8"
               value={rejectReason}
               onChangeText={setRejectReason}
               multiline
-              numberOfLines={4}
               textAlignVertical="top"
             />
-
-            <View style={styles.modalActions}>
+            <View style={styles.modalButtonsRow}>
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalCancelButton]}
+                style={[styles.modalButton, styles.modalCancel]}
                 onPress={() => {
                   setRejectModalVisible(false);
                   setRejectReason("");
                 }}
+                activeOpacity={0.8}
               >
-                <Text style={styles.modalCancelText}>Cancel</Text>
+                <Text style={styles.modalButtonText}>{t("cancel")}</Text>
               </TouchableOpacity>
-
               <TouchableOpacity
-                style={[styles.modalButton, styles.modalConfirmButton]}
+                style={[styles.modalButton, styles.modalConfirm]}
                 onPress={handleRejectConfirm}
                 disabled={processing || !rejectReason.trim()}
+                activeOpacity={0.8}
               >
                 {processing ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.modalConfirmText}>Reject</Text>
+                  <Text style={[styles.modalButtonText, styles.modalConfirmText]}>
+                    {t("reject")}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -405,183 +396,220 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F7F7FB",
+    backgroundColor: "#FFFFFF",
+  },
+  header: {
+    paddingTop: Platform.OS === "ios" ? 12 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
+    paddingBottom: 0,
+    paddingHorizontal: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: "700",
+    color: DARK_TEAL,
+    letterSpacing: -0.3,
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  scrollView: {
+    flex: 1,
   },
   scrollContent: {
-    padding: 16,
-  },
-  statusContainer: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  statusBadge: {
     paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 2,
-  },
-  statusText: {
-    fontSize: 14,
-    fontWeight: "700",
-    textTransform: "uppercase",
+    paddingTop: 4,
+    paddingBottom: 100,
   },
   section: {
-    backgroundColor: "#fff",
+    backgroundColor: "#FFFFFF",
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    padding: 20,
+    marginBottom: 12,
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: "700",
-    color: "#1B1338",
-    marginBottom: 16,
-    borderBottomWidth: 2,
-    borderBottomColor: "#ED1C7B",
-    paddingBottom: 8,
-  },
-  infoRow: {
-    marginBottom: 12,
-  },
-  label: {
-    fontSize: 14,
     fontWeight: "600",
-    color: "#666",
-    marginBottom: 4,
+    color: DARK_TEAL,
+    marginBottom: 14,
+    letterSpacing: -0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  value: {
-    fontSize: 16,
-    color: "#333",
-    lineHeight: 22,
-  },
-  badge: {
-    backgroundColor: "#E3F2FD",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+  infoCard: {
+    backgroundColor: "#F8F9FA",
     borderRadius: 12,
-    alignSelf: "flex-start",
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
   },
-  badgeText: {
+  infoLabel: {
+    fontWeight: "500",
+    color: "#6B7280",
     fontSize: 12,
-    color: "#1976D2",
-    fontWeight: "600",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+    marginBottom: 4,
+    letterSpacing: 0.2,
+  },
+  infoValue: {
+    color: "#1A1A1A",
+    fontSize: 15,
+    fontWeight: "500",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+    lineHeight: 20,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    alignSelf: "flex-start",
+    marginTop: 4,
+    backgroundColor: "#E3F2FD",
+    borderColor: "#2196F3",
+  },
+  statusText: {
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    color: "#333",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  rtlText: {
+    textAlign: "right",
   },
   rejectionReason: {
     color: "#F44336",
     fontStyle: "italic",
   },
-  actionsContainer: {
+  actionsRow: {
+    flexDirection: "row",
+    padding: 20,
     marginTop: 8,
-    marginBottom: 24,
+    marginBottom: 20,
+    marginHorizontal: 20,
+    gap: 12,
   },
   actionButton: {
-    paddingVertical: 16,
-    borderRadius: 12,
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 18,
     alignItems: "center",
-    marginBottom: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
   },
-  rtlText: {
-    textAlign: "right",
-  },
-  approveButton: {
-    backgroundColor: "#4CAF50",
-  },
   rejectButton: {
     backgroundColor: "#F44336",
+    marginRight: 10,
   },
-  actionButtonText: {
-    color: "#fff",
-    fontSize: 16,
+  acceptButton: {
+    backgroundColor: DARK_TEAL,
+    marginLeft: 10,
+  },
+  actionText: {
+    color: "#FFF",
     fontWeight: "700",
+    fontSize: 16,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   reviewedText: {
     textAlign: "center",
     fontSize: 14,
-    color: "#999",
+    color: "#6B7280",
     fontStyle: "italic",
     padding: 16,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     alignItems: "center",
   },
   modalContent: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
+    width: "85%",
+    backgroundColor: "#FFF",
+    borderRadius: 22,
     padding: 24,
-    width: "90%",
-    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: "700",
-    color: "#1B1338",
-    marginBottom: 8,
+    fontWeight: "600",
+    marginBottom: 16,
+    color: DARK_TEAL,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  modalSubtitle: {
-    fontSize: 14,
-    color: "#666",
-    marginBottom: 20,
-    lineHeight: 20,
-  },
-  reasonInput: {
+  modalInput: {
     borderWidth: 1,
-    borderColor: "#E0E0E0",
-    borderRadius: 12,
-    padding: 12,
-    fontSize: 16,
+    borderColor: "#E8E8E8",
+    borderRadius: 14,
+    padding: 14,
     minHeight: 100,
-    backgroundColor: "#F5F5F5",
-    marginBottom: 20,
+    textAlignVertical: "top",
+    marginBottom: 16,
+    backgroundColor: "#F8F9FA",
+    fontSize: 15,
+    color: "#1A1A1A",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  modalActions: {
+  modalButtonsRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    justifyContent: "flex-end",
+    gap: 10,
   },
   modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: "center",
-    marginHorizontal: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 14,
   },
-  modalCancelButton: {
-    backgroundColor: "#F5F5F5",
+  modalCancel: {
+    backgroundColor: "#F8F9FA",
     borderWidth: 1,
-    borderColor: "#E0E0E0",
+    borderColor: "#E8E8E8",
   },
-  modalConfirmButton: {
-    backgroundColor: "#F44336",
+  modalConfirm: {
+    backgroundColor: DARK_TEAL,
   },
-  modalCancelText: {
-    color: "#666",
-    fontSize: 16,
+  modalButtonText: {
     fontWeight: "600",
+    color: "#6B7280",
+    fontSize: 15,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   modalConfirmText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
+    color: "#FFFFFF",
   },
-  detailImage: {
+  imageRow: {
+    marginBottom: 16,
+  },
+  imageLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: DARK_TEAL,
+    marginBottom: 8,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  documentImage: {
     width: "100%",
     height: 250,
     borderRadius: 12,
-    marginTop: 12,
-    resizeMode: "cover",
-    backgroundColor: "#F0F0F0",
+    marginTop: 6,
+    resizeMode: "contain",
+    backgroundColor: "#F8F9FA",
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
   },
   imagesGrid: {
     flexDirection: "row",
@@ -594,14 +622,11 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
     borderRadius: 12,
     overflow: "hidden",
-    backgroundColor: "#F0F0F0",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: "#F8F9FA",
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
   },
-  detailImageGrid: {
+  carPhotoImage: {
     width: "100%",
     height: "100%",
     resizeMode: "cover",

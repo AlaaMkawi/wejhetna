@@ -9,11 +9,16 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
+  StatusBar,
+  Platform,
 } from "react-native";
+import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 const API_BASE_URL = "http://10.0.2.2:8000";
+const DARK_TEAL = "#0f5b63";
 
 export type RejectedUserListItem = {
   id: number;
@@ -32,6 +37,7 @@ type Props = NativeStackScreenProps<RootStackParamList, "RejectedUsers">;
 type UserRoleFilter = "ALL" | "REGULAR" | "BUSINESS_OWNER" | "DRIVER";
 
 export default function RejectedUsersScreen({ }: Props) {
+  const { t } = useTranslation();
 
   const [users, setUsers] = useState<RejectedUserListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -122,42 +128,55 @@ export default function RejectedUsersScreen({ }: Props) {
     }
   };
 
+  const getRoleTranslation = (role: string) => {
+    switch (role) {
+      case "REGULAR":
+        return t("regular") || role;
+      case "BUSINESS_OWNER":
+        return t("business_owner") || role;
+      case "DRIVER":
+        return t("driver") || role;
+      case "ADMIN":
+        return t("admin") || role;
+      default:
+        return role;
+    }
+  };
+
   const renderItem = ({ item }: { item: RejectedUserListItem }) => (
     <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.cardHeaderLeft}>
+      <View style={styles.cardContent}>
+        <View style={styles.nameRow}>
           <Text style={styles.cardTitle}>{item.full_name}</Text>
-          <Text style={styles.cardSubtitle}>@{item.username}</Text>
+          <View style={styles.statusBadgeRejected}>
+            <Text style={styles.statusText}>
+              {t("rejected")}
+            </Text>
+          </View>
         </View>
-        <View style={[styles.roleBadge, { backgroundColor: getRoleColor(item.role) + "20", borderColor: getRoleColor(item.role) }]}>
-          <Text style={[styles.roleText, { color: getRoleColor(item.role) }]}>
-            {item.role.replace("_", " ")}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.cardBody}>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>📧</Text>
+        <View style={styles.emailRow}>
+          <Ionicons name="mail-outline" size={14} color="#6B7280" style={styles.emailIcon} />
           <Text style={styles.infoValue} numberOfLines={1}>{item.email}</Text>
         </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>📞</Text>
-          <Text style={styles.infoValue}>{item.phone}</Text>
-        </View>
+        {item.phone && (
+          <View style={styles.phoneRow}>
+            <Ionicons name="call-outline" size={14} color="#6B7280" style={styles.phoneIcon} />
+            <Text style={styles.infoValue}>{item.phone}</Text>
+          </View>
+        )}
 
         {/* Rejection Reason */}
         {item.rejection_reason && (
           <View style={styles.rejectionContainer}>
-            <Text style={styles.rejectionLabel}>🚫 Rejection Reason:</Text>
+            <Text style={styles.rejectionLabel}>{t("rejection_reason") || "Rejection Reason:"}</Text>
             <Text style={styles.rejectionText}>{item.rejection_reason}</Text>
           </View>
         )}
 
         <View style={styles.metaRow}>
-          <View style={[styles.statusBadge, styles.rejectedBadge]}>
-            <Text style={[styles.statusText, { color: "#DC2626" }]}>
-              REJECTED
+          <View style={[styles.roleBadge, { backgroundColor: getRoleColor(item.role) + "20", borderColor: getRoleColor(item.role) }]}>
+            <Text style={[styles.roleText, { color: getRoleColor(item.role) }]}>
+              {getRoleTranslation(item.role)}
             </Text>
           </View>
           <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
@@ -169,8 +188,9 @@ export default function RejectedUsersScreen({ }: Props) {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6366F1" />
-        <Text style={styles.loadingText}>Loading rejected users...</Text>
+        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+        <ActivityIndicator size="large" color={DARK_TEAL} />
+        <Text style={styles.loadingText}>{t("loading") || "Loading rejected users..."}</Text>
       </View>
     );
   }
@@ -179,66 +199,76 @@ export default function RejectedUsersScreen({ }: Props) {
 
   return (
     <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
+      {/* Modern Centered Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>{t("rejected_users") || "Rejected Users"}</Text>
+      </View>
+
       {error && (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error}</Text>
         </View>
       )}
 
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
+      {/* Search + Filter */}
+      <View style={styles.filtersContainer}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search by name, username, or email..."
+          placeholder={t("search_by_name") || "Search by name, username, or email..."}
           placeholderTextColor="#94A3B8"
           value={search}
           onChangeText={setSearch}
         />
-      </View>
 
-      {/* Role Filter */}
-      <View style={styles.filtersContainer}>
-        <Text style={styles.filterLabel}>Filter by role:</Text>
-        <View style={styles.filterRow}>
-          <TouchableOpacity
-            style={[styles.filterButton, roleFilter === "ALL" && styles.filterButtonActive]}
-            onPress={() => setRoleFilter("ALL")}
-          >
-            <Text style={[styles.filterButtonText, roleFilter === "ALL" && styles.filterButtonTextActive]}>
-              All
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterButton, roleFilter === "REGULAR" && styles.filterButtonActive]}
-            onPress={() => setRoleFilter("REGULAR")}
-          >
-            <Text style={[styles.filterButtonText, roleFilter === "REGULAR" && styles.filterButtonTextActive]}>
-              Regular
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterButton, roleFilter === "BUSINESS_OWNER" && styles.filterButtonActive]}
-            onPress={() => setRoleFilter("BUSINESS_OWNER")}
-          >
-            <Text style={[styles.filterButtonText, roleFilter === "BUSINESS_OWNER" && styles.filterButtonTextActive]}>
-              Business
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.filterButton, roleFilter === "DRIVER" && styles.filterButtonActive]}
-            onPress={() => setRoleFilter("DRIVER")}
-          >
-            <Text style={[styles.filterButtonText, roleFilter === "DRIVER" && styles.filterButtonTextActive]}>
-              Driver
-            </Text>
-          </TouchableOpacity>
+        <View style={styles.sortRow}>
+          <Text style={styles.sortLabel}>{t("filter_by_role") || "Filter by role:"}</Text>
+          <View style={styles.filterRow}>
+            <TouchableOpacity
+              style={[styles.sortButton, roleFilter === "ALL" && styles.sortButtonActive]}
+              onPress={() => setRoleFilter("ALL")}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.sortButtonText, roleFilter === "ALL" && styles.sortButtonTextActive]}>
+                {t("all") || "All"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sortButton, roleFilter === "REGULAR" && styles.sortButtonActive]}
+              onPress={() => setRoleFilter("REGULAR")}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.sortButtonText, roleFilter === "REGULAR" && styles.sortButtonTextActive]}>
+                {t("regular") || "Regular"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sortButton, roleFilter === "BUSINESS_OWNER" && styles.sortButtonActive]}
+              onPress={() => setRoleFilter("BUSINESS_OWNER")}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.sortButtonText, roleFilter === "BUSINESS_OWNER" && styles.sortButtonTextActive]}>
+                {t("business") || "Business"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sortButton, roleFilter === "DRIVER" && styles.sortButtonActive]}
+              onPress={() => setRoleFilter("DRIVER")}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.sortButtonText, roleFilter === "DRIVER" && styles.sortButtonTextActive]}>
+                {t("driver") || "Driver"}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
       {visibleUsers.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>
-            {search ? "No rejected users found matching your search." : "No rejected users found."}
+            {search ? t("no_rejected_users_found") || "No rejected users found matching your search." : t("no_rejected_users") || "No rejected users found."}
           </Text>
         </View>
       ) : (
@@ -257,19 +287,36 @@ export default function RejectedUsersScreen({ }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F5F7FA",
+    backgroundColor: "#FFFFFF",
   },
   center: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F5F7FA",
+    backgroundColor: "#FFFFFF",
+  },
+  header: {
+    paddingTop: Platform.OS === "ios" ? 12 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
+    paddingBottom: 0,
+    paddingHorizontal: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: "700",
+    color: DARK_TEAL,
+    letterSpacing: -0.3,
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   loadingText: {
     marginTop: 16,
     fontSize: 15,
     color: "#64748B",
     fontWeight: "500",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   errorContainer: {
     backgroundColor: "#FEF2F2",
@@ -278,74 +325,63 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderLeftWidth: 4,
     borderLeftColor: "#EF4444",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   errorText: {
     color: "#DC2626",
     fontSize: 14,
     fontWeight: "600",
     lineHeight: 20,
-  },
-  searchContainer: {
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  searchInput: {
-    borderWidth: 0,
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    backgroundColor: "#F1F5F9",
-    fontSize: 16,
-    color: "#1E293B",
-    fontWeight: "400",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.02,
-    shadowRadius: 4,
-    elevation: 1,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   filtersContainer: {
-    backgroundColor: "#FFFFFF",
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 4,
     paddingBottom: 16,
-    shadowColor: "#000",
+    backgroundColor: "#FFFFFF",
+  },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+    borderRadius: 18,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    marginBottom: 12,
+    backgroundColor: "#F8F9FA",
+    fontSize: 16,
+    color: "#1A1A1A",
+    fontWeight: "400",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+    shadowColor: DARK_TEAL,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
+    shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 2,
   },
-  filterLabel: {
+  sortRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  sortLabel: {
+    marginRight: 12,
     fontSize: 13,
-    fontWeight: "700",
-    color: "#475569",
-    marginBottom: 12,
-    letterSpacing: 0.3,
-    textTransform: "uppercase",
+    fontWeight: "600",
+    color: "#6B7280",
+    letterSpacing: 0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   filterRow: {
     flexDirection: "row",
     gap: 10,
     flexWrap: "wrap",
   },
-  filterButton: {
+  sortButton: {
     paddingHorizontal: 18,
     paddingVertical: 10,
-    borderRadius: 20,
+    borderRadius: 18,
     borderWidth: 1.5,
-    borderColor: "#E2E8F0",
+    borderColor: "#E8E8E8",
     backgroundColor: "#FFFFFF",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -353,164 +389,156 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 1,
   },
-  filterButtonActive: {
-    backgroundColor: "#6366F1",
-    borderColor: "#6366F1",
-    shadowColor: "#6366F1",
+  sortButtonActive: {
+    backgroundColor: DARK_TEAL,
+    borderColor: DARK_TEAL,
+    shadowColor: DARK_TEAL,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
   },
-  filterButtonText: {
+  sortButtonText: {
     fontSize: 13,
-    color: "#64748B",
+    color: "#6B7280",
     fontWeight: "600",
     letterSpacing: 0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  filterButtonTextActive: {
+  sortButtonTextActive: {
     color: "#FFFFFF",
     fontWeight: "700",
   },
   listContent: {
-    padding: 20,
+    paddingTop: 8,
     paddingBottom: 100,
+    paddingHorizontal: 0,
+    backgroundColor: "#FFFFFF",
   },
   card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 16,
-    borderWidth: 0,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
+    backgroundColor: "#F8F9FA",
+    borderRadius: 14,
+    marginBottom: 8,
+    marginHorizontal: 20,
+    overflow: "hidden",
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
   },
-  cardHeader: {
+  cardContent: {
+    padding: 18,
+    backgroundColor: "transparent",
+  },
+  nameRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 16,
-  },
-  cardHeaderLeft: {
-    flex: 1,
-    marginRight: 12,
+    alignItems: "center",
+    marginBottom: 8,
   },
   cardTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#0F172A",
-    marginBottom: 6,
-    letterSpacing: -0.5,
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#1A1A1A",
+    letterSpacing: -0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+    flex: 1,
+    marginRight: 10,
   },
-  cardSubtitle: {
-    fontSize: 14,
-    color: "#64748B",
-    fontWeight: "500",
-    letterSpacing: 0.2,
+  statusBadgeRejected: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    minWidth: 80,
+    alignItems: "center",
+    backgroundColor: "#FFEBEE",
+    borderColor: "#F44336",
   },
-  roleBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  roleText: {
-    fontSize: 11,
-    fontWeight: "800",
+  statusText: {
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.4,
+    color: "#333",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  cardBody: {
-    marginTop: 4,
-  },
-  infoRow: {
+  emailRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 10,
-    backgroundColor: "#F8FAFC",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    alignSelf: "flex-start",
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
+    marginBottom: 6,
   },
-  infoIcon: {
-    fontSize: 16,
-    marginRight: 10,
+  emailIcon: {
+    marginRight: 6,
+  },
+  phoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  phoneIcon: {
+    marginRight: 6,
   },
   infoValue: {
     fontSize: 14,
-    color: "#1E293B",
-    fontWeight: "600",
-    letterSpacing: 0.1,
+    color: "#6B7280",
+    fontWeight: "400",
+    lineHeight: 20,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+    flex: 1,
   },
   rejectionContainer: {
     backgroundColor: "#FEF2F2",
-    padding: 16,
-    borderRadius: 16,
-    marginTop: 12,
-    marginBottom: 12,
-    borderLeftWidth: 4,
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 8,
+    borderLeftWidth: 3,
     borderLeftColor: "#DC2626",
   },
   rejectionLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "700",
     color: "#DC2626",
-    marginBottom: 8,
-    letterSpacing: 0.3,
+    marginBottom: 6,
+    letterSpacing: 0.2,
     textTransform: "uppercase",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   rejectionText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#991B1B",
     fontWeight: "500",
-    lineHeight: 20,
+    lineHeight: 18,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   metaRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 16,
-    paddingTop: 16,
+    marginTop: 8,
+    paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: "#F1F5F9",
+    borderTopColor: "#E5E7EB",
   },
-  statusBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+  roleBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: "center",
   },
-  rejectedBadge: {
-    backgroundColor: "#FEF2F2",
-    borderColor: "#DC2626",
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: "800",
+  roleText: {
+    fontSize: 10,
+    fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 0.8,
+    letterSpacing: 0.4,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   dateText: {
     fontSize: 12,
     color: "#94A3B8",
     fontWeight: "600",
     letterSpacing: 0.2,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   emptyContainer: {
     flex: 1,
@@ -520,10 +548,11 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: "#94A3B8",
+    color: "#6B7280",
     textAlign: "center",
-    fontWeight: "500",
+    fontWeight: "400",
     lineHeight: 24,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
 });
 

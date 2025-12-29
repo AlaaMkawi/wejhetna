@@ -55,6 +55,7 @@ export default function BusinessOwnerDetailsFormScreen() {
   const source = params?.source ?? "MAP_PICK";
   const osmId = params?.osmId ?? null;
   const existingPlaceId = params?.existingPlaceId ?? null;
+  const detectedCityId = params?.detectedCityId ?? null;
 
   const [name, setName] = useState("");
   const [nameAr, setNameAr] = useState("");
@@ -80,7 +81,6 @@ export default function BusinessOwnerDetailsFormScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   const [phoneTouched, setPhoneTouched] = useState(false);
-  const [phoneBlurred, setPhoneBlurred] = useState(false);
 
   // Error states for validation
   const [nameError, setNameError] = useState<string | null>(null);
@@ -124,7 +124,10 @@ export default function BusinessOwnerDetailsFormScreen() {
         setCities(citiesRes);
         setCategories(categoriesRes);
 
-        if (citiesRes.length > 0) {
+        // אם יש detectedCityId, נשתמש בו (העיר שנמצאה לפי המיקום)
+        if (detectedCityId) {
+          setCityId(detectedCityId);
+        } else if (citiesRes.length > 0) {
           setCityId((prev) => prev ?? citiesRes[0].id);
         }
       } catch (err) {
@@ -139,7 +142,7 @@ export default function BusinessOwnerDetailsFormScreen() {
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [t]);
 
   function handlePhoneChange(value: string) {
     const digitsOnly = value.replace(/[^0-9]/g, "").slice(0, 10);
@@ -155,9 +158,6 @@ export default function BusinessOwnerDetailsFormScreen() {
     }
   }
 
-  function handlePhoneBlur() {
-    setPhoneBlurred(true);
-  }
   
   function handleNameChange(value: string) {
     const cleaned = value.replace(/[^A-Za-z0-9 _-]/g, "");
@@ -170,18 +170,30 @@ export default function BusinessOwnerDetailsFormScreen() {
   }
   
   function handleNameArChange(value: string) {
-    setNameAr(value);
-    if (value.trim().length > 0) {
-      setNameArError(value.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
+    // Only allow Arabic characters, numbers, spaces, and common Arabic punctuation
+    // Arabic Unicode ranges: \u0600-\u06FF (Arabic), \u0750-\u077F (Arabic Supplement), 
+    // \u08A0-\u08FF (Arabic Extended-A), \uFB50-\uFDFF (Arabic Presentation Forms-A),
+    // \uFE70-\uFEFF (Arabic Presentation Forms-B)
+    // Also allow common punctuation: ، ؛ ؟ - _ and numbers
+    const arabicRegex = /^[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\s0-9،؛؟\-_]*$/;
+    const filtered = value.split('').filter(char => arabicRegex.test(char)).join('');
+    setNameAr(filtered);
+    if (filtered.trim().length > 0) {
+      setNameArError(filtered.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
     } else {
       setNameArError(null);
     }
   }
   
   function handleNameHeChange(value: string) {
-    setNameHe(value);
-    if (value.trim().length > 0) {
-      setNameHeError(value.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
+    // Only allow Hebrew characters, numbers, spaces, and common Hebrew punctuation
+    // Hebrew Unicode range: \u0590-\u05FF
+    // Also allow common punctuation: ׳ ״ - _ and numbers
+    const hebrewRegex = /^[\u0590-\u05FF\s0-9׳״\-_]*$/;
+    const filtered = value.split('').filter(char => hebrewRegex.test(char)).join('');
+    setNameHe(filtered);
+    if (filtered.trim().length > 0) {
+      setNameHeError(filtered.trim().length < 2 ? (t("business_name_min_chars") || "Business name must be at least 2 characters") : null);
     } else {
       setNameHeError(null);
     }
@@ -299,9 +311,6 @@ export default function BusinessOwnerDetailsFormScreen() {
   const hasPhone = phone.length > 0;
   const isPhoneLengthRuleOk = phone.length === 9 || phone.length === 10;
   const isPhoneValid = !hasPhone || isPhoneLengthRuleOk;
-
-  const shouldShowPhoneRequirements =
-    phoneTouched && (!phoneBlurred || !isPhoneValid);
 
   const isNameValid = name.trim().length > 0;
   const isNameArValid = nameAr.trim().length > 0;
@@ -518,11 +527,12 @@ export default function BusinessOwnerDetailsFormScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("english") || "English"}</Text>
               <TextInput
-                style={[styles.input, nameError && styles.inputError]}
+                style={[styles.input, styles.inputLTR, nameError && styles.inputError]}
                 value={name}
                 onChangeText={handleNameChange}
                 placeholder={t("example_coffee_shop") || "Example: Coffee Shop"}
                 placeholderTextColor="#9ab8bd"
+                textAlign="left"
               />
               {nameError && <Text style={styles.fieldError}>{nameError}</Text>}
             </View>
@@ -530,27 +540,31 @@ export default function BusinessOwnerDetailsFormScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("arabic") || "Arabic"}</Text>
               <TextInput
-                style={[styles.input, nameArError && styles.inputError]}
+                style={[styles.input, styles.inputRTL, nameArError && styles.inputError]}
                 value={nameAr}
                 onChangeText={handleNameArChange}
                 placeholder={t("example_cafe_ar") || "مثال: مقهى"}
                 textAlign="right"
                 placeholderTextColor="#9ab8bd"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
-              {nameArError && <Text style={styles.fieldError}>{nameArError}</Text>}
+              {nameArError && <Text style={[styles.fieldError, styles.fieldErrorRTL]}>{nameArError}</Text>}
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("hebrew") || "Hebrew"}</Text>
               <TextInput
-                style={[styles.input, nameHeError && styles.inputError]}
+                style={[styles.input, styles.inputRTL, nameHeError && styles.inputError]}
                 value={nameHe}
                 onChangeText={handleNameHeChange}
                 placeholder={t("example_cafe_he") || "דוגמה: בית קפה"}
                 textAlign="right"
                 placeholderTextColor="#9ab8bd"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
-              {nameHeError && <Text style={styles.fieldError}>{nameHeError}</Text>}
+              {nameHeError && <Text style={[styles.fieldError, styles.fieldErrorRTL]}>{nameHeError}</Text>}
             </View>
           </View>
 
@@ -558,11 +572,12 @@ export default function BusinessOwnerDetailsFormScreen() {
           <View style={styles.section}>
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("city") || "City"} *</Text>
-              <View style={[styles.pickerContainer, cityError && styles.inputError]}>
+              <View style={[styles.pickerContainer, cityError && styles.inputError, detectedCityId && styles.pickerDisabled]}>
                 <Picker
                   selectedValue={cityId}
                   onValueChange={handleCityChange}
                   style={styles.picker}
+                  enabled={!detectedCityId} // אם יש detectedCityId, לא ניתן לשנות
                 >
                   <Picker.Item label={t("select_city") || "Select a city..."} value={undefined} />
                   {cities.map((city) => (
@@ -574,6 +589,11 @@ export default function BusinessOwnerDetailsFormScreen() {
                   ))}
                 </Picker>
               </View>
+              {detectedCityId && (
+                <Text style={styles.infoText}>
+                  {t("city_auto_detected") || "העיר נקבעה אוטומטית לפי המיקום שנבחר"}
+                </Text>
+              )}
               {cityError && <Text style={styles.fieldError}>{cityError}</Text>}
             </View>
 
@@ -609,7 +629,6 @@ export default function BusinessOwnerDetailsFormScreen() {
                 style={[styles.input, phoneError && styles.inputError]}
                 value={phone}
                 onChangeText={handlePhoneChange}
-                onBlur={handlePhoneBlur}
                 placeholder="0501234567"
                 keyboardType="phone-pad"
                 maxLength={10}
@@ -626,14 +645,16 @@ export default function BusinessOwnerDetailsFormScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("description") || "Description"} ({t("optional") || "Optional"})</Text>
               <TextInput
-                style={[styles.input, styles.textArea]}
+                style={[styles.input, styles.textArea, styles.inputRTL]}
                 value={description}
                 onChangeText={setDescription}
                 placeholder={t("describe_business") || "Describe your business..."}
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
+                textAlign="right"
                 placeholderTextColor="#9ab8bd"
+                autoCorrect={false}
               />
             </View>
 
@@ -881,7 +902,14 @@ const styles = StyleSheet.create({
     borderColor: "#d6ebee",
     fontSize: 15,
     color: DARK_TEAL,
+  },
+  inputLTR: {
+    textAlign: "left",
+    writingDirection: "ltr",
+  },
+  inputRTL: {
     textAlign: "right",
+    writingDirection: "rtl",
   },
   inputError: {
     borderColor: "#d7263d",
@@ -897,6 +925,10 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "right",
   },
+  fieldErrorRTL: {
+    textAlign: "right",
+    writingDirection: "rtl",
+  },
   pickerContainer: {
     borderWidth: 1,
     borderColor: "#d6ebee",
@@ -904,9 +936,20 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5fdff",
     overflow: "hidden",
   },
+  pickerDisabled: {
+    backgroundColor: "#e8f4f6",
+    opacity: 0.7,
+  },
   picker: {
     height: 50,
     color: DARK_TEAL,
+  },
+  infoText: {
+    color: SOFT_TEAL,
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: "right",
+    fontStyle: "italic",
   },
   submitButton: {
     backgroundColor: DARK_TEAL,

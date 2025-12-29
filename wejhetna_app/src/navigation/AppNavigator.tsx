@@ -20,8 +20,10 @@ import AdminBusinessOwnerRequestDetailsScreen from "../screens/Admin/AdminBusine
 import BusinessOwnerSignupScreen from "../screens/businessOwner/BusinessOwnerSignupScreen";
 import BusinessOwnerPickLocationScreen from "../screens/businessOwner/BusinessOwnerPickLocationScreen";
 import BusinessOwnerDetailsFormScreen from "../screens/businessOwner/BusinessOwnerDetailsFormScreen";
+import EditPlaceScreen from "../screens/EditPlaceScreen";
 import ExistingUsersScreen from "../screens/Admin/ExistingUsersScreen";
 import RejectedUsersScreen from "../screens/Admin/RejectedUsersScreen";
+import UserDetailsScreen from "../screens/Admin/UserDetailsScreen";
 import VerifyEmailScreen from "../screens/VerifyEmailScreen";
 import EnterEmailScreen from "../screens/EnterEmailScreen";
 import RegularSignupScreen from "../screens/RegularSignupScreen";
@@ -30,6 +32,7 @@ import ForgotPasswordEnterEmailScreen from "../screens/ForgotPasswordEnterEmailS
 import ForgotPasswordVerifyCodeScreen from "../screens/ForgotPasswordVerifyCodeScreen";
 import ResetPasswordScreen from "../screens/ResetPasswordScreen";
 import ProfileScreen from "../screens/ProfileScreen";
+import SavedPlacesScreen from "../screens/SavedPlacesScreen";
 import UserTabNavigator from "./UserTabNavigator";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -60,7 +63,7 @@ export default function AppNavigator() {
       <Stack.Screen
         name="AdminDrivers"
         component={AdminDriversScreen}
-        options={{ title: "Pending Drivers" }}
+        options={{ headerShown: false }}
       />
       
       <Stack.Screen
@@ -110,24 +113,24 @@ export default function AppNavigator() {
       <Stack.Screen
         name="AdminCities"
         component={AdminCitiesScreen}
-        options={{ title: "Manage Cities" }}
+        options={{ headerShown: false }}
       />
 
       {/* 🔹 מסך ניהול קטגוריות */}
       <Stack.Screen
         name="AdminCategories"
         component={AdminCategoriesScreen}
-        options={{ title: "Manage Categories" }}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="AdminPlaceForm"
         component={AdminPlaceFormScreen}
-        options={{ title: "הוספת מקום חדש" }}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="AdminPlaceMapPicker"
         component={AdminPlaceMapPickerScreen}
-        options={{ title: "בחירת מיקום על המפה" }}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="Login"
@@ -153,19 +156,19 @@ export default function AppNavigator() {
       <Stack.Screen
   name="AdminDriverDetails"
   component={AdminDriverDetailsScreen}
-  options={{ title: "Driver details" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="AdminBusinessOwnerRequests"
   component={AdminBusinessOwnerRequestsScreen}
-  options={{ title: "Business Owner Requests" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="AdminBusinessOwnerRequestDetails"
   component={AdminBusinessOwnerRequestDetailsScreen}
-  options={{ title: "Request Details" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
@@ -174,33 +177,51 @@ export default function AppNavigator() {
   options={{ headerShown: false }}
 />
 
-<Stack.Screen
-  name="BusinessOwnerPickLocation"
-  component={BusinessOwnerPickLocationScreen}
-  options={{ title: "Pick Location" }}
-/>
+      <Stack.Screen
+        name="BusinessOwnerPickLocation"
+        component={BusinessOwnerPickLocationScreen}
+        options={{ headerShown: false }}
+      />
 
 <Stack.Screen
   name="BusinessOwnerDetailsForm"
   component={BusinessOwnerDetailsFormScreen}
-  options={{ title: "Business Details" }}
+  options={{ headerShown: false }}
+/>
+
+<Stack.Screen
+  name="EditPlace"
+  component={EditPlaceScreen}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="ExistingUsers"
   component={ExistingUsersScreen}
-  options={{ title: "Existing Users" }}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="RejectedUsers"
   component={RejectedUsersScreen}
-  options={{ title: "Rejected Users" }}
+  options={{ headerShown: false }}
+/>
+
+<Stack.Screen
+  name="UserDetails"
+  component={UserDetailsScreen}
+  options={{ headerShown: false }}
 />
 
 <Stack.Screen
   name="Profile"
   component={ProfileScreen}
+  options={{ headerShown: false }}
+/>
+
+<Stack.Screen
+  name="SavedPlaces"
+  component={SavedPlacesScreen}
   options={{ headerShown: false }}
 />
 

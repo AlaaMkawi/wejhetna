@@ -3,8 +3,9 @@
 import React, { useEffect, useCallback } from 'react';
 import { View, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { createBottomTabNavigator, BottomTabBarProps } from "@react-navigation/bottom-tabs";
+import { useRoute, RouteProp } from "@react-navigation/native";
 import { RootStackParamList } from "./types";
-import { NativeStackScreenProps } from "@react-navigation/native-stack";
+
 
 import Animated, {
   useSharedValue,
@@ -15,68 +16,109 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import RegularHomeScreen from '../screens/RegularAccount/RegularHomeScreen';
+import DriverHomeScreen from '../screens/DriverAccount/DriverHomeScreen';
+import BusinessOwnerHomeScreen from '../screens/businessOwner/BusinessOwnerHomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-type UserTabsProps = NativeStackScreenProps<RootStackParamList, "UserTabs">;
-
 const Tab = createBottomTabNavigator();
 
-const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
-const MINT = "#9bd3d8";
-const INDICATOR_SIZE = SCREEN_WIDTH / 3;
-const ANIMATION_DURATION = 350;
+// Colors - matching the provided design
+const TAB_COLOR = "#fff";
+const INACTIVE_ICON_COLOR = "#0f5b63"; // Gray color for inactive icons on white background
+// Colors from app logo gradient
+const HOME_ICON_COLOR = "#0f5b63"; // blue-cyan from logo
+const SEARCH_ICON_COLOR = "#0f5b63"; // green from logo
+const PROFILE_ICON_COLOR = "#0f5b63"; // pink-magenta from logo
 
-const ICONS_MAP: { [key: string]: { name: string } } = {
-  Home: { name: 'home' },
-  Search: { name: 'search' },
-  Profile: { name: 'person' },
+const INDICATOR_WIDTH = 80; // 4em equivalent
+const INDICATOR_HEIGHT = 6; // 0.4em equivalent
+const ANIMATION_DURATION = 300;
+const WHITE_COLOR = "#fff";
+
+const ICONS_MAP: { [key: string]: { name: string; color: string } } = {
+  Home: { name: 'home', color: HOME_ICON_COLOR },
+  Search: { name: 'search', color: SEARCH_ICON_COLOR },
+  Profile: { name: 'person', color: PROFILE_ICON_COLOR },
 };
 
-const MovingIndicator = ({ translateX }: { translateX: SharedValue<number> }) => {
+const MovingIndicator = ({ 
+  translateX, 
+  indicatorColor 
+}: { 
+  translateX: SharedValue<number>;
+  indicatorColor: string;
+}) => {
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
   }));
 
+  // Convert hex to rgba for glow effect
+  const hexToRgba = (hex: string, alpha: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+
   return (
     <Animated.View style={[styles.indicatorContainer, animatedStyle]}>
-      <View style={styles.indicatorBackground} />
+      <View style={[styles.indicatorBar, { backgroundColor: indicatorColor }]} />
+      {/* Subtle glow effect - soft light descending from indicator */}
+      <View style={[styles.glowLayer1, { backgroundColor: hexToRgba(indicatorColor, 0.25) }]} />
+      <View style={[styles.glowLayer2, { backgroundColor: hexToRgba(indicatorColor, 0.15) }]} />
+      <View style={[styles.glowLayer3, { backgroundColor: hexToRgba(indicatorColor, 0.08) }]} />
     </Animated.View>
   );
 };
 
 const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
   const tabWidth = SCREEN_WIDTH / state.routes.length;
-  const translateX = useSharedValue(0);
-
+  
   const getTargetPosition = useCallback(
-    (index: number) => tabWidth * index + (tabWidth / 2 - INDICATOR_SIZE / 2),
+    (index: number) => {
+      const tabCenter = tabWidth * index + tabWidth / 2;
+      return tabCenter - INDICATOR_WIDTH / 2;
+    },
     [tabWidth]
   );
 
+  // Initialize with the correct starting position
+  const initialPosition = getTargetPosition(state.index);
+  const translateX = useSharedValue(initialPosition);
+  const [indicatorColor, setIndicatorColor] = React.useState(() => {
+    const activeRoute = state.routes[state.index];
+    return ICONS_MAP[activeRoute.name]?.color || HOME_ICON_COLOR;
+  });
+
   useEffect(() => {
     const target = getTargetPosition(state.index);
+    const activeRoute = state.routes[state.index];
+    const activeColor = ICONS_MAP[activeRoute.name]?.color || HOME_ICON_COLOR;
 
-    translateX.value = withTiming(target, {
+    translateX.value = withTiming(-target, {
       duration: ANIMATION_DURATION,
-      easing: Easing.out(Easing.back(0.9)),
+      easing: Easing.ease,
     });
+    
+    setIndicatorColor(activeColor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.index, getTargetPosition, translateX]);
 
   return (
     <View style={styles.tabBarWrapper}>
       <View style={styles.tabBarBackground}>
-        <MovingIndicator translateX={translateX} />
+        <MovingIndicator translateX={translateX} indicatorColor={indicatorColor} />
 
         {state.routes.map((route, index) => {
           const { name } = route;
           const focused = state.index === index;
 
-          const { name: iconName } = ICONS_MAP[name] || { name: 'ellipse' };
+          const { name: iconName, color: iconColor } = ICONS_MAP[name] || { name: 'ellipse', color: WHITE_COLOR };
 
           const onPress = () => {
             const event = navigation.emit({
@@ -93,7 +135,6 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
           // For Profile tab, use different icon names - ensure it's always visible
           let displayIconName = focused ? iconName : `${iconName}-outline`;
           if (name === 'Profile') {
-            // Use simpler, more reliable icon names
             displayIconName = focused ? 'person' : 'person-outline';
           }
 
@@ -101,35 +142,18 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
             <TouchableOpacity
               key={route.key}
               onPress={onPress}
-              style={[styles.tabItem, { width: tabWidth }]}
+              style={styles.tabItem}
               activeOpacity={0.8}
             >
-              <View style={focused ? styles.activeIconWrapper : styles.inactiveIconWrapper}>
-                {/* Multiple shadow layers for strong visibility */}
-                {focused && (
-                  <>
-                    {/* Outer dark shadow */}
-                    <Ionicons
-                      name={displayIconName}
-                      size={36}
-                      color="#000000"
-                      style={styles.iconShadowOuter}
-                    />
-                    {/* Middle shadow */}
-                    <Ionicons
-                      name={displayIconName}
-                      size={35}
-                      color={DARK_TEAL}
-                      style={styles.iconShadowMiddle}
-                    />
-                  </>
-                )}
-                {/* Active icon with app color (mint) on top */}
+              <View style={styles.iconWrapper}>
                 <Ionicons
                   name={displayIconName}
-                  size={focused ? 34 : 26}
-                  color={focused ? MINT : DARK_TEAL}
-                  style={focused ? styles.activeIcon : styles.inactiveIcon}
+                  size={40}
+                  color={focused ? iconColor : INACTIVE_ICON_COLOR}
+                  style={[
+                    focused ? styles.activeIcon : styles.inactiveIcon,
+                    focused && { shadowColor: iconColor },
+                  ]}
                 />
               </View>
             </TouchableOpacity>
@@ -140,7 +164,80 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
   );
 };
 
+type UserTabsRoute = RouteProp<RootStackParamList, "UserTabs">;
+
 export default function UserTabNavigator() {
+  const route = useRoute<UserTabsRoute>();
+  const selectedPlaceIdFromParams = route.params?.selectedPlaceId;
+  const [userRole, setUserRole] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  // Get user role and userId from AsyncStorage and ensure they are saved
+  React.useEffect(() => {
+    async function loadAndSaveUserData() {
+      try {
+        const role = await AsyncStorage.getItem("userRole");
+        const userId = await AsyncStorage.getItem("userId");
+        
+        setUserRole(role);
+        
+        // Ensure userId and role are saved (in case they weren't saved during login)
+        if (userId && role) {
+          await AsyncStorage.setItem("userId", userId);
+          await AsyncStorage.setItem("userRole", role);
+        }
+      } catch (error) {
+        console.error("Error loading/saving user data:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadAndSaveUserData();
+  }, []);
+
+  // Determine which home screen to use based on role
+  const HomeScreenComponent = React.useMemo(() => {
+    if (loading) return RegularHomeScreen; // Default while loading
+    
+    switch (userRole) {
+      case "DRIVER":
+        return DriverHomeScreen;
+      case "BUSINESS_OWNER":
+        return BusinessOwnerHomeScreen;
+      case "REGULAR":
+      default:
+        return RegularHomeScreen;
+    }
+  }, [userRole, loading]);
+
+  if (loading) {
+    // Return a loading state or default screen while loading
+    return (
+      <Tab.Navigator
+        id="UserTabs"
+        tabBar={(props) => <CustomUserTabBar {...props} />}
+        screenOptions={{
+          headerShown: false,
+          tabBarHideOnKeyboard: true,
+        }}
+        initialRouteName="Home"
+      >
+        <Tab.Screen
+          name="Home"
+          component={RegularHomeScreen}
+        />
+        <Tab.Screen
+          name="Search"
+          component={RegularHomeScreen}
+        />
+        <Tab.Screen
+          name="Profile"
+          component={ProfileScreen}
+        />
+      </Tab.Navigator>
+    );
+  }
+
   return (
     <Tab.Navigator
       id="UserTabs"
@@ -153,11 +250,13 @@ export default function UserTabNavigator() {
     >
       <Tab.Screen
         name="Home"
-        component={RegularHomeScreen}
+        component={HomeScreenComponent}
+        initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
       />
       <Tab.Screen
         name="Search"
-        component={RegularHomeScreen}
+        component={HomeScreenComponent}
+        initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
       />
       <Tab.Screen
         name="Profile"
@@ -172,79 +271,85 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 0,
     width: SCREEN_WIDTH,
-    height: 90,
+    height: 80,
     backgroundColor: 'transparent',
   },
   tabBarBackground: {
     flexDirection: 'row',
-    height: 70,
-    width: '100%',
-    backgroundColor: '#FFF',
+    height: 80,
+    width: SCREEN_WIDTH,
+    backgroundColor: TAB_COLOR,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     position: 'absolute',
     bottom: 0,
-    borderTopLeftRadius: 25,
-    borderTopRightRadius: 25,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
     elevation: 10,
+    alignItems: 'center',
+    overflow: 'hidden',
   },
   tabItem: {
     justifyContent: 'center',
     alignItems: 'center',
-    position: 'relative',
+    flex: 1,
+    height: '100%',
   },
-  inactiveIconWrapper: {
-    paddingTop: 10,
+  iconWrapper: {
     justifyContent: 'center',
     alignItems: 'center',
   },
   inactiveIcon: {
-    // No special styling needed
-  },
-  activeIconWrapper: {
-    // Keep icon in same position as inactive icons - no jumping up
-    paddingTop: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  activeIcon: {
-    // Mint color icon on top of shadow layers
-    zIndex: 13,
-    position: 'relative',
-  },
-  iconShadowOuter: {
-    // Outer black shadow for strong contrast
-    position: 'absolute',
-    top: 10, // Match paddingTop: 10
-    left: 2,
-    zIndex: 11,
     opacity: 0.5,
   },
-  iconShadowMiddle: {
-    // Middle dark teal shadow
-    position: 'absolute',
-    top: 10, // Match paddingTop: 10
-    left: 1,
-    zIndex: 12,
-    opacity: 0.7,
+  activeIcon: {
+    opacity: 1,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 15,
+    elevation: 0,
   },
   indicatorContainer: {
     position: 'absolute',
-    bottom: 10,
-    width: INDICATOR_SIZE,
-    height: INDICATOR_SIZE,
+    top: 0,
+    width: INDICATOR_WIDTH,
+    height: 80,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
   },
-  indicatorBackground: {
+  indicatorBar: {
     width: '100%',
-    height: '100%',
-    backgroundColor: DARK_TEAL,
-    borderRadius: INDICATOR_SIZE / 2,
-    transform: [{ scaleY: 1.1 }],
+    height: INDICATOR_HEIGHT,
+    backgroundColor: HOME_ICON_COLOR,
+    borderRadius: 2,
+  },
+  glowLayer1: {
+    position: 'absolute',
+    top: INDICATOR_HEIGHT,
+    width: 50,
+    height: 50,
+    opacity: 0.5,
+    borderRadius: 25,
+  },
+  glowLayer2: {
+    position: 'absolute',
+    top: INDICATOR_HEIGHT + 15,
+    width: 65,
+    height: 40,
+    opacity: 0.4,
+    borderRadius: 20,
+  },
+  glowLayer3: {
+    position: 'absolute',
+    top: INDICATOR_HEIGHT + 30,
+    width: 75,
+    height: 30,
+    opacity: 0.3,
+    borderRadius: 15,
   },
 });
 
