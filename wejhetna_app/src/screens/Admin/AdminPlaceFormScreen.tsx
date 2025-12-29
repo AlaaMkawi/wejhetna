@@ -4,6 +4,7 @@ import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   View,
   Text,
@@ -13,7 +14,10 @@ import {
   Alert,
   TouchableOpacity,
   ScrollView,
+  Platform,
+  StatusBar,
 } from "react-native";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 import {
   fetchCities,
@@ -27,6 +31,7 @@ import {
 type AdminPlaceFormRoute = RouteProp<RootStackParamList, "AdminPlaceForm">;
 
 export default function AdminPlaceFormScreen() {
+  const { t } = useTranslation();
   const route = useRoute<AdminPlaceFormRoute>();
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -36,6 +41,7 @@ export default function AdminPlaceFormScreen() {
     pickedLon,
     pickedSource,
     pickedOsmId,
+    detectedCityId,
     adminUserId,
     role,
   } = route.params;
@@ -70,6 +76,16 @@ export default function AdminPlaceFormScreen() {
     }
   }, [pickedLat, pickedLon]);
 
+  // עדכון העיר כאשר detectedCityId משתנה
+  useEffect(() => {
+    if (detectedCityId && cities.length > 0) {
+      const cityExists = cities.some(c => c.id === detectedCityId);
+      if (cityExists) {
+        setCityId(detectedCityId);
+      }
+    }
+  }, [detectedCityId, cities]);
+
   useEffect(() => {
     let isActive = true;
 
@@ -87,22 +103,35 @@ export default function AdminPlaceFormScreen() {
         setCities(citiesRes);
         setCategories(categoriesRes);
 
-        if (citiesRes.length > 0) {
-          setCityId((prev) => prev ?? citiesRes[0].id);
+        if (detectedCityId) {
+          const cityExists = citiesRes.some(c => c.id === detectedCityId);
+          if (cityExists) {
+            setCityId(detectedCityId);
+          } else if (citiesRes.length > 0) {
+            setCityId(citiesRes[0].id);
+          }
+        } else if (citiesRes.length > 0) {
+          setCityId(prev => prev ?? citiesRes[0].id);
         }
       } catch (err) {
         console.error(err);
-        Alert.alert("שגיאה", "שגיאה בטעינת ערים/קטגוריות מהשרת");
+        Alert.alert(
+          t("error") || "שגיאה",
+          t("error_loading_cities_categories") ||
+            "שגיאה בטעינת ערים/קטגוריות מהשרת"
+        );
       } finally {
         if (isActive) setLoading(false);
       }
     }
 
     loadData();
+
     return () => {
       isActive = false;
     };
-  }, []);
+  }, [detectedCityId, t]);
+
 
   function handlePhoneChange(value: string) {
     const digitsOnly = value.replace(/[^0-9]/g, "");
@@ -142,37 +171,37 @@ export default function AdminPlaceFormScreen() {
 
   async function handleSubmit() {
     if (!isNameValid) {
-      Alert.alert("שגיאה", "שם המקום חובה");
+      Alert.alert(t("error") || "שגיאה", t("place_name_required") || "שם המקום חובה");
       return;
     }
     if (!isNameArValid) {
-      Alert.alert("שגיאה", "שם המקום בערבית חובה");
+      Alert.alert(t("error") || "שגיאה", t("place_name_arabic_required") || "שם המקום בערבית חובה");
       return;
     }
     if (!isNameHeValid) {
-      Alert.alert("שגיאה", "שם המקום בעברית חובה");
+      Alert.alert(t("error") || "שגיאה", t("place_name_hebrew_required") || "שם המקום בעברית חובה");
       return;
     }
 
     if (!isCityValid) {
-      Alert.alert("שגיאה", "חובה לבחור עיר");
+      Alert.alert(t("error") || "שגיאה", t("city_selection_required") || "חובה לבחור עיר");
       return;
     }
 
     if (!isCategoryValid) {
-      Alert.alert("שגיאה", "לעסק חובה לבחור קטגוריה");
+      Alert.alert(t("error") || "שגיאה", t("category_required_for_business") || "לעסק חובה לבחור קטגוריה");
       return;
     }
 
     if (!isLocationValid) {
-      Alert.alert("שגיאה", "חובה לבחור מיקום על המפה במסך הקודם");
+      Alert.alert(t("error") || "שגיאה", t("location_selection_required") || "חובה לבחור מיקום על המפה במסך הקודם");
       return;
     }
 
     if (!isPhoneValid) {
       Alert.alert(
-        "שגיאה",
-        "מספר הטלפון (אם הוזן) חייב להיות באורך 9 או 10 ספרות"
+        t("error") || "שגיאה",
+        t("phone_length_validation") || "מספר הטלפון (אם הוזן) חייב להיות באורך 9 או 10 ספרות"
       );
       return;
     }
@@ -205,21 +234,25 @@ export default function AdminPlaceFormScreen() {
         osm_id: pickedOsmId ?? null,
       });
 
-      Alert.alert("הצלחה", "המקום נוצר בהצלחה 🎉", [
-        {
-          text: "OK",
-          onPress: () =>
-            navigation.reset({
-              index: 0,
-              routes: [
-                {
-                  name: "AdminTabs",
-                  params: { adminUserId, role },
-                },
-              ],
-            }),
-        },
-      ]);
+      Alert.alert(
+        t("success") || "הצלחה",
+        t("place_created_successfully") || "המקום נוצר בהצלחה 🎉",
+        [
+          {
+            text: t("ok") || "OK",
+            onPress: () =>
+              navigation.reset({
+                index: 0,
+                routes: [
+                  {
+                    name: "AdminTabs",
+                    params: { adminUserId, role },
+                  },
+                ],
+              }),
+          },
+        ]
+      );
 
       setName("");
       setNameAr("");
@@ -238,14 +271,14 @@ export default function AdminPlaceFormScreen() {
       }
 
       const reason =
-        err?.message || "נכשלה יצירת המקום (שגיאה לא ידועה)";
+        err?.message || (t("place_creation_failed_unknown") || "נכשלה יצירת המקום (שגיאה לא ידועה)");
 
       Alert.alert(
-        "שגיאה בשמירת המקום",
-        `נכשלה יצירת המקום.\n\nסיבה אפשרית:\n${reason}\n\nהאם תרצי לנסות שוב?`,
+        t("error_saving_place") || "שגיאה בשמירת המקום",
+        `${t("place_creation_failed") || "נכשלה יצירת המקום."}\n\n${t("possible_reason") || "סיבה אפשרית:"}\n${reason}\n\n${t("would_you_like_to_try_again") || "האם תרצי לנסות שוב?"}`,
         [
           {
-            text: "חזרה למסך הבית",
+            text: t("back_to_home") || "חזרה למסך הבית",
             style: "destructive",
             onPress: () =>
               navigation.reset({
@@ -259,7 +292,7 @@ export default function AdminPlaceFormScreen() {
               }),
           },
           {
-            text: "לנסות שוב",
+            text: t("try_again") || "לנסות שוב",
             style: "cancel",
             // לא עושים כלום → נשארים בדף והנתונים לא נמחקים
           },
@@ -274,107 +307,165 @@ export default function AdminPlaceFormScreen() {
     return (
       <View style={styles.center}>
         <ActivityIndicator />
-        <Text>טוען ערים וקטגוריות...</Text>
+        <Text>{t("loading_cities_categories") || "טוען ערים וקטגוריות..."}</Text>
       </View>
     );
   }
 
   return (
-    <ScrollView contentContainerStyle={{ padding: 16 }}>
-      <View style={styles.container}>
-        <Text style={styles.label}>שם באנגלית *</Text>
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-forward" size={24} color="#000" />
+        </TouchableOpacity>
+        <Text style={styles.title}>{t("add_new_place") || "הוספת מקום חדש"}</Text>
+        <View style={styles.headerSpacer} />
+      </View>
+
+      <ScrollView 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.formContainer}>
+        <Text style={styles.label}>
+          {t("name_english") || "שם באנגלית"} <Text style={styles.required}>*</Text>
+        </Text>
         <TextInput
           style={styles.input}
           value={name}
           onChangeText={(text) => setName(text.replace(/[^A-Za-z0-9 _-]/g, ""))}
-          placeholder="Example: Mother and Child Clinic"
+          placeholder={t("example_place_name_en") || "Example: Mother and Child Clinic"}
+          placeholderTextColor="#999"
         />
-        <Text style={styles.label}>שם בערבית *</Text>
+        
+        <Text style={styles.label}>
+          {t("name_arabic") || "שם בערבית"} <Text style={styles.required}>*</Text>
+        </Text>
         <TextInput
           style={styles.input}
           value={nameAr}
           onChangeText={(text) => setNameAr(text.replace(/[^\u0600-\u06FF\s]/g, ""))}
-          placeholder="مثال: عيادة الأم والطفل"
+          placeholder={t("example_place_name_ar") || "مثال: عيادة الأم والطفل"}
+          placeholderTextColor="#999"
           textAlign="right"
         />
 
-        <Text style={styles.label}>שם בעברית *</Text>
+        <Text style={styles.label}>
+          {t("name_hebrew") || "שם בעברית"} <Text style={styles.required}>*</Text>
+        </Text>
         <TextInput
           style={styles.input}
           value={nameHe}
           onChangeText={(text) => setNameHe(text.replace(/[^\u0590-\u05FF\s]/g, ""))}
-          placeholder="לדוגמה: מרפאת אם וילד"
+          placeholder={t("example_place_name_he") || "לדוגמה: מרפאת אם וילד"}
+          placeholderTextColor="#999"
           textAlign="right"
         />
 
-        <Text style={styles.label}>סוג המקום</Text>
-        <Picker
-          selectedValue={placeType}
-          onValueChange={(val) => setPlaceType(val as PlaceType)}
-          style={styles.picker}
-        >
-          <Picker.Item label="שירות ציבורי" value="PUBLIC_SERVICE" />
-          <Picker.Item label="עסק" value="BUSINESS" />
-        </Picker>
+        <Text style={styles.label}>{t("place_type") || "סוג המקום"}</Text>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={placeType}
+            onValueChange={(val) => setPlaceType(val as PlaceType)}
+            style={styles.picker}
+          >
+            <Picker.Item label={t("public_service") || "שירות ציבורי"} value="PUBLIC_SERVICE" />
+            <Picker.Item label={t("business") || "עסק"} value="BUSINESS" />
+          </Picker>
+        </View>
 
-        <Text style={styles.label}>עיר *</Text>
-        <Picker
-          selectedValue={cityId}
-          onValueChange={(val) => setCityId(val as number)}
-          style={styles.picker}
-        >
-          {cities.map((c) => (
-            <Picker.Item
-              key={c.id}
-              label={`${String(c.name_ar)} ${
-                c.name_he ? `(${String(c.name_he)})` : ""
-              }`}
-              value={c.id}
-            />
-          ))}
-        </Picker>
-
-        {placeType === "BUSINESS" && (
-          <>
-            <Text style={styles.label}>קטגוריה (לעסק) *</Text>
+        <Text style={styles.label}>
+          {t("city") || "עיר"} <Text style={styles.required}>*</Text>
+        </Text>
+        {detectedCityId && cityId ? (
+          <View style={styles.cityDisplayContainer}>
+            <Ionicons name="location" size={20} color="#0f5b63" />
+            <Text style={styles.cityDisplayText}>
+              {(() => {
+                const city = cities.find(c => c.id === cityId);
+                if (city) {
+                  return `${city.name_ar}${city.name_he ? ` (${city.name_he})` : ""}`;
+                }
+                return t("city_not_identified") || "עיר לא מזוהה";
+              })()}
+            </Text>
+            <Text style={styles.cityAutoDetectedLabel}>({t("auto_detected") || "זוהה אוטומטית"})</Text>
+          </View>
+        ) : (
+          <View style={styles.pickerContainer}>
             <Picker
-              selectedValue={categoryId}
-              onValueChange={(val) => setCategoryId(val as number)}
+              selectedValue={cityId}
+              onValueChange={(val) => setCityId(val as number)}
               style={styles.picker}
             >
-              <Picker.Item label="בחרי קטגוריה..." value={undefined as any} />
-              {categories.map((cat) => (
+              {cities.map((c) => (
                 <Picker.Item
-                  key={cat.id}
-                  label={`${String(cat.name_ar)} ${
-                    cat.name_he ? `(${String(cat.name_he)})` : ""
+                  key={c.id}
+                  label={`${String(c.name_ar)} ${
+                    c.name_he ? `(${String(c.name_he)})` : ""
                   }`}
-                  value={cat.id}
+                  value={c.id}
                 />
               ))}
             </Picker>
+          </View>
+        )}
+
+        {placeType === "BUSINESS" && (
+          <>
+            <Text style={styles.label}>
+              {t("category_for_business") || "קטגוריה (לעסק)"} <Text style={styles.required}>*</Text>
+            </Text>
+            <View style={styles.pickerContainer}>
+              <Picker
+                selectedValue={categoryId}
+                onValueChange={(val) => setCategoryId(val as number)}
+                style={styles.picker}
+              >
+                <Picker.Item label={t("select_category") || "בחרי קטגוריה..."} value={undefined as any} />
+                {categories.map((cat) => (
+                  <Picker.Item
+                    key={cat.id}
+                    label={`${String(cat.name_ar)} ${
+                      cat.name_he ? `(${String(cat.name_he)})` : ""
+                    }`}
+                    value={cat.id}
+                  />
+                ))}
+              </Picker>
+            </View>
           </>
         )}
 
-        <Text style={styles.label}>תיאור</Text>
+        <Text style={styles.label}>{t("description") || "תיאור"}</Text>
         <TextInput
-          style={[styles.input, { height: 70 }]}
+          style={[styles.input, styles.textArea]}
           value={description}
           onChangeText={setDescription}
           multiline
+          numberOfLines={4}
+          placeholder={t("place_description_placeholder") || "תיאור המקום..."}
+          placeholderTextColor="#999"
         />
 
-        <Text style={styles.label}>טלפון</Text>
+        <Text style={styles.label}>{t("phone") || "טלפון"}</Text>
         <TextInput
           style={[
             styles.input,
-            phoneTouched && !isPhoneValid && { borderColor: "red" },
+            phoneTouched && !isPhoneValid && styles.inputError,
           ]}
           value={phone}
           onChangeText={handlePhoneChange}
           onBlur={handlePhoneBlur}
           keyboardType="phone-pad"
-          placeholder="למשל: 0541234567"
+          placeholder={t("phone_example") || "למשל: 0541234567"}
+          placeholderTextColor="#999"
         />
 
         {shouldShowPhoneRequirements && (
@@ -394,7 +485,7 @@ export default function AdminPlaceFormScreen() {
                   { color: hasPhone ? "green" : "red" },
                 ]}
               >
-                מכיל רק ספרות (0–9)
+                {t("phone_digits_only") || "מכיל רק ספרות (0–9)"}
               </Text>
             </View>
 
@@ -413,82 +504,205 @@ export default function AdminPlaceFormScreen() {
                   { color: isPhoneLengthRuleOk ? "green" : "red" },
                 ]}
               >
-                אורך 9 או 10 ספרות
+                {t("phone_length_9_10") || "אורך 9 או 10 ספרות"}
               </Text>
             </View>
           </View>
         )}
 
-        <Text style={styles.label}>שעות פתיחה</Text>
+        <Text style={styles.label}>{t("opening_hours") || "שעות פתיחה"}</Text>
         <TextInput
           style={styles.input}
           value={openingHours}
           onChangeText={setOpeningHours}
-          placeholder="למשל: 08:00–16:00"
+          placeholder={t("opening_hours_example") || "למשל: 08:00–16:00"}
+          placeholderTextColor="#999"
         />
 
         <View style={styles.locationRow}>
-          <View>
-            <Text style={styles.label}>מיקום על המפה *</Text>
-            {lat !== undefined && lon !== undefined ? (
+          <Text style={styles.label}>
+            {t("location_on_map") || "מיקום על המפה"} <Text style={styles.required}>*</Text>
+          </Text>
+          {lat !== undefined && lon !== undefined ? (
+            <View style={styles.locationInfoBox}>
+              <Ionicons name="location" size={20} color="#0f5b63" />
               <Text style={styles.locationText}>
                 lat: {lat.toFixed(5)}, lon: {lon.toFixed(5)}
               </Text>
-            ) : (
-              <Text style={[styles.locationText, { color: "red" }]}>
-                חובה לבחור מיקום במסך המפה (Admin Map)
+            </View>
+          ) : (
+            <View style={styles.locationErrorBox}>
+              <Ionicons name="alert-circle" size={20} color="#dc3545" />
+              <Text style={styles.locationErrorText}>
+                {t("must_select_location_on_map") || "חובה לבחור מיקום במסך המפה"}
               </Text>
-            )}
-          </View>
+            </View>
+          )}
         </View>
 
-        <View style={{ marginTop: 16 }}>
+        <View style={styles.buttonContainer}>
           {creating && (
             <View style={styles.savingRow}>
-              <ActivityIndicator />
-              <Text style={{ marginLeft: 8 }}>שומר מקום...</Text>
+              <ActivityIndicator color="#0f5b63" />
+              <Text style={styles.savingText}>{t("saving_place") || "שומר מקום..."}</Text>
             </View>
           )}
 
           <TouchableOpacity
             style={[
               styles.saveButton,
-              { backgroundColor: canSubmit ? "#9bd3d8" : "#cccccc" },
+              !canSubmit && styles.saveButtonDisabled,
             ]}
             activeOpacity={canSubmit ? 0.7 : 1}
             onPress={canSubmit ? handleSubmit : undefined}
             disabled={!canSubmit}
           >
-            <Text style={styles.saveButtonText}>שמור מקום</Text>
+            <Text style={[
+              styles.saveButtonText,
+              !canSubmit && styles.saveButtonTextDisabled,
+            ]}>
+              {t("save_place") || "שמור מקום"}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  label: { fontWeight: "600", marginTop: 8, marginBottom: 4 },
+  container: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 50 : 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+    backgroundColor: "#FFFFFF",
+  },
+  backButton: {
+    padding: 4,
+    marginRight: 8,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "700",
+    flex: 1,
+    textAlign: "center",
+    marginTop: 6,
+    color: "#1A1A1A",
+  },
+  headerSpacer: {
+    width: 40,
+  },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  formContainer: {
+    flex: 1,
+  },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginTop: 16,
+    marginBottom: 8,
+    color: "#333",
+  },
+  required: {
+    color: "#dc3545",
+  },
   input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "#8593adff",
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 12,
+    backgroundColor: "transparent",
+    fontSize: 16,
+    color: "#000",
+    marginBottom: 4,
+  },
+  inputError: {
+    borderBottomColor: "#dc3545",
+  },
+  textArea: {
+    minHeight: 80,
+    textAlignVertical: "top",
+  },
+  pickerContainer: {
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "#8593adff",
     marginBottom: 4,
   },
   picker: {
-    borderWidth: 1,
-    borderColor: "#ccc",
+    height: Platform.OS === 'ios' ? 200 : 50,
+  },
+  cityDisplayContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#E8F4F5",
     borderRadius: 8,
+    marginBottom: 4,
+    gap: 8,
+  },
+  cityDisplayText: {
+    flex: 1,
+    color: "#0f5b63",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  cityAutoDetectedLabel: {
+    color: "#6B7280",
+    fontSize: 12,
+    fontStyle: "italic",
   },
   locationRow: {
     marginTop: 16,
+    marginBottom: 8,
+  },
+  locationInfoBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#E8F4F5",
+    borderRadius: 8,
+    marginTop: 8,
+    gap: 8,
   },
   locationText: {
-    color: "#555",
+    color: "#0f5b63",
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  locationErrorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    backgroundColor: "#FFF5F5",
+    borderRadius: 8,
+    marginTop: 8,
+    gap: 8,
+  },
+  locationErrorText: {
+    color: "#dc3545",
+    fontSize: 14,
+    fontWeight: "500",
   },
   reqBox: {
     marginTop: 4,
@@ -506,19 +720,48 @@ const styles = StyleSheet.create({
   reqText: {
     fontSize: 13,
   },
+  buttonContainer: {
+    marginTop: 24,
+    marginBottom: 16,
+  },
   savingRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    justifyContent: "center",
+    marginBottom: 16,
+    gap: 8,
+  },
+  savingText: {
+    color: "#0f5b63",
+    fontSize: 14,
+    fontWeight: "500",
   },
   saveButton: {
-    paddingVertical: 12,
-    borderRadius: 10,
+    backgroundColor: "#d7e9eaff",
+    borderRadius: 30,
+    paddingVertical: 16,
     alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "#255156ff",
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  saveButtonDisabled: {
+    backgroundColor: "#E5E7EB",
+    borderColor: "#9CA3AF",
   },
   saveButtonText: {
-    color: "#000",
-    fontWeight: "600",
-    fontSize: 16,
+    color: "#0f5b63",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  saveButtonTextDisabled: {
+    color: "#9CA3AF",
   },
 });

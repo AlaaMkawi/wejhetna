@@ -80,6 +80,7 @@ class User(Base):
 
     # relationships
     driver_profile = relationship("DriverProfile", back_populates="user", uselist=False)
+    saved_places = relationship("SavedPlace", back_populates="user")
 
 
 class DriverProfile(Base):
@@ -183,6 +184,12 @@ class City(Base):
     name_he = Column(String, nullable=True)    # אופציונלי – שם בעברית
     name_en = Column(String, nullable=True)
 
+    # גבולות העיר - POLYGON ב-PostGIS (אופציונלי - רק ל-3 הערים: רהט, לקיה, תל שבע)
+    boundary = Column(
+        Geography(geometry_type="POLYGON", srid=4326),
+        nullable=True,
+    )
+
     # אופציונלי בעתיד: קוד יישוב / מחוז / סוג יישוב
     # city_code = Column(String, nullable=True)
     # region = Column(String, nullable=True)
@@ -272,6 +279,29 @@ class Place(Base):
         onupdate=func.now(),
     )
 
+    # קשר למשתמשים ששמרו את המקום
+    saved_by_users = relationship("SavedPlace", back_populates="place")
+
+
+class SavedPlace(Base):
+    """
+    טבלה לשמירת מקומות על ידי משתמשים.
+    Many-to-Many: User ↔ Place
+    """
+    __tablename__ = "saved_places"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # קשר למשתמש
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user = relationship("User", back_populates="saved_places")
+    
+    # קשר למקום
+    place_id = Column(Integer, ForeignKey("places.id"), nullable=False)
+    place = relationship("Place", back_populates="saved_by_users")
+    
+    # תאריך שמירה
+    saved_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class BusinessOwnerPlaceRequest(Base):

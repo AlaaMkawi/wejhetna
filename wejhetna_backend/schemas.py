@@ -132,6 +132,22 @@ class PlaceCreate(PlaceBase):
     location_id: int
 
 
+class PlaceUpdate(BaseModel):
+    """
+    עדכון מקום - כל השדות אופציונליים חוץ מ-id.
+    """
+    name: Optional[str] = None
+    name_ar: Optional[str] = None
+    name_he: Optional[str] = None
+    city_id: Optional[int] = None
+    category_id: Optional[int] = None
+    description: Optional[str] = None
+    phone: Optional[str] = None
+    opening_hours: Optional[str] = None
+    main_image_url: Optional[str] = None
+    social_links: Optional[str] = None
+
+
 class PlaceResponse(PlaceBase):
     id: int
 

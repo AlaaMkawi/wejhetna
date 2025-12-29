@@ -14,9 +14,6 @@ interface AccordionProps {
   icon?: string;
 }
 
-const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
-const MINT = "#9bd3d8";
 
 export default function Accordion({
   title,
