@@ -30,7 +30,6 @@ import {
   PlaceForMap,
   fetchAllPlaces,
 } from "../api/places";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
@@ -72,7 +71,7 @@ export default function EditPlaceScreen() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [nameArError, setNameArError] = useState<string | null>(null);
   const [nameHeError, setNameHeError] = useState<string | null>(null);
-  const [cityError, setCityError] = useState<string | null>(null);
+  const [, setCityError] = useState<string | null>(null);
   const [categoryError, setCategoryError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
 

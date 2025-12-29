@@ -91,6 +91,7 @@ export type RootStackParamList = {
     userRole: "ADMIN" | "BUSINESS_OWNER";
     userId: number;
   };
+  ManageMyBusiness: undefined;
 };
 export type AuthStackParamList = {
   Login: undefined;

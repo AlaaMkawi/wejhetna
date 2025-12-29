@@ -106,7 +106,7 @@ export default function BusinessOwnerDetailsFormScreen() {
     setModalMessage(message);
     setModalVisible(true);
   };
-
+  
   useEffect(() => {
     let isActive = true;
 
@@ -124,7 +124,6 @@ export default function BusinessOwnerDetailsFormScreen() {
         setCities(citiesRes);
         setCategories(categoriesRes);
 
-        // אם יש detectedCityId, נשתמש בו (העיר שנמצאה לפי המיקום)
         if (detectedCityId) {
           setCityId(detectedCityId);
         } else if (citiesRes.length > 0) {
@@ -132,7 +131,11 @@ export default function BusinessOwnerDetailsFormScreen() {
         }
       } catch (err) {
         console.error(err);
-        showModal("error", t("error") || "Error", t("failed_to_load_data") || "Failed to load cities/categories from server");
+        showModal(
+          "error",
+          t("error") || "Error",
+          t("failed_to_load_data") || "Failed to load cities/categories from server"
+        );
       } finally {
         if (isActive) setLoading(false);
       }
@@ -142,7 +145,7 @@ export default function BusinessOwnerDetailsFormScreen() {
     return () => {
       isActive = false;
     };
-  }, [t]);
+  }, [t, detectedCityId]);
 
   function handlePhoneChange(value: string) {
     const digitsOnly = value.replace(/[^0-9]/g, "").slice(0, 10);
@@ -514,7 +517,7 @@ export default function BusinessOwnerDetailsFormScreen() {
           {existingPlaceId && (
             <View style={styles.infoBanner}>
               <Ionicons name="information-circle" size={20} color={SOFT_TEAL} />
-              <Text style={styles.infoText}>
+              <Text style={styles.infoBannerText}>
                 {t("claiming_existing_place") || "You are claiming an existing place on the map."}
               </Text>
             </View>
@@ -590,7 +593,7 @@ export default function BusinessOwnerDetailsFormScreen() {
                 </Picker>
               </View>
               {detectedCityId && (
-                <Text style={styles.infoText}>
+                <Text style={styles.infoHelperText}>
                   {t("city_auto_detected") || "העיר נקבעה אוטומטית לפי המיקום שנבחר"}
                 </Text>
               )}
@@ -856,7 +859,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     borderLeftColor: SOFT_TEAL,
   },
-  infoText: {
+  infoBannerText: {
     fontSize: 13,
     color: DARK_TEAL,
     marginLeft: 8,
@@ -944,7 +947,7 @@ const styles = StyleSheet.create({
     height: 50,
     color: DARK_TEAL,
   },
-  infoText: {
+  infoHelperText: {
     color: SOFT_TEAL,
     fontSize: 12,
     marginTop: 6,

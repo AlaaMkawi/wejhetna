@@ -34,6 +34,7 @@ import ResetPasswordScreen from "../screens/ResetPasswordScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import SavedPlacesScreen from "../screens/SavedPlacesScreen";
 import UserTabNavigator from "./UserTabNavigator";
+import ManageMyBusinessScreen from "../screens/businessOwner/ManageMyBusinessScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -222,6 +223,12 @@ export default function AppNavigator() {
 <Stack.Screen
   name="SavedPlaces"
   component={SavedPlacesScreen}
+  options={{ headerShown: false }}
+/>
+
+<Stack.Screen
+  name="ManageMyBusiness"
+  component={ManageMyBusinessScreen}
   options={{ headerShown: false }}
 />
 

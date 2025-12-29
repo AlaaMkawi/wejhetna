@@ -10,7 +10,6 @@ import {
   ScrollView,
   Image,
   PanResponder,
-  Platform,
   StatusBar,
   Dimensions,
 } from "react-native";
@@ -21,8 +20,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
-import { useRoute, useNavigation, RouteProp, useFocusEffect } from "@react-navigation/native";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { useRoute, RouteProp, useFocusEffect } from "@react-navigation/native";
 import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -133,7 +131,7 @@ type Props = {
   route?: RouteProp<any, any>;
 };
 
-export default function BusinessOwnerHomeScreen({ navigation, route }: Props) {
+export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   const { t } = useTranslation();
   const routeParams = useRoute();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
@@ -205,7 +203,7 @@ export default function BusinessOwnerHomeScreen({ navigation, route }: Props) {
         }
       }
       load();
-    }, [selectedPlaceIdFromParams, selectedPlace?.id])
+    }, [selectedPlaceIdFromParams])
   );
 
   // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)

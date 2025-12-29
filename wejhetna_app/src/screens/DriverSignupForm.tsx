@@ -85,7 +85,7 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
   const [plateNumberError, setPlateNumberError] = useState<string | null>(null);
   const [productionYearError, setProductionYearError] = useState<string | null>(null);
 
-  const [result, setResult] = useState<any | null>(null);
+  const [, setResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // 🔹 modal state

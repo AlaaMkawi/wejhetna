@@ -453,5 +453,7 @@
   "city_cannot_be_edited": "لا يمكن تعديل المدينة",
   "place_has_owner_cannot_edit": "هذا المكان له صاحب عمل - لا يمكن التعديل",
   "place_alrisalah_mosque": "مسجد الرسالة",
-  "place_clalit_clinic": "كلاليت"
+  "place_clalit_clinic": "كلاليت",
+  "place_alrisalah_kindergarten": "روضة الرساله",
+  "place_home": "بيت"
 }
