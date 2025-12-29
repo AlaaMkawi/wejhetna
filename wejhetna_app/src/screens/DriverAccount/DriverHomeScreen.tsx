@@ -10,7 +10,6 @@ import {
   ScrollView,
   Image,
   PanResponder,
-  Platform,
   StatusBar,
   Dimensions,
 } from "react-native";
@@ -132,7 +131,7 @@ type Props = {
   route?: RouteProp<any, any>;
 };
 
-export default function DriverHomeScreen({ navigation, route }: Props) {
+export default function DriverHomeScreen({ }: Props) {
   const { t } = useTranslation();
   const routeParams = useRoute();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
@@ -195,7 +194,6 @@ export default function DriverHomeScreen({ navigation, route }: Props) {
         }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPlaceIdFromParams, places]);
 
   // Check if place is saved when selected

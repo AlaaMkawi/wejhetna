@@ -453,5 +453,7 @@
   "city_cannot_be_edited": "העיר לא ניתנת לעריכה",
   "place_has_owner_cannot_edit": "למקום זה יש בעל עסק - לא ניתן לערוך",
   "place_alrisalah_mosque": "מסגד אלרסאלה",
-  "place_clalit_clinic": "כללית"
+  "place_clalit_clinic": "כללית",
+  "place_alrisalah_kindergarten": "גן ילדים אלרסאלה",
+  "place_home": "בית"
 }

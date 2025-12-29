@@ -1,6 +1,6 @@
 // src/screens/Admin/UserDetailsScreen.tsx
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -67,15 +67,8 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
   const [businessData, setBusinessData] = useState<BusinessOwnerProfileData | null>(null);
   const [tab, setTab] = useState<"personal" | "vehicle" | "business">("personal");
 
-  useEffect(() => {
-    if (user.role === "DRIVER") {
-      loadDriverProfile();
-    } else if (user.role === "BUSINESS_OWNER") {
-      loadBusinessOwnerProfile();
-    }
-  }, [user.id, user.role]);
 
-  const loadDriverProfile = async () => {
+  const loadDriverProfile = useCallback(async () => {
     try {
       setLoading(true);
       const res = await fetch(`${API_BASE_URL}/users/${user.id}/driver-profile`);
@@ -88,9 +81,9 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user.id]);
 
-  const loadBusinessOwnerProfile = async () => {
+  const loadBusinessOwnerProfile = useCallback(async () => {
     try {
       setLoading(true);
       const res = await fetch(`${API_BASE_URL}/users/${user.id}/business-owner-profile`);
@@ -103,7 +96,19 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user.id]);
+  
+  useEffect(() => {
+    if (user.role === "DRIVER") {
+      loadDriverProfile();
+    } else if (user.role === "BUSINESS_OWNER") {
+      loadBusinessOwnerProfile();
+    }
+  }, [
+    user.role,
+    loadDriverProfile,
+    loadBusinessOwnerProfile,
+  ]);
 
   const getRoleColor = (userRole: string) => {
     switch (userRole) {

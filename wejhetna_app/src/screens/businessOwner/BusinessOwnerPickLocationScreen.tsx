@@ -1,7 +1,7 @@
 // src/screens/businessOwner/BusinessOwnerPickLocationScreen.tsx
 
 import React, { useState } from "react";
-import { View, StyleSheet, Text, Alert, ActivityIndicator, TouchableOpacity, Platform, StatusBar, Dimensions } from "react-native";
+import { View, StyleSheet, Text, Alert, TouchableOpacity, Platform, StatusBar } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   MapView,

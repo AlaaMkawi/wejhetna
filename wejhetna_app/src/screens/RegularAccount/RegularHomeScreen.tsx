@@ -10,7 +10,6 @@ import {
   ScrollView,
   Image,
   PanResponder,
-  Platform,
   StatusBar,
   Dimensions,
 } from "react-native";
@@ -132,7 +131,7 @@ type Props = {
   route?: RouteProp<any, any>;
 };
 
-export default function RegularHomeScreen({ navigation, route }: Props) {
+export default function RegularHomeScreen({}: Props) {
   const { t } = useTranslation();
   const routeParams = useRoute();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
