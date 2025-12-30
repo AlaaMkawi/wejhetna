@@ -367,3 +367,21 @@ export async function checkOsmForGps(
 
   return res.json();
 }
+
+// =======================
+// UPDATE PLACE
+// =======================
+export async function updatePlace(placeId: number, updateData: any): Promise<any> {
+  const res = await fetch(`${BASE_URL}/admin/places/${placeId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updateData),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || "Failed to update place");
+  }
+
+  return res.json();
+}

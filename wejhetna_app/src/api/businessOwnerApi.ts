@@ -112,3 +112,35 @@ export async function createBusinessOwnerPlaceRequest(
   );
   return res.data;
 }
+
+// 4) Get business owner profile with place data
+export interface BusinessPlaceOut {
+  id: number;
+  name: string;
+  name_ar?: string;
+  name_he?: string;
+  city_name?: string;
+  category_name?: string;
+  description?: string;
+  phone?: string;
+  opening_hours?: string;
+  main_image_url?: string;
+  lat?: number;
+  lon?: number;
+  social_links?: string;
+}
+
+export interface BusinessOwnerProfileOut {
+  user: UserOut;
+  place: BusinessPlaceOut | null;
+  request_status: string | null;
+}
+
+export async function getBusinessOwnerProfile(
+  userId: number
+): Promise<BusinessOwnerProfileOut> {
+  const res = await axios.get(
+    `${API_BASE_URL}/users/${userId}/business-owner-profile`
+  );
+  return res.data;
+}

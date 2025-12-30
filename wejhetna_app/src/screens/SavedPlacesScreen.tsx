@@ -12,7 +12,7 @@ import {
   Alert,
 } from "react-native";
 import { useTranslation } from "react-i18next";
-import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
+import { useNavigation} from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
@@ -22,10 +22,6 @@ import { getSavedPlaces, PlaceForMap, unsavePlace } from "../api/places";
 import i18n from "../i18n";
 
 const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
-const MINT = "#9bd3d8";
-
-type SavedPlacesRoute = RouteProp<RootStackParamList, "SavedPlaces">;
 type NavType = NativeStackNavigationProp<RootStackParamList>;
 
 // Helper function to get place name based on language
@@ -88,7 +84,6 @@ const getPlaceIcon = (place: PlaceForMap) => {
 export default function SavedPlacesScreen() {
   const { t } = useTranslation();
   const navigation = useNavigation<NavType>();
-  const route = useRoute<SavedPlacesRoute>();
   const [savedPlaces, setSavedPlaces] = useState<PlaceForMap[]>([]);
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<number | null>(null);
@@ -132,7 +127,7 @@ export default function SavedPlacesScreen() {
       }
     }
     loadSavedPlaces();
-  }, [userId]);
+  }, [userId, t]);
 
   const handleUnsave = async (placeId: number) => {
     if (!userId) return;

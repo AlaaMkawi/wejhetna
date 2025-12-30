@@ -19,6 +19,7 @@ import RegularHomeScreen from '../screens/RegularAccount/RegularHomeScreen';
 import DriverHomeScreen from '../screens/DriverAccount/DriverHomeScreen';
 import BusinessOwnerHomeScreen from '../screens/businessOwner/BusinessOwnerHomeScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import ManageMyBusinessScreen from '../screens/businessOwner/ManageMyBusinessScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -43,6 +44,7 @@ const WHITE_COLOR = "#fff";
 const ICONS_MAP: { [key: string]: { name: string; color: string } } = {
   Home: { name: 'home', color: HOME_ICON_COLOR },
   Search: { name: 'search', color: SEARCH_ICON_COLOR },
+  ManageBusiness: { name: 'business', color: HOME_ICON_COLOR },
   Profile: { name: 'person', color: PROFILE_ICON_COLOR },
 };
 
@@ -132,10 +134,12 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
             }
           };
 
-          // For Profile tab, use different icon names - ensure it's always visible
+          // For Profile and ManageBusiness tabs, use different icon names
           let displayIconName = focused ? iconName : `${iconName}-outline`;
           if (name === 'Profile') {
             displayIconName = focused ? 'person' : 'person-outline';
+          } else if (name === 'ManageBusiness') {
+            displayIconName = focused ? 'business' : 'business-outline';
           }
 
           return (
@@ -238,6 +242,9 @@ export default function UserTabNavigator() {
     );
   }
 
+  // Determine tabs based on user role
+  const isBusinessOwner = userRole === "BUSINESS_OWNER";
+
   return (
     <Tab.Navigator
       id="UserTabs"
@@ -253,11 +260,18 @@ export default function UserTabNavigator() {
         component={HomeScreenComponent}
         initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
       />
-      <Tab.Screen
-        name="Search"
-        component={HomeScreenComponent}
-        initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
-      />
+      {isBusinessOwner ? (
+        <Tab.Screen
+          name="ManageBusiness"
+          component={ManageMyBusinessScreen}
+        />
+      ) : (
+        <Tab.Screen
+          name="Search"
+          component={HomeScreenComponent}
+          initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
+        />
+      )}
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}
