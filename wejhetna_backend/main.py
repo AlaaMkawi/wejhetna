@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
@@ -399,6 +399,7 @@ class DriverSignupOut(BaseModel):
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
+    driver_language: Optional[str] = "ar"  # Language for driver email: "ar", "he", or "en"
 
 
 class LoginRequest(BaseModel):
@@ -741,11 +742,37 @@ def approve_business_owner_request(
 
     db.commit()
 
-    # מייל (אופציונלי)
+    # Send professional bilingual email (Arabic and Hebrew)
+    email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نحن سعداء بإبلاغك بأن طلب صاحب العمل الخاص بك لوجهتنا تمت الموافقة عليه!
+
+يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في إدارة مكان عملك.
+
+نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {user.full_name},
+
+אנו שמחים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא אושרה!
+
+אתה יכול כעת להתחבר לאפליקציה ולהתחיל לנהל את מקום העסק שלך.
+
+תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    subject = "وجهتنا / ווג'הטנא – الموافقة على طلب صاحب العمل / אישור בקשת בעל עסק"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Business owner request approved",
-        body="Your business owner request has been approved. You can now log in and manage your business place.",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Business owner request approved"}
@@ -792,10 +819,59 @@ def reject_business_owner_request(
 
     db.commit()
 
+    # Send professional bilingual email (Arabic and Hebrew) with reason and re-signup instructions
+    email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نأسف لإبلاغك بأن طلب صاحب العمل الخاص بك لوجهتنا تمت مراجعته ولسوء الحظ، لا يمكننا الموافقة عليه في هذا الوقت.
+
+سبب الرفض:
+{reason}
+
+نفهم أن هذا قد يكون محبطاً، لكننا نريد أن نمنحك الفرصة لمعالجة المشاكل وإعادة التقديم.
+
+يمكنك تقديم طلب جديد باستخدام نفس بيانات الاعتماد:
+• البريد الإلكتروني: {user.email}
+• اسم المستخدم: {user.username}
+
+ببساطة قم بزيارة تطبيق وجهتنا وأكمل نموذج تسجيل صاحب العمل مرة أخرى بنفس البريد الإلكتروني واسم المستخدم. سنراجع طلبك الجديد بعد تقديمه.
+
+إذا كان لديك أي أسئلة أو تحتاج إلى توضيح حول سبب الرفض، يرجى عدم التردد في الاتصال بنا.
+
+شكراً لاهتمامك بالانضمام إلى وجهتنا.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {user.full_name},
+
+אנו מצטערים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא נבדקה ולמרבה הצער, איננו יכולים לאשר אותה בשלב זה.
+
+סיבת הדחייה:
+{reason}
+
+אנו מבינים שזה עשוי להיות מאכזב, אך אנו רוצים לתת לך הזדמנות לטפל בבעיות ולהגיש בקשה מחדש.
+
+תוכל להגיש בקשה חדשה באמצעות אותם פרטי התחברות:
+• אימייל: {user.email}
+• שם משתמש: {user.username}
+
+פשוט בקר באפליקציית ווג'הטנא והשלם את טופס הרשמת בעל העסק שוב עם אותו אימייל ושם משתמש. נבדוק את הבקשה החדשה שלך לאחר הגשתה.
+
+אם יש לך שאלות או צריך הבהרה לגבי סיבת הדחייה, אנא אל תהסס ליצור איתנו קשר.
+
+תודה על העניין שלך להצטרף לוג'הטנא.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    subject = "وجهتنا / ווג'הטנא – تحديث حالة طلب صاحب العمل / עדכון סטטוס בקשת בעל עסק"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Business owner request rejected",
-        body=f"Your business owner request was rejected.\n\nReason: {reason}\n\nYou can try to sign up again with the same email and username if you wish to submit a new request.",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Business owner request rejected"}
@@ -1334,10 +1410,11 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if already verified (but allow rejected business owners to re-verify)
+    # Check if already verified (but allow rejected business owners and drivers to re-verify)
     if user.email_verified:
-        # Allow rejected business owners to request new verification code
-        if user.role == UserRole.BUSINESS_OWNER and user.status == UserStatus.REJECTED:
+        # Allow rejected business owners and drivers to request new verification code
+        if (user.role == UserRole.BUSINESS_OWNER and user.status == UserStatus.REJECTED) or \
+           (user.role == UserRole.DRIVER and user.status == UserStatus.REJECTED):
             # Reset email_verified to False so they can verify again
             user.email_verified = False
             db.commit()
@@ -1508,9 +1585,10 @@ def request_email_verification(data: SendVerificationCodeRequest, db: Session = 
     existing_user = db.query(User).filter(User.email == data.email).first()
     
     if existing_user:
-        # Allow rejected business owners to always request new verification code
-        if existing_user.role == UserRole.BUSINESS_OWNER and existing_user.status == UserStatus.REJECTED:
-            # Rejected business owner can re-verify email - reset email_verified
+        # Allow rejected business owners and drivers to always request new verification code
+        if (existing_user.role == UserRole.BUSINESS_OWNER and existing_user.status == UserStatus.REJECTED) or \
+           (existing_user.role == UserRole.DRIVER and existing_user.status == UserStatus.REJECTED):
+            # Rejected business owner or driver can re-verify email - reset email_verified
             existing_user.email_verified = False
             db.commit()
         elif existing_user.email_verified:
@@ -1567,7 +1645,7 @@ def ping():
 
 
 @app.post("/files/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), request: Request = None):
     """
     Accept one file, save it to 'uploads' folder, and return a URL.
     Later we can switch this to AWS S3 with the same response format.
@@ -1580,8 +1658,27 @@ async def upload_file(file: UploadFile = File(...)):
     with dest.open("wb") as out_file:
         shutil.copyfileobj(file.file, out_file)
 
+    # Get the base URL from the request
+    # Try to get from Host header first, then fallback to base_url, then environment variable
+    import os
+    base_url = os.getenv("API_BASE_URL", "http://192.168.0.192:8000")
+    
+    if request:
+        try:
+            # Try to get from Host header (more reliable for physical devices)
+            host = request.headers.get("host")
+            if host:
+                scheme = "https" if request.url.scheme == "https" else "http"
+                base_url = f"{scheme}://{host}"
+            else:
+                # Fallback to base_url
+                base_url = str(request.base_url).rstrip('/')
+        except Exception:
+            # If anything fails, use environment variable or default
+            pass
+    
     # URL that the app can store in DB / display
-    file_url = f"http://10.0.2.2:8000/uploads/{new_name}"  # for Android emulator
+    file_url = f"{base_url}/uploads/{new_name}"
     return {"file_url": file_url}
 
 
@@ -1627,11 +1724,37 @@ def approve_driver(
 
     db.commit()
 
-    # send email
+    # Send professional bilingual email (Arabic and Hebrew)
+    email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نحن سعداء بإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت الموافقة عليه!
+
+يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في استخدامه كسائق.
+
+نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {user.full_name},
+
+אנו שמחים להודיע לך כי בקשת הנהג שלך לוג'הטנא אושרה!
+
+אתה יכול כעת להתחבר לאפליקציה ולהתחיל להשתמש בה כנהג.
+
+תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    subject = "وجهتنا / ווג'הטנא – الموافقة على طلب السائق / אישור בקשת נהג"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Driver application approved",
-        body="Your driver account has been approved. You can now use the app as a driver.",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Driver approved"}
@@ -1677,11 +1800,59 @@ def reject_driver(
 
     db.commit()
 
-    # send email with reason
+    # Send professional bilingual email (Arabic and Hebrew) with reason and re-signup instructions
+    email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نأسف لإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت مراجعته ولسوء الحظ، لا يمكننا الموافقة عليه في هذا الوقت.
+
+سبب الرفض:
+{reason}
+
+نفهم أن هذا قد يكون محبطاً، لكننا نريد أن نمنحك الفرصة لمعالجة المشاكل وإعادة التقديم.
+
+يمكنك تقديم طلب جديد باستخدام نفس بيانات الاعتماد:
+• البريد الإلكتروني: {user.email}
+• اسم المستخدم: {user.username}
+
+ببساطة قم بزيارة تطبيق وجهتنا وأكمل نموذج تسجيل السائق مرة أخرى بنفس البريد الإلكتروني واسم المستخدم. سنراجع طلبك الجديد بعد تقديمه.
+
+إذا كان لديك أي أسئلة أو تحتاج إلى توضيح حول سبب الرفض، يرجى عدم التردد في الاتصال بنا.
+
+شكراً لاهتمامك بالانضمام إلى وجهتنا.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {user.full_name},
+
+אנו מצטערים להודיע לך כי בקשת הנהג שלך לוג'הטנא נבדקה ולמרבה הצער, איננו יכולים לאשר אותה בשלב זה.
+
+סיבת הדחייה:
+{reason}
+
+אנו מבינים שזה עשוי להיות מאכזב, אך אנו רוצים לתת לך הזדמנות לטפל בבעיות ולהגיש בקשה מחדש.
+
+תוכל להגיש בקשה חדשה באמצעות אותם פרטי התחברות:
+• אימייל: {user.email}
+• שם משתמש: {user.username}
+
+פשוט בקר באפליקציית ווג'הטנא והשלם את טופס הרשמת הנהג שוב עם אותו אימייל ושם משתמש. נבדוק את הבקשה החדשה שלך לאחר הגשתה.
+
+אם יש לך שאלות או צריך הבהרה לגבי סיבת הדחייה, אנא אל תהסס ליצור איתנו קשר.
+
+תודה על העניין שלך להצטרף לוג'הטנא.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    subject = "وجهتنا / ווג'הטנא – تحديث حالة طلب السائق / עדכון סטטוס בקשת נהג"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Driver application rejected",
-        body=f"Your driver application was rejected. Reason: {reason}",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Driver rejected"}
