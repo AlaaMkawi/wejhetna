@@ -12,6 +12,9 @@ import {
   PanResponder,
   StatusBar,
   Dimensions,
+  TextInput,
+  Modal,
+  ActivityIndicator,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -20,8 +23,11 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
-import { useRoute, RouteProp } from "@react-navigation/native";
-import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved } from "../../api/places";
+import { useRoute, RouteProp, useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { RootStackParamList } from "../../navigation/types";
+import Geolocation from "@react-native-community/geolocation";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, checkLocationInServiceCities } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -131,9 +137,22 @@ type Props = {
   route?: RouteProp<any, any>;
 };
 
+type RouteCoordinates = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    geometry: {
+      type: "LineString";
+      coordinates: [number, number][];
+    };
+    properties: Record<string, any>;
+  }>;
+};
+
 export default function RegularHomeScreen({}: Props) {
   const { t } = useTranslation();
   const routeParams = useRoute();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
   const cameraRef = useRef<any>(null);
 
@@ -150,6 +169,24 @@ export default function RegularHomeScreen({}: Props) {
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
 
+  // GPS Location
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(true);
+
+  // Destination
+  const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
+  const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
+
+  // Route
+  const [routeLoading, setRouteLoading] = useState(false);
+
+  // Navigation (tracking movement) - removed, now handled in RouteDetailsScreen
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+
   // Load user ID from AsyncStorage
   useEffect(() => {
     async function loadUserId() {
@@ -165,18 +202,48 @@ export default function RegularHomeScreen({}: Props) {
     loadUserId();
   }, []);
 
+  // Get user's GPS location
+  useEffect(() => {
+    setLocationLoading(true);
+    Geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setUserLocation({ lat: latitude, lon: longitude });
+        setLocationLoading(false);
+      },
+      (error) => {
+        console.log("GPS error", error);
+        Alert.alert(
+          t("location_error") || "Location Error",
+          t("failed_to_read_location") || "Could not get your location. Using default location."
+        );
+        setLocationLoading(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 10000,
+      }
+    );
+  }, [t]);
+
   // Fetch all places on mount
   useEffect(() => {
     async function load() {
       try {
         const data = await fetchAllPlaces();
+        console.log(`Loaded ${data.length} places from database`);
         setPlaces(data);
       } catch (e) {
         console.error("Failed to load places:", e);
+        Alert.alert(
+          t("error") || "Error",
+          t("failed_to_load_places") || "Failed to load places. Please check your connection and try again."
+        );
       }
     }
     load();
-  }, []);
+  }, [t]);
 
   // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)
   useEffect(() => {
@@ -334,15 +401,15 @@ export default function RegularHomeScreen({}: Props) {
   });
 
   const onRegionDidChange = async (feature: any) => {
-    const [lon, lat] = feature.geometry.coordinates;
-    const newZoom = feature.properties.zoomLevel;
-    setCurrentZoom(newZoom);
+      const [lon, lat] = feature.geometry.coordinates;
+      const newZoom = feature.properties.zoomLevel;
+      setCurrentZoom(newZoom);
 
-    if (lon < 34.72 || lat > 31.43) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: [34.75, 31.39],
-        animationDuration: 600,
-      });
+      if (lon < 34.72 || lat > 31.43) {
+        cameraRef.current?.setCamera({
+          centerCoordinate: [34.75, 31.39],
+          animationDuration: 600,
+        });
     }
   };
 
@@ -354,14 +421,342 @@ export default function RegularHomeScreen({}: Props) {
     });
   };
 
+  // Handle map long press (drop custom pin for destination)
+  const handleMapLongPress = async (e: any) => {
+    try {
+      const coords = e?.geometry?.coordinates;
+      if (Array.isArray(coords) && coords.length >= 2) {
+        const [lon, lat] = coords;
+        
+        // Check boundary - destination must be within service cities
+        try {
+          const boundaryCheck = await checkLocationInServiceCities(lat, lon);
+          if (!boundaryCheck.is_within) {
+            Alert.alert(
+              t("location_outside_service_area") || "Location Outside Service Area",
+              t("destination_must_be_in_service_cities") || "Destination must be within one of the 3 service cities: רהט (Rahat), לקיה (Lakiya), or תל שבע (Tel Sheva).\n\nPlease choose a location within these boundaries.",
+              [{ text: t("ok") || "OK" }]
+            );
+            return;
+          }
+        } catch (error: any) {
+          console.error("Error checking boundary:", error);
+          Alert.alert(
+            t("boundary_check_error") || "Boundary Check Error",
+            t("boundary_check_error_message") || "Failed to check location boundary. Please try again."
+          );
+          return;
+        }
+        
+        setCustomPin({ lat, lon });
+        setDestination({ lat, lon, name: `📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}` });
+        setSelectedPlace(null); // Clear selected place
+        setSearchResults([]);
+        setShowSearchModal(false);
+      }
+    } catch (error) {
+      console.error("Error handling long press:", error);
+    }
+  };
+
+  // Handle place marker tap - set as destination
+  const handlePlaceTap = async (place: PlaceForMap) => {
+    if (!place.location) return;
+    
+    // Places from database are already validated, so we can use them directly
+    // Only check boundary for custom pins (long press on map)
+    setSelectedPlace(place);
+    setDestination({
+      lat: place.location.lat,
+      lon: place.location.lon,
+      name: getPlaceName(place),
+    });
+    setCustomPin(null);
+    setSearchResults([]);
+    setShowSearchModal(false);
+  };
+
+  // Search places - comprehensive search across all fields
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    
+    // If query is empty, clear results
+    if (!query || query.trim().length === 0) {
+      setSearchResults([]);
+      return;
+    }
+
+    // Make sure places are loaded
+    if (!places || places.length === 0) {
+      console.log("No places loaded yet");
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const queryLower = query.toLowerCase().trim();
+      
+      // Filter places based on search query
+      const filtered = places.filter((place) => {
+        try {
+          // Search in name fields (English, Arabic, Hebrew)
+          const nameMatch = 
+            (place.name && typeof place.name === 'string' && place.name.toLowerCase().includes(queryLower)) ||
+            (place.name_ar && typeof place.name_ar === 'string' && place.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.name_he && typeof place.name_he === 'string' && place.name_he.toLowerCase().includes(queryLower));
+          
+          // Search in description
+          const descriptionMatch = 
+            place.description && typeof place.description === 'string' && 
+            place.description.toLowerCase().includes(queryLower);
+          
+          // Search in city name
+          const cityMatch = 
+            (place.city?.name_ar && typeof place.city.name_ar === 'string' && place.city.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_he && typeof place.city.name_he === 'string' && place.city.name_he.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_en && typeof place.city.name_en === 'string' && place.city.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in category name
+          const categoryMatch = 
+            (place.category?.name_ar && typeof place.category.name_ar === 'string' && place.category.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_he && typeof place.category.name_he === 'string' && place.category.name_he.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_en && typeof place.category.name_en === 'string' && place.category.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in phone number (remove spaces/dashes for better matching)
+          const phoneMatch = 
+            place.phone && typeof place.phone === 'string' && 
+            place.phone.replace(/[\s-]/g, '').includes(queryLower.replace(/[\s-]/g, ''));
+          
+          // Return true if any field matches
+          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
+        } catch (err) {
+          console.error("Error filtering place:", err, place);
+          return false;
+        }
+      });
+      
+      console.log(`Search for "${query}" found ${filtered.length} results out of ${places.length} places`);
+      setSearchResults(filtered);
+    } catch (error) {
+      console.error("Search error:", error);
+      setSearchResults([]);
+    }
+  };
+
+  // Get route from user location to destination using OSRM
+  const getRoute = async () => {
+    if (!userLocation || !destination) {
+      Alert.alert(
+        t("error") || "Error",
+        t("please_select_destination") || "Please select a destination first"
+      );
+      return;
+    }
+
+    setRouteLoading(true);
+    
+    try {
+      // Using OSRM (Open Source Routing Machine) - free, no API key needed
+      const profile = "driving"; // driving, walking, or cycling
+      const coordinates = `${userLocation.lon},${userLocation.lat};${destination.lon},${destination.lat}`;
+      
+      // Using OSRM public server (free, no API key required)
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=false&steps=false`;
+      
+      console.log("Requesting route from OSRM:", url);
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("OSRM API error:", response.status, errorText);
+        throw new Error(`Routing service error: ${response.status} - ${errorText}`);
+      }
+      
+      const routeData = await response.json();
+      
+      // OSRM response format: { code: "Ok", routes: [{ distance, duration, geometry }] }
+      if (routeData.code === "Ok" && routeData.routes && routeData.routes.length > 0) {
+        const route = routeData.routes[0];
+        
+        // Extract route information
+        const distance = route.distance || 0; // in meters
+        const duration = route.duration || 0; // in seconds
+        
+        // OSRM geometry format is already GeoJSON LineString
+        const routeGeometry = route.geometry || {
+          type: "LineString",
+          coordinates: [
+            [userLocation.lon, userLocation.lat],
+            [destination.lon, destination.lat],
+          ],
+        };
+        
+        // Store route info (distance, duration)
+        const routeInfoData = {
+          distance,
+          duration,
+          startAddress: t("your_location") || "Your Location",
+          endAddress: destination.name || t("destination") || "Destination",
+        };
+
+        // Store route coordinates
+        const routeCoords: RouteCoordinates = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: routeGeometry,
+              properties: {},
+            },
+          ],
+        };
+
+        // Navigate directly to RouteDetailsScreen
+        navigation.navigate("RouteDetails", {
+          routeInfo: routeInfoData,
+          destination,
+          userLocation,
+          routeCoordinates: routeCoords,
+        });
+      } else {
+        const errorMsg = routeData.code === "NoRoute" 
+          ? t("no_route_found") || "No route found between these points"
+          : routeData.message || t("no_route_found") || "No route found in response";
+        throw new Error(errorMsg);
+      }
+      } catch (error: any) {
+      console.error("Route error:", error?.message || String(error));
+      Alert.alert(
+        t("route_error") || "Route Error",
+        error?.message || t("could_not_get_route") || "Could not get driving directions. Please try again."
+      );
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
+
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <TouchableOpacity
+          style={styles.searchInputTouchable}
+          onPress={() => setShowSearchModal(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="search-outline" size={20} color="#666" style={styles.searchIcon} />
+          <Text style={styles.searchInputPlaceholder}>
+            {searchQuery || (t("search_places") || "Search places...")}
+          </Text>
+        </TouchableOpacity>
+        {locationLoading && (
+          <ActivityIndicator size="small" color="#0f5b63" style={styles.loader} />
+        )}
+      </View>
+
+      {/* Search Results Modal */}
+      <Modal
+        visible={showSearchModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSearchModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t("search_places") || "Search Places"}</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSearchModal(false);
+                setSearchQuery("");
+              }}>
+                <Text style={styles.modalCloseButton}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Search Input Inside Modal */}
+            <View style={styles.modalSearchContainer}>
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder={t("search_places") || "Search places..."}
+                placeholderTextColor="#666"
+                value={searchQuery}
+                onChangeText={handleSearch}
+                autoFocus={true}
+              />
+              <Ionicons name="search-outline" size={20} color="#666" style={styles.modalSearchIcon} />
+            </View>
+            <ScrollView style={styles.searchResultsList} keyboardShouldPersistTaps="handled">
+              {searchQuery.trim().length === 0 && (
+                <Text style={styles.noResults}>{t("start_typing_to_search") || "Start typing to search places..."}</Text>
+              )}
+              {searchResults.length === 0 && searchQuery.trim().length > 0 && (
+                <Text style={styles.noResults}>{t("no_places_found") || "No places found"}</Text>
+              )}
+              {searchResults.map((place) => (
+                <TouchableOpacity
+                  key={place.id}
+                  style={styles.searchResultItem}
+                  onPress={() => {
+                    handlePlaceTap(place);
+                    setSearchQuery("");
+                    setShowSearchModal(false);
+                  }}
+                >
+                  <Text style={styles.searchResultName}>{getPlaceName(place)}</Text>
+                  <View style={styles.searchResultDetails}>
+                    {getCityName(place.city) && (
+                      <Text style={styles.searchResultCity}>{getCityName(place.city)}</Text>
+                    )}
+                    {place.category && (
+                      <>
+                        {getCityName(place.city) && <Text style={styles.searchResultSeparator}> • </Text>}
+                        <Text style={styles.searchResultCategory}>
+                          {i18n.language === "he" && place.category.name_he
+                            ? place.category.name_he
+                            : i18n.language === "ar" && place.category.name_ar
+                            ? place.category.name_ar
+                            : place.category.name_ar || place.category.name_he || ""}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
+        onLongPress={handleMapLongPress}
+        onPress={(e: any) => {
+          // Handle regular tap - check if tapping near a place
+          try {
+            const coords = e?.geometry?.coordinates;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              const [lon, lat] = coords;
+              // Find nearest place within reasonable distance
+              const nearestPlace = places.find((place) => {
+                if (!place.location) return false;
+                const distance = Math.sqrt(
+                  Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
+                );
+                return distance < 0.001; // ~100 meters
+              });
+              if (nearestPlace) {
+                handlePlaceTap(nearestPlace);
+              }
+            }
+          } catch {
+            // Ignore tap errors
+          }
+        }}
         scrollEnabled={true}
         rotateEnabled={false}
         pitchEnabled={false}
@@ -386,6 +781,34 @@ export default function RegularHomeScreen({}: Props) {
           maxZoomLevel={18}
           animationMode="flyTo"
         />
+
+        {/* User Location Marker */}
+        {userLocation && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Custom Pin Marker (destination from map tap) */}
+        {customPin && (
+          <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
+            <View style={styles.customPinMarker}>
+              <View style={styles.customPinDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Destination Marker (from place selection) */}
+        {destination && !customPin && (
+          <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
+            <View style={styles.destinationMarker}>
+              <Text style={styles.destinationMarkerText}>📍</Text>
+            </View>
+          </PointAnnotation>
+        )}
+
 
         {places.map((place) => {
           if (!place.location) return null;
@@ -414,7 +837,7 @@ export default function RegularHomeScreen({}: Props) {
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
-                setSelectedPlace(place);
+                handlePlaceTap(place);
               }}
             >
               <View style={styles.nativeMarkerContainer}>
@@ -449,16 +872,16 @@ export default function RegularHomeScreen({}: Props) {
                         )}
                         {placeIcon.type === 'public' && (
                           <Ionicons name="location" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                      </View>
+            )}
+          </View>
                       {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
                       <View style={[
                         styles.pinPoint, 
                         isSelected && styles.pinPointSelected,
                         { borderTopColor: placeIcon.color }
                       ]} />
-                    </View>
-                  </View>
+              </View>
+              </View>
                 ) : (
                   <View style={[styles.businessMarker, isSelected && styles.markerSelected]}>
                     {/* Pin container with shadow - צל חזק יותר אם נבחר */}
@@ -470,16 +893,16 @@ export default function RegularHomeScreen({}: Props) {
                         { backgroundColor: placeIcon.color }
                       ]}>
                         <Ionicons name="business" size={isSelected ? 24 : 16} color="#FFFFFF" />
-                      </View>
+            </View>
                       {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
                       <View style={[
                         styles.pinPoint, 
                         isSelected && styles.pinPointSelected,
                         { borderTopColor: placeIcon.color }
                       ]} />
-                    </View>
-                </View>
-                )}
+          </View>
+        </View>
+      )}
 
                 {/* Label with icon - Google Maps style */}
                 {shouldShowLabel && (
@@ -515,24 +938,25 @@ export default function RegularHomeScreen({}: Props) {
                         {place.place_type === 'BUSINESS' && (
                           <Ionicons name="business" size={12} color="#FFFFFF" />
                         )}
-                      </View>
+          </View>
                     <Text style={styles.nativeMapLabel} numberOfLines={1}>
                         {getPlaceName(place)}
-                    </Text>
-                    </View>
-                  </View>
-                )}
+            </Text>
               </View>
+              </View>
+        )}
+            </View>
             </PointAnnotation>
           );
         })}
       </MapView>
 
-      {!selectedPlace && (
+
+      {!selectedPlace && !destination && (
         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
           <Text style={styles.recenterButtonText}>🎯</Text>
-        </TouchableOpacity>
-      )}
+            </TouchableOpacity>
+          )}
 
       {/* Selected Place Bottom Sheet */}
       {selectedPlace && (
@@ -547,7 +971,7 @@ export default function RegularHomeScreen({}: Props) {
               {...panResponder.panHandlers}
             >
               <View style={styles.dragHandle} />
-            </View>
+              </View>
 
             <ScrollView 
               ref={scrollViewRef}
@@ -558,18 +982,18 @@ export default function RegularHomeScreen({}: Props) {
             {/* Header with close button */}
             <View style={styles.bottomSheetHeader}>
               <View style={styles.bottomSheetHeaderLeft}>
-            <TouchableOpacity
+              <TouchableOpacity
               style={styles.closeButton}
               onPress={() => setSelectedPlace(null)}
             >
                   <Ionicons name="close" size={24} color="#000" />
             </TouchableOpacity>
-          </View>
+              </View>
               <View style={styles.bottomSheetHeaderRight}>
                 <TouchableOpacity style={styles.headerIconButton}>
                   <Ionicons name="share-outline" size={24} color="#000" />
-                </TouchableOpacity>
-                <TouchableOpacity 
+              </TouchableOpacity>
+              <TouchableOpacity
                   style={styles.headerIconButton}
                   onPress={handleToggleSave}
                   disabled={savingPlace || !userId}
@@ -579,15 +1003,15 @@ export default function RegularHomeScreen({}: Props) {
                     size={24} 
                     color={isPlaceSaved ? "#0f5b63" : "#000"} 
                   />
-                </TouchableOpacity>
-              </View>
+              </TouchableOpacity>
             </View>
+          </View>
 
             {/* Title and Subtitle */}
             <View style={styles.bottomSheetTitleSection}>
               <Text style={styles.bottomSheetTitle} numberOfLines={2}>
                 {getPlaceName(selectedPlace)}
-              </Text>
+            </Text>
               <View style={styles.bottomSheetSubtitleRow}>
                 <Text style={styles.bottomSheetSubtitle}>
                   {selectedPlace.place_type === "BUSINESS" 
@@ -600,8 +1024,8 @@ export default function RegularHomeScreen({}: Props) {
                     <Text style={styles.bottomSheetSubtitle}>
                       {getCityName(selectedPlace.city)}
                     </Text>
-                  </>
-                )}
+            </>
+          )}
               </View>
             </View>
 
@@ -627,19 +1051,43 @@ export default function RegularHomeScreen({}: Props) {
                   {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="navigate-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("start") || "התחלה"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonPrimary}>
-                <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                <Text style={styles.actionButtonPrimaryText}>
-                  {t("route") || "מסלול"}
-                </Text>
+              
+              {/* Get Directions Button - Navigates directly to RouteDetailsScreen */}
+          {destination && (
+            <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+              onPress={getRoute}
+                  disabled={routeLoading || !userLocation}
+            >
+              {routeLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
+                      <Text style={styles.actionButtonPrimaryText}>
+                        {t("get_directions") || "Get Directions"}
+                      </Text>
+                    </>
+              )}
             </TouchableOpacity>
-          </View>
+          )}
+
+              {!destination && (
+            <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={() => {
+                    if (selectedPlace && selectedPlace.location) {
+                      handlePlaceTap(selectedPlace);
+                    }
+                  }}
+                >
+                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.actionButtonPrimaryText}>
+                    {t("set_destination") || "Set Destination"}
+                  </Text>
+            </TouchableOpacity>
+          )}
+            </View>
 
             {/* Image Gallery */}
             <View style={styles.imageGalleryContainer}>
@@ -665,8 +1113,8 @@ export default function RegularHomeScreen({}: Props) {
                     {t("no_photos") || "אין תמונות"}
                   </Text>
                 </View>
-              )}
-            </View>
+          )}
+        </View>
 
             {/* Details Section */}
             <View style={styles.detailsSection}>
@@ -676,7 +1124,7 @@ export default function RegularHomeScreen({}: Props) {
                 <Text style={styles.detailText}>
                   {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
                 </Text>
-              </View>
+      </View>
 
               {/* Category */}
               <View style={styles.detailRow}>
@@ -1091,5 +1539,195 @@ const styles = StyleSheet.create({
     backgroundColor: "#F2F2F7",
     alignItems: "center",
     justifyContent: "center",
+  },
+  // Search Styles
+  searchContainer: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    right: 16,
+    zIndex: 1000,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInput: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    fontSize: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  searchInputTouchable: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInputPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: "#666",
+  },
+  loader: {
+    marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "70%",
+    padding: 16,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+  },
+  modalCloseButton: {
+    fontSize: 24,
+    color: "#666",
+    fontWeight: "300",
+  },
+  modalSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8F9FA",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  modalSearchInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: "#333",
+  },
+  modalSearchIcon: {
+    marginLeft: 8,
+  },
+  searchResultsList: {
+    maxHeight: 400,
+  },
+  searchResultItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  searchResultName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 4,
+  },
+  searchResultDetails: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  searchResultCity: {
+    fontSize: 14,
+    color: "#666",
+  },
+  searchResultSeparator: {
+    fontSize: 14,
+    color: "#999",
+    marginHorizontal: 4,
+  },
+  searchResultCategory: {
+    fontSize: 14,
+    color: "#666",
+  },
+  noResults: {
+    padding: 16,
+    textAlign: "center",
+    color: "#999",
+    fontSize: 14,
+  },
+  // User Location Marker
+  userLocationMarker: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#0f5b63",
+    borderWidth: 3,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  userLocationDot: {
+    flex: 1,
+    borderRadius: 7,
+    backgroundColor: "#0f5b63",
+  },
+  // Custom Pin Marker
+  customPinMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#ff6b6b",
+    borderWidth: 3,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  customPinDot: {
+    flex: 1,
+    borderRadius: 9,
+    backgroundColor: "#ff6b6b",
+  },
+  // Destination Marker
+  destinationMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#fff",
+    borderWidth: 3,
+    borderColor: "#28a745",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  destinationMarkerText: {
+    fontSize: 24,
   },
 });

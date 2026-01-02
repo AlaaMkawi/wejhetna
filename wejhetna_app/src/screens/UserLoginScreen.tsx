@@ -10,7 +10,7 @@ import {
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../config";
 
 type Props = NativeStackScreenProps<RootStackParamList, "UserLogin">;
 

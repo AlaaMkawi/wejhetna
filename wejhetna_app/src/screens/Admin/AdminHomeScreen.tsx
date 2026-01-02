@@ -29,6 +29,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { API_BASE_URL } from "../../../config";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -386,7 +387,6 @@ export default function AdminHomeScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              const API_BASE_URL = "http://10.0.2.2:8000";
               const res = await fetch(
                 `${API_BASE_URL}/admin/places/${selectedPlace.id}`,
                 {

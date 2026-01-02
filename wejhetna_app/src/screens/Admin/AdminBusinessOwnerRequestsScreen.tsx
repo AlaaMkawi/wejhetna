@@ -1,5 +1,5 @@
 // src/screens/Admin/AdminBusinessOwnerRequestsScreen.tsx
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -13,10 +13,11 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useFocusEffect } from "@react-navigation/native";
 import { RootStackParamList } from "../../navigation/types";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
 export type BusinessOwnerRequest = {
@@ -77,9 +78,12 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
     }
   };
 
-  useEffect(() => {
-    loadRequests();
-  }, []);
+  // Refresh data when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      loadRequests();
+    }, [])
+  );
 
   const getVisibleRequests = () => {
     // Filter to only show PENDING requests

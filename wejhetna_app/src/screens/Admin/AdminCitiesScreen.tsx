@@ -30,7 +30,7 @@ type City = {
   updated_at: string;
 };
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 type AdminCitiesRoute = RouteProp<RootStackParamList, "AdminCities">;
 
 export default function AdminCitiesScreen() {

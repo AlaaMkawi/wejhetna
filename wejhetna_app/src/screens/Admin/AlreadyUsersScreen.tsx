@@ -18,7 +18,7 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AdminTabParamList } from "../../navigation/types";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
 export type UserListItem = {

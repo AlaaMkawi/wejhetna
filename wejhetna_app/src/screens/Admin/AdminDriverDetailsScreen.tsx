@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   Modal,
   TextInput,
   Image,
@@ -17,8 +16,10 @@ import {
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
+import i18n from "../../i18n";
+import MessageModal from "../MessageModal";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminDriverDetails">;
@@ -27,8 +28,29 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { adminUserId, driver } = route.params;
   const [tab, setTab] = useState<"personal" | "vehicle">("personal");
+  
+  // Helper function to fix image URLs that might have wrong base URL
+  const fixImageUrl = (url: string | null | undefined): string | null => {
+    if (!url) return null;
+    // If URL has emulator IP but we're using physical device IP, fix it
+    if (url.includes("10.0.2.2") && !API_BASE_URL.includes("10.0.2.2")) {
+      return url.replace("http://10.0.2.2:8000", API_BASE_URL);
+    }
+    // If URL is relative, make it absolute
+    if (url.startsWith("/uploads/")) {
+      return `${API_BASE_URL}${url}`;
+    }
+    return url;
+  };
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string }>({
+    visible: false,
+    title: "",
+    message: "",
+  });
 
   const getStatusTranslation = (status: string) => {
     switch (status.toUpperCase()) {
@@ -60,23 +82,37 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
       );
       const json = await res.json();
       if (!res.ok) {
-        Alert.alert(t("error"), json.detail || t("approve_failed"));
+        setErrorModal({
+          visible: true,
+          title: t("error") || "Error",
+          message: json.detail || t("approve_failed") || "Failed to approve driver",
+        });
       } else {
-        Alert.alert(t("success"), t("driver_approved"), [
-          { text: t("ok"), onPress: () => navigation.goBack() },
-        ]);
+        setSuccessMessage(t("driver_approved") || "Driver approved");
+        setSuccessModalVisible(true);
       }
     } catch (e: any) {
-      Alert.alert(t("network_error"), e.message);
+      setErrorModal({
+        visible: true,
+        title: t("error") || "Error",
+        message: e.message || t("network_error_message") || t("network_error") || "Network error occurred",
+      });
     }
   };
 
   const handleRejectConfirm = async () => {
     if (!rejectReason.trim()) {
-      Alert.alert(t("missing_reason"), t("please_type_reason"));
+      setErrorModal({
+        visible: true,
+        title: t("error") || "Error",
+        message: t("please_type_reason") || "Please type a rejection reason",
+      });
       return;
     }
     try {
+      // Get admin's current language for driver email (default to Arabic)
+      const adminLanguage = i18n.language || "ar";
+      
       const res = await fetch(
         `${API_BASE_URL}/admin/drivers/${driver.driver_profile_id}/reject`,
         {
@@ -85,21 +121,29 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           body: JSON.stringify({
             admin_user_id: adminUserId,
             reason: rejectReason.trim(),
+            driver_language: adminLanguage, // Pass admin's language (will be used for driver email)
           }),
         }
       );
       const json = await res.json();
       if (!res.ok) {
-        Alert.alert(t("error"), json.detail || t("reject_failed"));
+        setErrorModal({
+          visible: true,
+          title: t("error") || "Error",
+          message: json.detail || t("reject_failed") || "Failed to reject driver",
+        });
       } else {
         setRejectModalVisible(false);
         setRejectReason("");
-        Alert.alert(t("done") || t("success"), t("driver_rejected"), [
-          { text: t("ok"), onPress: () => navigation.goBack() },
-        ]);
+        setSuccessMessage(t("driver_rejected") || "Driver rejected");
+        setSuccessModalVisible(true);
       }
     } catch (e: any) {
-      Alert.alert(t("network_error"), e.message);
+      setErrorModal({
+        visible: true,
+        title: t("error") || "Error",
+        message: e.message || t("network_error_message") || t("network_error") || "Network error occurred",
+      });
     }
   };
 
@@ -152,8 +196,10 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         <View style={styles.imageRow}>
           <Text style={styles.imageLabel}>{t("id_card")}</Text>
           <Image
-            source={{ uri: driver.id_card_image_url }}
+            source={{ uri: fixImageUrl(driver.id_card_image_url) || "" }}
             style={styles.documentImage}
+            resizeMode="contain"
+            onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
           />
         </View>
       )}
@@ -161,8 +207,10 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         <View style={styles.imageRow}>
           <Text style={styles.imageLabel}>{t("driver_license")}</Text>
           <Image
-            source={{ uri: driver.driver_license_image_url }}
+            source={{ uri: fixImageUrl(driver.driver_license_image_url) || "" }}
             style={styles.documentImage}
+            resizeMode="contain"
+            onError={(e) => console.log("Driver license image error:", e.nativeEvent.error)}
           />
         </View>
       )}
@@ -191,8 +239,10 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_license")}</Text>
             <Image
-              source={{ uri: driver.car_license_image_url }}
+              source={{ uri: fixImageUrl(driver.car_license_image_url) || "" }}
               style={styles.documentImage}
+              resizeMode="contain"
+              onError={(e) => console.log("Car license image error:", e.nativeEvent.error)}
             />
           </View>
         )}
@@ -200,8 +250,10 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_insurance")}</Text>
             <Image
-              source={{ uri: driver.car_insurance_image_url }}
+              source={{ uri: fixImageUrl(driver.car_insurance_image_url) || "" }}
               style={styles.documentImage}
+              resizeMode="contain"
+              onError={(e) => console.log("Car insurance image error:", e.nativeEvent.error)}
             />
           </View>
         )}
@@ -211,14 +263,19 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
               {t("car_photos")} ({driver.car_photos_urls.length})
             </Text>
             <View style={styles.imagesGrid}>
-              {driver.car_photos_urls.map((url, index) => (
-                <View key={index} style={styles.imageWrapper}>
-                  <Image
-                    source={{ uri: url }}
-                    style={styles.carPhotoImage}
-                  />
-                </View>
-              ))}
+              {driver.car_photos_urls.map((url, index) => {
+                const fixedUrl = fixImageUrl(url);
+                return (
+                  <View key={index} style={styles.imageWrapper}>
+                    <Image
+                      source={{ uri: fixedUrl || "" }}
+                      style={styles.carPhotoImage}
+                      resizeMode="cover"
+                      onError={(e) => console.log(`Car photo ${index} error:`, e.nativeEvent.error, "URL:", fixedUrl)}
+                    />
+                  </View>
+                );
+              })}
             </View>
           </View>
         )}
@@ -337,6 +394,27 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           </View>
         </View>
       </Modal>
+
+      {/* Success Modal */}
+      <MessageModal
+        visible={successModalVisible}
+        type="success"
+        title={t("done") || t("success") || "Done"}
+        message={successMessage}
+        onClose={() => {
+          setSuccessModalVisible(false);
+          navigation.goBack();
+        }}
+      />
+
+      {/* Error Modal */}
+      <MessageModal
+        visible={errorModal.visible}
+        type="error"
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={() => setErrorModal({ ...errorModal, visible: false })}
+      />
     </View>
   );
 }

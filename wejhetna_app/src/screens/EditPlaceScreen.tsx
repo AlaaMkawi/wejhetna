@@ -35,7 +35,7 @@ const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
 const MINT = "#9bd3d8";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../config";
 
 type EditPlaceRoute = RouteProp<RootStackParamList, "EditPlace">;
 

@@ -52,7 +52,8 @@ export type GpsOsmCheckResult = {
   osm_id?: string | null;
 };
 
-const BASE_URL = "http://10.0.2.2:8000"; // אנדרואיד אמולטור → FastAPI
+import { API_BASE_URL } from "../../config";
+const BASE_URL = API_BASE_URL;
 
 // =======================
 // FETCH CITIES

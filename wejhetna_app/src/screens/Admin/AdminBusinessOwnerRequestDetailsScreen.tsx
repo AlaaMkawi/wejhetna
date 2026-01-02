@@ -18,8 +18,9 @@ import {
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
+import MessageModal from "../MessageModal";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminBusinessOwnerRequestDetails">;
@@ -30,6 +31,13 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string }>({
+    visible: false,
+    title: "",
+    message: "",
+  });
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -68,14 +76,21 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
               );
               const json = await res.json();
               if (!res.ok) {
-                Alert.alert(t("error"), json.detail || t("approve_failed"));
+                setErrorModal({
+                  visible: true,
+                  title: t("error") || "Error",
+                  message: json.detail || t("approve_failed") || "Failed to approve business owner request",
+                });
               } else {
-                Alert.alert(t("success"), t("business_request_approved") || "Business owner request approved.", [
-                  { text: t("ok"), onPress: () => navigation.goBack() },
-                ]);
+                setSuccessMessage(t("business_request_approved") || "Business owner request approved");
+                setSuccessModalVisible(true);
               }
             } catch (e: any) {
-              Alert.alert(t("network_error"), e.message);
+              setErrorModal({
+                visible: true,
+                title: t("error") || "Error",
+                message: e.message || t("network_error_message") || t("network_error") || "Network error occurred",
+              });
             } finally {
               setProcessing(false);
             }
@@ -110,16 +125,23 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
       );
       const json = await res.json();
       if (!res.ok) {
-        Alert.alert(t("error"), json.detail || t("reject_failed"));
+        setErrorModal({
+          visible: true,
+          title: t("error") || "Error",
+          message: json.detail || t("reject_failed") || "Failed to reject business owner request",
+        });
       } else {
         setRejectModalVisible(false);
         setRejectReason("");
-        Alert.alert(t("done") || t("success"), t("business_request_rejected") || "Request rejected.", [
-          { text: t("ok"), onPress: () => navigation.goBack() },
-        ]);
+        setSuccessMessage(t("business_request_rejected") || "Business owner request rejected");
+        setSuccessModalVisible(true);
       }
     } catch (e: any) {
-      Alert.alert(t("network_error"), e.message);
+      setErrorModal({
+        visible: true,
+        title: t("error") || "Error",
+        message: e.message || t("network_error_message") || t("network_error") || "Network error occurred",
+      });
     } finally {
       setProcessing(false);
     }
@@ -389,6 +411,27 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
           </View>
         </View>
       </Modal>
+
+      {/* Success Modal */}
+      <MessageModal
+        visible={successModalVisible}
+        type="success"
+        title={t("done") || t("success") || "Done"}
+        message={successMessage}
+        onClose={() => {
+          setSuccessModalVisible(false);
+          navigation.goBack();
+        }}
+      />
+
+      {/* Error Modal */}
+      <MessageModal
+        visible={errorModal.visible}
+        type="error"
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={() => setErrorModal({ ...errorModal, visible: false })}
+      />
     </View>
   );
 }
