@@ -29,8 +29,8 @@ type City = {
   created_at: string;
   updated_at: string;
 };
-
 import { API_BASE_URL } from "../../../config";
+
 type AdminCitiesRoute = RouteProp<RootStackParamList, "AdminCities">;
 
 export default function AdminCitiesScreen() {

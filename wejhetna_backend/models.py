@@ -260,7 +260,9 @@ class Place(Base):
     phone = Column(String, nullable=True)
     opening_hours = Column(String, nullable=True)
     main_image_url = Column(Text, nullable=True)
+    business_images_urls = Column(ARRAY(Text), nullable=True)  # תמונות העסק (מערך)
     social_links = Column(Text, nullable=True)
+    announcement = Column(Text, nullable=True)  # הודעת עסק / מבצעים / הודעות מיוחדות
 
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)

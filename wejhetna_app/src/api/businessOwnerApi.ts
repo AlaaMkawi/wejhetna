@@ -1,7 +1,7 @@
 // src/api/businessOwnerApi.ts
 import axios from "axios";
 
-import { API_BASE_URL } from "../../config";
+const API_BASE_URL = "http://10.0.2.2:8000"; // backend base URL for emulator
 
 // ---------- Types ----------
 export type LoginRole = "REGULAR" | "DRIVER" | "BUSINESS_OWNER" | "ADMIN";
@@ -121,9 +121,11 @@ export interface BusinessPlaceOut {
   phone?: string;
   opening_hours?: string;
   main_image_url?: string;
+  business_images_urls?: string[];
   lat?: number;
   lon?: number;
   social_links?: string;
+  announcement?: string;
 }
 
 export interface BusinessOwnerProfileOut {

@@ -1,6 +1,6 @@
 // src/screens/Admin/AdminBusinessOwnerRequestDetailsScreen.tsx
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -15,16 +15,33 @@ import {
   StatusBar,
   Platform,
 } from "react-native";
+import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import MessageModal from "../MessageModal";
+import Ionicons from "react-native-vector-icons/Ionicons";
+import { fetchCategories, Category } from "../../api/places";
+import i18n from "../../i18n";
 
 import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
+const MAP_STYLE_URL =
+  "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
+
 type Props = NativeStackScreenProps<RootStackParamList, "AdminBusinessOwnerRequestDetails">;
 
+type UserInfo = {
+  id: number;
+  full_name: string;
+  username: string;
+  email: string;
+  phone: string;
+  role: string;
+  status: string;
+  created_at: string;
+};
 export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { adminUserId, request } = route.params;
@@ -38,6 +55,60 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     title: "",
     message: "",
   });
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  const [loadingUser, setLoadingUser] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const cameraRef = useRef<any>(null);
+
+  // Fetch user information
+  useEffect(() => {
+    async function loadUserInfo() {
+      if (!request.user_id) return;
+      
+      setLoadingUser(true);
+      try {
+        const res = await fetch(`${API_BASE_URL}/admin/users`);
+        const users = await res.json();
+        if (res.ok && Array.isArray(users)) {
+          const user = users.find((u: UserInfo) => u.id === request.user_id);
+          if (user) {
+            setUserInfo(user);
+          }
+        }
+      } catch (error) {
+        console.error("Error loading user info:", error);
+      } finally {
+        setLoadingUser(false);
+      }
+    }
+    loadUserInfo();
+  }, [request.user_id]);
+
+  // Fetch categories
+  useEffect(() => {
+    async function loadCategories() {
+      try {
+        const cats = await fetchCategories();
+        setCategories(cats);
+      } catch (error) {
+        console.error("Error loading categories:", error);
+      }
+    }
+    loadCategories();
+  }, []);
+
+  // Initialize map camera position
+  useEffect(() => {
+    if (cameraRef.current && request.lat && request.lon) {
+      setTimeout(() => {
+        cameraRef.current?.setCamera({
+          centerCoordinate: [request.lon, request.lat],
+          zoomLevel: 15,
+          animationDuration: 0,
+        });
+      }, 100);
+    }
+  }, [request.lat, request.lon]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -50,6 +121,27 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     });
   };
 
+  // Helper function to get category name based on current language
+  const getCategoryName = (category: Category | null | undefined): string => {
+    if (!category) return "";
+    
+    const currentLanguage = i18n.language || "ar";
+    
+    if (currentLanguage === "he" && category.name_he) {
+      return category.name_he;
+    } else if (currentLanguage === "ar" && category.name_ar) {
+      return category.name_ar;
+    } else if (category.name_en) {
+      return category.name_en;
+    }
+    
+    return category.name_ar || category.name_he || category.name_en || "";
+  };
+
+  // Get the category for this request
+  const requestCategory = request.category_id 
+    ? categories.find(cat => cat.id === request.category_id)
+    : null;
 
   const handleApprove = async () => {
     Alert.alert(
@@ -163,6 +255,43 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* User Information */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t("user_information") || "User Information"}</Text>
+          
+          {loadingUser ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="small" color={DARK_TEAL} />
+            </View>
+          ) : userInfo ? (
+            <>
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>{t("full_name") || "Full Name"}</Text>
+                <Text style={styles.infoValue}>{userInfo.full_name || (t("no_data") || "No data")}</Text>
+              </View>
+
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>{t("username") || "Username"}</Text>
+                <Text style={styles.infoValue}>{userInfo.username || (t("no_data") || "No data")}</Text>
+              </View>
+
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>{t("email") || "Email"}</Text>
+                <Text style={styles.infoValue}>{userInfo.email || (t("no_data") || "No data")}</Text>
+              </View>
+
+              <View style={styles.infoCard}>
+                <Text style={styles.infoLabel}>{t("phone") || "Phone"}</Text>
+                <Text style={styles.infoValue}>{userInfo.phone || (t("no_data") || "No data")}</Text>
+              </View>
+            </>
+          ) : (
+            <View style={styles.infoCard}>
+              <Text style={styles.infoValue}>{t("user_not_found") || "User information not available"}</Text>
+            </View>
+          )}
+        </View>
+
         {/* Business Information */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("business_information")}</Text>
@@ -190,59 +319,84 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
             </View>
           )}
 
-          {request.phone && (
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>{t("phone")}</Text>
-              <Text style={styles.infoValue}>{request.phone}</Text>
-            </View>
-          )}
+          {/* Category - Always show */}
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("category") || "Category"}</Text>
+            <Text style={[styles.infoValue, !requestCategory && styles.noDataText]}>
+              {requestCategory ? getCategoryName(requestCategory) : (t("no_data") || "No data")}
+            </Text>
+          </View>
 
-          {request.description && (
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>{t("description")}</Text>
-              <Text style={styles.infoValue}>{request.description}</Text>
-            </View>
-          )}
+          {/* Phone - Always show */}
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("phone")}</Text>
+            <Text style={[styles.infoValue, !request.phone && styles.noDataText]}>
+              {request.phone || (t("no_data") || "No data")}
+            </Text>
+          </View>
 
-          {request.opening_hours && (
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>{t("opening_hours")}</Text>
-              <Text style={styles.infoValue}>{request.opening_hours}</Text>
-            </View>
-          )}
+          {/* Description - Always show */}
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("description")}</Text>
+            <Text style={[styles.infoValue, !request.description && styles.noDataText]}>
+              {request.description || (t("no_data") || "No data")}
+            </Text>
+          </View>
 
-          {request.social_media_account_name && (
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>{t("social_media_account")}</Text>
-              <Text style={styles.infoValue}>{request.social_media_account_name}</Text>
-            </View>
-          )}
+          {/* Opening Hours - Always show */}
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("opening_hours")}</Text>
+            <Text style={[styles.infoValue, !request.opening_hours && styles.noDataText]}>
+              {request.opening_hours || (t("no_data") || "No data")}
+            </Text>
+          </View>
 
-          {request.main_image_url && (
-            <View style={styles.imageRow}>
-              <Text style={styles.imageLabel}>{t("main_image") || "Main Image"}</Text>
+          {/* Social Media Account - Always show */}
+          <View style={styles.infoCard}>
+            <Text style={styles.infoLabel}>{t("social_media_account")}</Text>
+            <Text style={[styles.infoValue, !request.social_media_account_name && styles.noDataText]}>
+              {request.social_media_account_name || (t("no_data") || "No data")}
+            </Text>
+          </View>
+
+          {/* Main Image - Always show */}
+          <View style={styles.imageRow}>
+            <Text style={styles.imageLabel}>{t("main_image") || "Main Image"}</Text>
+            {request.main_image_url ? (
               <Image
                 source={{ uri: request.main_image_url }}
                 style={styles.documentImage}
               />
-            </View>
-          )}
+            ) : (
+              <View style={styles.noImageContainer}>
+                <Ionicons name="image-outline" size={40} color="#999" />
+                <Text style={styles.noDataText}>{t("no_data") || "No data"}</Text>
+              </View>
+            )}
+          </View>
 
-          {request.business_license_image_url && (
-            <View style={styles.imageRow}>
-              <Text style={styles.imageLabel}>{t("business_license")}</Text>
+          {/* Business License - Always show */}
+          <View style={styles.imageRow}>
+            <Text style={styles.imageLabel}>{t("business_license")}</Text>
+            {request.business_license_image_url ? (
               <Image
                 source={{ uri: request.business_license_image_url }}
                 style={styles.documentImage}
               />
-            </View>
-          )}
+            ) : (
+              <View style={styles.noImageContainer}>
+                <Ionicons name="image-outline" size={40} color="#999" />
+                <Text style={styles.noDataText}>{t("no_data") || "No data"}</Text>
+              </View>
+            )}
+          </View>
 
-          {request.business_images_urls && request.business_images_urls.length > 0 && (
-            <View style={styles.imageRow}>
-              <Text style={styles.imageLabel}>
-                {t("business_pictures")} ({request.business_images_urls.length})
-              </Text>
+          {/* Business Images - Always show */}
+          <View style={styles.imageRow}>
+            <Text style={styles.imageLabel}>
+              {t("business_pictures")} {request.business_images_urls && request.business_images_urls.length > 0 ? `(${request.business_images_urls.length})` : ""}
+            </Text>
+            {request.business_images_urls && request.business_images_urls.length > 0 ? (
               <View style={styles.imagesGrid}>
                 {request.business_images_urls.map((url, index) => (
                   <View key={index} style={styles.imageWrapper}>
@@ -253,14 +407,55 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
                   </View>
                 ))}
               </View>
-            </View>
-          )}
+            ) : (
+              <View style={styles.noImageContainer}>
+                <Ionicons name="image-outline" size={40} color="#999" />
+                <Text style={styles.noDataText}>{t("no_data") || "No data"}</Text>
+              </View>
+            )}
+          </View>
         </View>
 
         {/* Location Information */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("location")}</Text>
           
+          {/* Interactive Map */}
+          <View style={styles.mapContainer}>
+            <MapView
+              style={styles.map}
+              mapStyle={MAP_STYLE_URL}
+              scrollEnabled={true}
+              zoomEnabled={true}
+              rotateEnabled={false}
+              pitchEnabled={false}
+              logoEnabled={false}
+              attributionEnabled={false}
+            >
+              <Camera
+                ref={cameraRef}
+                defaultSettings={{
+                  centerCoordinate: [request.lon, request.lat],
+                  zoomLevel: 15,
+                }}
+                minZoomLevel={10}
+                maxZoomLevel={18}
+                animationMode="flyTo"
+              />
+              <PointAnnotation
+                id="request-location"
+                coordinate={[request.lon, request.lat]}
+              >
+                <View style={styles.markerContainer}>
+                  <View style={styles.markerPin}>
+                    <Ionicons name="location" size={24} color="#FF0000" />
+                  </View>
+                </View>
+              </PointAnnotation>
+            </MapView>
+          </View>
+
+          {/* Location Details */}
           <View style={styles.infoCard}>
             <Text style={styles.infoLabel}>{t("latitude")}</Text>
             <Text style={styles.infoValue}>{request.lat.toFixed(6)}</Text>
@@ -529,6 +724,28 @@ const styles = StyleSheet.create({
     color: "#F44336",
     fontStyle: "italic",
   },
+
+  noDataText: {
+    color: "#999",
+    fontStyle: "italic",
+  },
+  loadingContainer: {
+    padding: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  noImageContainer: {
+    width: "100%",
+    height: 200,
+    borderRadius: 12,
+    backgroundColor: "#F8F9FA",
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
   actionsRow: {
     flexDirection: "row",
     padding: 20,
@@ -674,5 +891,44 @@ const styles = StyleSheet.create({
     height: "100%",
     resizeMode: "cover",
   },
+
+  mapContainer: {
+    width: "100%",
+    height: 200,
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 16,
+    backgroundColor: "#F8F9FA",
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  map: {
+    width: "100%",
+    height: "100%",
+  },
+  markerContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  markerPin: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 3,
+    borderColor: "#FF0000",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  }
 });
 

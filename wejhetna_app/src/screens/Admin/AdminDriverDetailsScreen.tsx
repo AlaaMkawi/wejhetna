@@ -29,19 +29,6 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
   const { adminUserId, driver } = route.params;
   const [tab, setTab] = useState<"personal" | "vehicle">("personal");
   
-  // Helper function to fix image URLs that might have wrong base URL
-  const fixImageUrl = (url: string | null | undefined): string | null => {
-    if (!url) return null;
-    // If URL has emulator IP but we're using physical device IP, fix it
-    if (url.includes("10.0.2.2") && !API_BASE_URL.includes("10.0.2.2")) {
-      return url.replace("http://10.0.2.2:8000", API_BASE_URL);
-    }
-    // If URL is relative, make it absolute
-    if (url.startsWith("/uploads/")) {
-      return `${API_BASE_URL}${url}`;
-    }
-    return url;
-  };
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [successModalVisible, setSuccessModalVisible] = useState(false);
@@ -196,7 +183,7 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         <View style={styles.imageRow}>
           <Text style={styles.imageLabel}>{t("id_card")}</Text>
           <Image
-            source={{ uri: fixImageUrl(driver.id_card_image_url) || "" }}
+            source={{ uri: driver.id_card_image_url }}
             style={styles.documentImage}
             resizeMode="contain"
             onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
@@ -207,7 +194,7 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         <View style={styles.imageRow}>
           <Text style={styles.imageLabel}>{t("driver_license")}</Text>
           <Image
-            source={{ uri: fixImageUrl(driver.driver_license_image_url) || "" }}
+            source={{ uri: driver.driver_license_image_url }}
             style={styles.documentImage}
             resizeMode="contain"
             onError={(e) => console.log("Driver license image error:", e.nativeEvent.error)}
@@ -239,7 +226,7 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_license")}</Text>
             <Image
-              source={{ uri: fixImageUrl(driver.car_license_image_url) || "" }}
+              source={{ uri: driver.car_license_image_url }}
               style={styles.documentImage}
               resizeMode="contain"
               onError={(e) => console.log("Car license image error:", e.nativeEvent.error)}
@@ -250,7 +237,7 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_insurance")}</Text>
             <Image
-              source={{ uri: fixImageUrl(driver.car_insurance_image_url) || "" }}
+              source={{ uri: driver.car_insurance_image_url }}
               style={styles.documentImage}
               resizeMode="contain"
               onError={(e) => console.log("Car insurance image error:", e.nativeEvent.error)}
@@ -263,19 +250,16 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
               {t("car_photos")} ({driver.car_photos_urls.length})
             </Text>
             <View style={styles.imagesGrid}>
-              {driver.car_photos_urls.map((url, index) => {
-                const fixedUrl = fixImageUrl(url);
-                return (
-                  <View key={index} style={styles.imageWrapper}>
-                    <Image
-                      source={{ uri: fixedUrl || "" }}
-                      style={styles.carPhotoImage}
-                      resizeMode="cover"
-                      onError={(e) => console.log(`Car photo ${index} error:`, e.nativeEvent.error, "URL:", fixedUrl)}
-                    />
-                  </View>
-                );
-              })}
+              {driver.car_photos_urls.map((url, index) => (
+                <View key={index} style={styles.imageWrapper}>
+                  <Image
+                    source={{ uri: url }}
+                    style={styles.carPhotoImage}
+                    resizeMode="cover"
+                    onError={(e) => console.log(`Car photo ${index} error:`, e.nativeEvent.error, "URL:", url)}
+                  />
+                </View>
+              ))}
             </View>
           </View>
         )}

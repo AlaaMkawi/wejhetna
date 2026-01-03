@@ -5,4 +5,5 @@ geoalchemy2
 psycopg[binary]
 python-dotenv
 passlib[bcrypt]
+openai
 #pip install python-dotenv

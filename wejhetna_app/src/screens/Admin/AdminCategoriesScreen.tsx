@@ -34,7 +34,7 @@ type Category = {
   updated_at: string;
 };
 
-import { API_BASE_URL } from "../../../config";
+const API_BASE_URL = "http://10.0.2.2:8000";
 type AdminCategoriesRoute = RouteProp<RootStackParamList, "AdminCategories">;
 
 export default function AdminCategoriesScreen() {

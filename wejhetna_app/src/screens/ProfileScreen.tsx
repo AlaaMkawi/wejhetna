@@ -28,7 +28,6 @@ import {
   DriverProfileInfo,
   BusinessOwnerProfileInfo,
 } from "../api/profileApi";
-import { API_BASE_URL } from "../../config";
 
 const DARK_TEAL = "#0f5b63";
 const MINT = "#9bd3d8";
@@ -257,6 +256,7 @@ export default function ProfileScreen() {
     try {
       setChangingBusinessPhone(true);
 
+      const API_BASE_URL = "http://10.0.2.2:8000";
       const placeId = businessInfo.place.id;
       console.log("Updating business phone for place ID:", placeId);
       console.log("New phone:", newBusinessPhone.trim());
@@ -386,6 +386,7 @@ export default function ProfileScreen() {
     try {
       setChangingPhone(true);
 
+      const API_BASE_URL = "http://10.0.2.2:8000";
       const res = await fetch(`${API_BASE_URL}/users/${userId}/phone`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -473,6 +474,7 @@ export default function ProfileScreen() {
     try {
       setChangingPassword(true);
 
+      const API_BASE_URL = "http://10.0.2.2:8000";
       const res = await fetch(`${API_BASE_URL}/auth/change-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

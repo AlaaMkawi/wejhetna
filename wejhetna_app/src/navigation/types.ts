@@ -91,7 +91,7 @@ export type RootStackParamList = {
     userRole: "ADMIN" | "BUSINESS_OWNER";
     userId: number;
   };
-  ManageMyBusiness: undefined;
+  ManageMyBusiness: { fromMap?: boolean } | undefined;
   RouteDetails: {
     routeInfo: {
       distance: number;

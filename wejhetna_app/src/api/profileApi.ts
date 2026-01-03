@@ -1,6 +1,7 @@
 // src/api/profileApi.ts
 import axios from "axios";
-import { API_BASE_URL } from "../../config";
+
+const API_BASE_URL = "http://10.0.2.2:8000";
 
 // ---------- Types ----------
 export interface UserProfile {

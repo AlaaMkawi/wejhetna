@@ -8,19 +8,19 @@ places = [ { "osm_id": "599579503", "place_type": "PUBLIC_SERVICE", "name": "Tel
 # 1) קטגוריות – יווצרו רק אם לא קיימות
 # =========================================
 CATEGORIES = [
-    { "name": "Supermarket", "name_he": "סופרמרקט", "name_ar": "سوبرماركت" },
-    { "name": "Restaurant", "name_he": "מסעדה", "name_ar": "مطعم" },
-    { "name": "Cafe", "name_he": "בית קפה", "name_ar": "مقهى" },
-    { "name": "Clothing", "name_he": "בגדים", "name_ar": "ملابس" },
-    { "name": "School", "name_he": "בית ספר", "name_ar": "مدرسة" },
-    { "name": "Kindergarten", "name_he": "גן ילדים", "name_ar": "روضة" },
-    { "name": "Mosque", "name_he": "מסגד", "name_ar": "مسجد" },
-    { "name": "Park", "name_he": "פארק", "name_ar": "حديقة" },
-    { "name": "Sport Facility", "name_he": "מתקן ספורט", "name_ar": "مرفق رياضي" },
-    { "name": "Post Office", "name_he": "דואר", "name_ar": "بريد" },
-    { "name": "Community Center", "name_he": "מרכז קהילתי", "name_ar": "مركز جماهيري" },
-    { "name": "Municipality", "name_he": "מועצה מקומית", "name_ar": "مجلس محلي" },
-    { "name": "Clinic", "name_he": "מרפאה", "name_ar": "عيادة" }
+    { "name_en": "Supermarket", "name_he": "סופרמרקט", "name_ar": "سوبرماركت" },
+    { "name_en": "Restaurant", "name_he": "מסעדה", "name_ar": "مطعم" },
+    { "name_en": "Cafe", "name_he": "בית קפה", "name_ar": "مقهى" },
+    { "name_en": "Clothing", "name_he": "בגדים", "name_ar": "ملابس" },
+    { "name_en": "School", "name_he": "בית ספר", "name_ar": "مدرسة" },
+    { "name_en": "Kindergarten", "name_he": "גן ילדים", "name_ar": "روضة" },
+    { "name_en": "Mosque", "name_he": "מסגד", "name_ar": "مسجد" },
+    { "name_en": "Park", "name_he": "פארק", "name_ar": "حديقة" },
+    { "name_en": "Sport Facility", "name_he": "מתקן ספורט", "name_ar": "مرفق رياضي" },
+    { "name_en": "Post Office", "name_he": "דואר", "name_ar": "بريد" },
+    { "name_en": "Community Center", "name_he": "מרכז קהילתי", "name_ar": "مركز جماهيرי" },
+    { "name_en": "Municipality", "name_he": "מועצה מקומית", "name_ar": "مجلس محلي" },
+    { "name_en": "Clinic", "name_he": "מרפאה", "name_ar": "عيادة" }
 ]
 
 

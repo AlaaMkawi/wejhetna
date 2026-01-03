@@ -16,8 +16,8 @@ import {
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
-
 import { API_BASE_URL } from "../../../config";
+
 const DARK_TEAL = "#0f5b63";
 
 type Props = NativeStackScreenProps<RootStackParamList, "UserDetails">;
