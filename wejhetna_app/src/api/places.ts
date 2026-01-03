@@ -38,7 +38,9 @@ export type PlaceForMap = {
   phone?: string | null;
   opening_hours?: string | null;
   main_image_url?: string | null;
+  business_images_urls?: string[] | null; // Array of business image URLs
   social_links?: string | null;
+  announcement?: string | null; // Business announcements/important news
   owner_user_id?: number | null; // ID of the business owner who owns this place
 
   city: City;
@@ -384,4 +386,36 @@ export async function updatePlace(placeId: number, updateData: any): Promise<any
   }
 
   return res.json();
+}
+
+// =======================
+// AI TRANSLATION
+// =======================
+export async function translateText(text: string, targetLanguage: "ar" | "he"): Promise<{ translated_text: string; detected_language: string }> {
+  try {
+    const res = await fetch(`${BASE_URL}/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        target_language: targetLanguage,
+      }),
+    });
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      const errorMessage = error.detail || error.message || `HTTP ${res.status}: Failed to translate text`;
+      console.error("Translation error:", errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return res.json();
+  } catch (error: any) {
+    // Handle network errors
+    if (error.message.includes("fetch") || error.message.includes("Network")) {
+      throw new Error("Cannot connect to server. Please check if the backend is running.");
+    }
+    // Re-throw other errors with their original message
+    throw error;
+  }
 }

@@ -1,6 +1,6 @@
 # schemas.py
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field,  EmailStr
 
@@ -115,7 +115,9 @@ class PlaceBase(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None  # תמונות העסק (מערך)
     social_links: Optional[str] = None
+    announcement: Optional[str] = None  # הודעת עסק / מבצעים / הודעות מיוחדות
     created_by_admin_id: Optional[int] = None
     owner_user_id: Optional[int] = None  # אם זה עסק, אפשר לשייך לבעלים
 
@@ -145,7 +147,9 @@ class PlaceUpdate(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None
     social_links: Optional[str] = None
+    announcement: Optional[str] = None
 
 
 class PlaceResponse(PlaceBase):

@@ -141,7 +141,7 @@ export default function LoginScreen({ navigation }: Props) {
   };
 
   const handleContactEmail = () => {
-    Linking.openURL("mailto:wejhetna.app@gmail.com").catch(() => {});
+    Linking.openURL("mailto:wejhetna@gmail.com").catch(() => {});
   };
 
   return (

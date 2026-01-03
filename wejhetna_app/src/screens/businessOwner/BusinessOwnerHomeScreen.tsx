@@ -12,6 +12,9 @@ import {
   PanResponder,
   StatusBar,
   Dimensions,
+  Linking,
+  Modal,
+  ActivityIndicator,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -21,7 +24,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useRoute, RouteProp, useFocusEffect } from "@react-navigation/native";
-import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved } from "../../api/places";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, Category, translateText } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -126,6 +129,179 @@ const getPlaceIcon = (place: PlaceForMap) => {
   return { type: 'default', color: '#4285F4' };
 };
 
+// Helper function to get category name based on current language
+const getCategoryName = (category: Category | null | undefined): string => {
+  if (!category) return "";
+
+  const currentLanguage = i18n.language || "ar";
+
+  if (currentLanguage === "he" && category.name_he) {
+    return category.name_he;
+  } else if (currentLanguage === "ar" && category.name_ar) {
+    return category.name_ar;
+  } else if (category.name_en) {
+    return category.name_en;
+  }
+
+  return category.name_ar || category.name_he || category.name_en || "";
+};
+
+// Helper function to parse opening hours into day-by-day format
+const parseOpeningHours = (openingHours: string | null | undefined): Array<{day: string, hours: string, isToday: boolean}> => {
+  if (!openingHours) return [];
+
+  const now = new Date();
+  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dayNamesLocalized = {
+    he: ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"],
+    ar: ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"],
+  };
+  
+  const currentLanguage = i18n.language || "ar";
+  const localizedDays = currentLanguage === "he" ? dayNamesLocalized.he : dayNamesLocalized.ar;
+
+  const dayEntries = openingHours.split(",").map(s => s.trim());
+  const parsed: Array<{day: string, hours: string, isToday: boolean}> = [];
+  
+  // Initialize all days
+  for (let i = 0; i < 7; i++) {
+    const dayName = dayNames[i];
+    const localizedDayName = localizedDays[i];
+    const isToday = i === currentDay;
+    
+    // Find matching entry
+    const entry = dayEntries.find(e => e.toLowerCase().startsWith(dayName.toLowerCase() + ":"));
+    
+    if (entry) {
+      const match = entry.match(new RegExp(`${dayName}:\\s*(.+)`, "i"));
+      if (match) {
+        parsed.push({
+          day: localizedDayName,
+          hours: match[1].trim(),
+          isToday,
+        });
+      } else {
+        parsed.push({ day: localizedDayName, hours: "", isToday });
+      }
+    } else {
+      parsed.push({ day: localizedDayName, hours: "", isToday });
+    }
+  }
+  
+  return parsed;
+};
+
+// Helper function to get opening hours status text
+const getOpeningHoursStatus = (openingHours: string | null | undefined): string => {
+  if (!openingHours) {
+    return i18n.language === "ar" ? "مغلق" : "סגור";
+  }
+
+  const now = new Date();
+  const currentDay = now.getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dayNamesLocalized = {
+    he: ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"],
+    ar: ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"],
+  };
+  
+  const currentLanguage = i18n.language || "ar";
+  const localizedDays = currentLanguage === "he" ? dayNamesLocalized.he : dayNamesLocalized.ar;
+  const currentDayName = dayNames[currentDay];
+  
+  const dayEntries = openingHours.split(",").map(s => s.trim());
+  
+  // Check if currently open
+  for (const entry of dayEntries) {
+    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
+    if (match) {
+      const [, startH, startM, startP, endH, endM, endP] = match;
+      
+      const startHour = parseInt(startH, 10);
+      const startMin = parseInt(startM, 10);
+      const endHour = parseInt(endH, 10);
+      const endMin = parseInt(endM, 10);
+      
+      let startMinutes = startHour * 60 + startMin;
+      let endMinutes = endHour * 60 + endMin;
+      
+      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
+      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
+      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
+      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
+      
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      
+      if (currentMinutes >= startMinutes && currentMinutes < endMinutes) {
+        return currentLanguage === "ar" ? "مفتوح" : "פתוח";
+      }
+    }
+  }
+  
+  // Find next opening time
+  for (let i = 0; i < 7; i++) {
+    const checkDay = (currentDay + i) % 7;
+    const checkDayName = dayNames[checkDay];
+    const localizedDayName = localizedDays[checkDay];
+    
+    const entry = dayEntries.find(e => e.toLowerCase().startsWith(checkDayName.toLowerCase() + ":"));
+    if (entry) {
+      const match = entry.match(new RegExp(`${checkDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
+      if (match) {
+        const [, hour, minute, period] = match;
+        const statusText = currentLanguage === "ar" ? "مغلق" : "סגור";
+        const opensText = currentLanguage === "ar" ? "يفتح" : "פתוח ב";
+        if (i === 0) {
+          return `${statusText} · ${opensText} ${hour}:${minute} ${period}`;
+        } else {
+          return `${statusText} · ${opensText} ${hour}:${minute} ${period} ${localizedDayName}`;
+        }
+      }
+    }
+  }
+  
+  return i18n.language === "ar" ? "مغلق" : "סגור";
+};
+
+// Helper function to check if business is currently open
+const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boolean => {
+  if (!openingHours) return false;
+
+  const now = new Date();
+  const currentDay = now.getDay();
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const currentDayName = dayNames[currentDay];
+
+  const dayEntries = openingHours.split(",").map(s => s.trim());
+  
+  for (const entry of dayEntries) {
+    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
+    if (match) {
+      const [, startH, startM, startP, endH, endM, endP] = match;
+      
+      const startHour = parseInt(startH, 10);
+      const startMin = parseInt(startM, 10);
+      const endHour = parseInt(endH, 10);
+      const endMin = parseInt(endM, 10);
+      
+      let startMinutes = startHour * 60 + startMin;
+      let endMinutes = endHour * 60 + endMin;
+      
+      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
+      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
+      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
+      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
+      
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+  }
+  
+  return false;
+};
+
 type Props = {
   navigation: any;
   route?: RouteProp<any, any>;
@@ -150,6 +326,40 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
 
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
+
+  // Opening hours expand state
+  const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
+
+  // Translation states
+  const [announcementTranslated, setAnnouncementTranslated] = useState<string | null>(null);
+  const [announcementIsTranslated, setAnnouncementIsTranslated] = useState(false);
+  const [announcementTranslating, setAnnouncementTranslating] = useState(false);
+  const [announcementTargetLang, setAnnouncementTargetLang] = useState<"ar" | "he" | null>(null);
+  
+  const [descriptionTranslated, setDescriptionTranslated] = useState<string | null>(null);
+  const [descriptionIsTranslated, setDescriptionIsTranslated] = useState(false);
+  const [descriptionTranslating, setDescriptionTranslating] = useState(false);
+  const [descriptionTargetLang, setDescriptionTargetLang] = useState<"ar" | "he" | null>(null);
+
+  // Language selector modal state
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+  const [languageSelectorType, setLanguageSelectorType] = useState<"announcement" | "description" | null>(null);
+
+  // Photo gallery modal
+  const [photoModalVisible, setPhotoModalVisible] = useState(false);
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
+  const photoScrollViewRef = useRef<ScrollView>(null);
+
+  // Helper function to detect language
+  const detectLanguage = (text: string): "ar" | "he" | "en" => {
+    const arabicChars = (text.match(/[\u0600-\u06FF]/g) || []).length;
+    const hebrewChars = (text.match(/[\u0590-\u05FF]/g) || []).length;
+    const englishChars = (text.match(/[a-zA-Z]/g) || []).length;
+    
+    if (arabicChars > hebrewChars && arabicChars > englishChars) return "ar";
+    if (hebrewChars > arabicChars && hebrewChars > englishChars) return "he";
+    return "en";
+  };
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -329,19 +539,103 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
     );
   };
 
-  // Handle edit place (only for business owner's own places)
+  // Handle edit place (only for business owner's own places) - Navigate to ManageMyBusiness
   const handleEditPlace = () => {
     if (!selectedPlace || !userId) return;
     
-    navigation.navigate("EditPlace", {
-      placeId: selectedPlace.id,
-      userRole: "BUSINESS_OWNER",
-      userId: userId,
-    });
+    navigation.navigate("ManageMyBusiness", { fromMap: true });
   };
 
   // Check if the selected place belongs to the current business owner
   const isOwnPlace = selectedPlace && userId && selectedPlace.owner_user_id === userId;
+
+  // Reset opening hours expanded state and translation states when place changes
+  useEffect(() => {
+    setOpeningHoursExpanded(false);
+    setAnnouncementTranslated(null);
+    setAnnouncementIsTranslated(false);
+    setAnnouncementTargetLang(null);
+    setDescriptionTranslated(null);
+    setDescriptionIsTranslated(false);
+    setDescriptionTargetLang(null);
+    setShowLanguageSelector(false);
+    setLanguageSelectorType(null);
+  }, [selectedPlace]);
+
+  // Open language selector for announcement
+  const handleTranslateAnnouncementClick = () => {
+    if (announcementIsTranslated) {
+      setAnnouncementIsTranslated(false);
+      return;
+    }
+    setLanguageSelectorType("announcement");
+    setShowLanguageSelector(true);
+  };
+
+  // Open language selector for description
+  const handleTranslateDescriptionClick = () => {
+    if (descriptionIsTranslated) {
+      setDescriptionIsTranslated(false);
+      return;
+    }
+    setLanguageSelectorType("description");
+    setShowLanguageSelector(true);
+  };
+
+  // Handle language selection and translation
+  const handleLanguageSelection = async (targetLang: "ar" | "he") => {
+    if (!languageSelectorType) return;
+    
+    setShowLanguageSelector(false);
+    
+    if (languageSelectorType === "announcement") {
+      if (!selectedPlace?.announcement) return;
+      
+      if (announcementTranslated && announcementTargetLang === targetLang) {
+        setAnnouncementIsTranslated(true);
+        return;
+      }
+
+      setAnnouncementTranslating(true);
+      try {
+        const result = await translateText(selectedPlace.announcement, targetLang);
+        setAnnouncementTranslated(result.translated_text);
+        setAnnouncementTargetLang(targetLang);
+        setAnnouncementIsTranslated(true);
+      } catch (error: any) {
+        Alert.alert(
+          t("error") || "שגיאה",
+          error.message || t("translation_failed") || "נכשל בתרגום"
+        );
+      } finally {
+        setAnnouncementTranslating(false);
+      }
+    } else if (languageSelectorType === "description") {
+      if (!selectedPlace?.description) return;
+      
+      if (descriptionTranslated && descriptionTargetLang === targetLang) {
+        setDescriptionIsTranslated(true);
+        return;
+      }
+
+      setDescriptionTranslating(true);
+      try {
+        const result = await translateText(selectedPlace.description, targetLang);
+        setDescriptionTranslated(result.translated_text);
+        setDescriptionTargetLang(targetLang);
+        setDescriptionIsTranslated(true);
+      } catch (error: any) {
+        Alert.alert(
+          t("error") || "שגיאה",
+          error.message || t("translation_failed") || "נכשל בתרגום"
+        );
+      } finally {
+        setDescriptionTranslating(false);
+      }
+    }
+    
+    setLanguageSelectorType(null);
+  };
 
   // Bottom sheet animation values
   const translateY = useSharedValue(SCREEN_HEIGHT);
@@ -690,11 +984,16 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                 {getPlaceName(selectedPlace)}
               </Text>
               <View style={styles.bottomSheetSubtitleRow}>
-                <Text style={styles.bottomSheetSubtitle}>
-                  {selectedPlace.place_type === "BUSINESS" 
-                    ? t("business_type") || (i18n.language === "ar" ? "عمل" : "עסק")
-                    : t("public") || (i18n.language === "ar" ? "عام" : "ציבורי")}
-                </Text>
+                {/* Category (for businesses) or Public Service type */}
+                {selectedPlace.place_type === "BUSINESS" && selectedPlace.category ? (
+                  <Text style={styles.bottomSheetSubtitle}>
+                    {getCategoryName(selectedPlace.category)}
+                  </Text>
+                ) : (
+                  <Text style={styles.bottomSheetSubtitle}>
+                    {t("public") || (i18n.language === "ar" ? "عام" : "ציבורי")}
+                  </Text>
+                )}
                 {getCityName(selectedPlace.city) && (
                   <>
                     <Text style={styles.subtitleSeparator}> • </Text>
@@ -704,6 +1003,76 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                   </>
                 )}
               </View>
+              
+              {/* Description */}
+              {selectedPlace.description && (
+                <View style={styles.descriptionSectionInline}>
+                  <View style={styles.descriptionHeader}>
+                    <Text style={styles.descriptionTitleInline}>
+                      {t("description") || "תיאור"}
+                    </Text>
+                    <View style={styles.translateButtonContainer}>
+                      {descriptionIsTranslated && (
+                        <TouchableOpacity
+                          onPress={() => setDescriptionIsTranslated(false)}
+                          style={styles.showOriginalButton}
+                        >
+                          <Text style={styles.showOriginalButtonText}>
+                            {i18n.language === "ar" ? "عرض الأصل" : "הצג מקור"}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity
+                        onPress={handleTranslateDescriptionClick}
+                        disabled={descriptionTranslating}
+                        style={styles.translateIconButton}
+                      >
+                        {descriptionTranslating ? (
+                          <ActivityIndicator size="small" color="#0f5b63" />
+                        ) : (
+                          <Ionicons name="language-outline" size={20} color="#0f5b63" />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <Text style={styles.descriptionTextInline}>
+                    {descriptionIsTranslated && descriptionTranslated
+                      ? descriptionTranslated
+                      : selectedPlace.description}
+                  </Text>
+                </View>
+              )}
+
+              {/* Open/Closed Status (for all businesses) */}
+              {selectedPlace.place_type === "BUSINESS" && (
+                <View style={styles.statusRow}>
+                  {selectedPlace.opening_hours ? (
+                    <View style={[
+                      styles.statusBadge,
+                      isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                        ? styles.statusBadgeOpen 
+                        : styles.statusBadgeClosed
+                    ]}>
+                      <Text style={[
+                        styles.statusText,
+                        isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                          ? styles.statusTextOpen 
+                          : styles.statusTextClosed
+                      ]}>
+                        {isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                          ? (t("open") || (i18n.language === "ar" ? "مفتوح" : "פתוח"))
+                          : (t("closed") || (i18n.language === "ar" ? "مغلق" : "סגור"))}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.statusBadge, styles.statusBadgeClosed]}>
+                      <Text style={[styles.statusText, styles.statusTextClosed]}>
+                        {t("closed") || (i18n.language === "ar" ? "مغلق" : "סגור")}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
 
             {/* Action Buttons Row */}
@@ -742,100 +1111,240 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
 
-            {/* Image Gallery */}
-            <View style={styles.imageGalleryContainer}>
-              <Text style={styles.sectionTitle}>
-                {t("photos") || "תמונות"}
-              </Text>
-              {selectedPlace.main_image_url ? (
-                <ScrollView 
-                  horizontal 
-                  showsHorizontalScrollIndicator={true}
-                  contentContainerStyle={styles.imageGalleryScrollContent}
-                >
-                  <Image 
-                    source={{ uri: selectedPlace.main_image_url }}
-                    style={styles.galleryImage}
-                    resizeMode="cover"
-                  />
-                </ScrollView>
-              ) : (
-                <View style={styles.noImagePlaceholder}>
-                  <Ionicons name="image-outline" size={40} color="#999" />
-                  <Text style={styles.noDataText}>
-                    {t("no_photos") || "אין תמונות"}
+            {/* Announcement Banner */}
+            {selectedPlace.announcement && (
+              <View style={styles.announcementBanner}>
+                <View style={styles.announcementHeader}>
+                  <Ionicons name="megaphone-outline" size={20} color="#0f5b63" />
+                  <Text style={styles.announcementTitle}>
+                    {i18n.language === "ar" 
+                      ? "أخبار مهمة من المالك" 
+                      : i18n.language === "he"
+                      ? "חדשות חשובות מהבעלים"
+                      : "Important News from Owner"}
                   </Text>
+                  <View style={styles.translateButtonContainer}>
+                    {announcementIsTranslated && (
+                      <TouchableOpacity
+                        onPress={() => setAnnouncementIsTranslated(false)}
+                        style={styles.showOriginalButton}
+                      >
+                        <Text style={styles.showOriginalButtonText}>
+                          {i18n.language === "ar" ? "عرض الأصل" : "הצג מקור"}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      onPress={handleTranslateAnnouncementClick}
+                      disabled={announcementTranslating}
+                      style={styles.translateIconButton}
+                    >
+                      {announcementTranslating ? (
+                        <ActivityIndicator size="small" color="#0f5b63" />
+                      ) : (
+                        <Ionicons name="language-outline" size={20} color="#0f5b63" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <Text style={styles.announcementText}>
+                  {announcementIsTranslated && announcementTranslated
+                    ? announcementTranslated
+                    : selectedPlace.announcement}
+                </Text>
+              </View>
+            )}
+
+            {/* Image Gallery - Horizontal Scroll */}
+            {(() => {
+              // Get all images: business_images_urls first, then main_image_url as fallback
+              const allImages: string[] = [];
+              if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
+                allImages.push(...selectedPlace.business_images_urls);
+              } else if (selectedPlace.main_image_url) {
+                allImages.push(selectedPlace.main_image_url);
+              }
+
+              if (allImages.length > 0) {
+                return (
+                  <View style={styles.imageGalleryContainer}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={true}
+                      contentContainerStyle={styles.imageScrollContent}
+                      style={styles.imageScrollView}
+                    >
+                      {allImages.map((imageUri, index) => (
+                        <TouchableOpacity
+                          key={index}
+                          onPress={() => {
+                            setSelectedPhotoIndex(index);
+                            setPhotoModalVisible(true);
+                            // Scroll to selected photo after modal opens
+                            setTimeout(() => {
+                              photoScrollViewRef.current?.scrollTo({
+                                x: index * SCREEN_WIDTH,
+                                animated: false,
+                              });
+                            }, 100);
+                          }}
+                          style={styles.imageGridItem}
+                        >
+                          <Image 
+                            source={{ uri: imageUri }}
+                            style={styles.gridImage}
+                            resizeMode="cover"
+                          />
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                );
+              } else {
+                return null; // Don't show anything if no images
+              }
+            })()}
+
+            {/* Details Section - Card Style */}
+            <View style={styles.detailsSection}>
+              {/* Opening Hours Card - Expandable */}
+              {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
+                <TouchableOpacity
+                  style={styles.detailCard}
+                  onPress={() => setOpeningHoursExpanded(!openingHoursExpanded)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="time-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[
+                        styles.detailCardStatus,
+                        !isBusinessCurrentlyOpen(selectedPlace.opening_hours) && styles.detailCardStatusClosed
+                      ]}>
+                        {isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                          ? (i18n.language === "ar" ? "مفتوح" : "פתוח")
+                          : getOpeningHoursStatus(selectedPlace.opening_hours)}
+                      </Text>
+                    </View>
+                    <Ionicons 
+                      name={openingHoursExpanded ? "chevron-up" : "chevron-down"} 
+                      size={20} 
+                      color="#666" 
+                    />
+                  </View>
+                  {openingHoursExpanded && (
+                    <View style={styles.openingHoursTable}>
+                      {parseOpeningHours(selectedPlace.opening_hours).map((dayInfo, index) => (
+                        <View 
+                          key={index} 
+                          style={[
+                            styles.openingHoursRow,
+                            dayInfo.isToday && styles.openingHoursRowToday
+                          ]}
+                        >
+                          <Text style={[
+                            styles.openingHoursDay,
+                            dayInfo.isToday && styles.openingHoursDayToday
+                          ]}>
+                            {dayInfo.day}
+                          </Text>
+                          <Text style={[
+                            styles.openingHoursTime,
+                            !dayInfo.hours && styles.openingHoursClosed
+                          ]}>
+                            {dayInfo.hours || (i18n.language === "ar" ? "مغلق" : "סגור")}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {/* Location Card */}
+              <View style={styles.detailCard}>
+                <View style={styles.detailCardContent}>
+                  <Ionicons name="location-outline" size={20} color="#000" />
+                  <View style={styles.detailCardTextContainer}>
+                    <Text style={styles.detailCardText}>
+                      {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Category Card */}
+              {selectedPlace.category && (
+                <View style={styles.detailCard}>
+                  <View style={styles.detailCardContent}>
+                    <MaterialCommunityIcons 
+                      name={selectedPlace.category?.icon_name as any || "tag"} 
+                      size={20} 
+                      color="#000" 
+                    />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={styles.detailCardText}>
+                        {selectedPlace.category
+                          ? (i18n.language === "he" && selectedPlace.category.name_he
+                              ? selectedPlace.category.name_he
+                              : i18n.language === "ar" && selectedPlace.category.name_ar
+                              ? selectedPlace.category.name_ar
+                              : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
+                          : (t("no_data") || "אין נתונים")}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
               )}
-            </View>
 
-            {/* Details Section */}
-            <View style={styles.detailsSection}>
-              {/* Location */}
-              <View style={styles.detailRow}>
-                <Ionicons name="location-outline" size={20} color="#0f5b63" />
-                <Text style={styles.detailText}>
-                  {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
-                </Text>
+              {/* Phone Card */}
+              <View style={styles.detailCard}>
+                <View style={styles.detailCardContent}>
+                  <Ionicons name="call-outline" size={20} color="#000" />
+                  <View style={styles.detailCardTextContainer}>
+                    <Text style={[styles.detailCardText, !selectedPlace.phone && styles.noDataText]}>
+                      {selectedPlace.phone || (t("no_data") || "אין נתונים")}
+                    </Text>
+                  </View>
+                </View>
               </View>
 
-              {/* Category */}
-              <View style={styles.detailRow}>
-                <MaterialCommunityIcons 
-                  name={selectedPlace.category?.icon_name as any || "tag"} 
-                  size={20} 
-                  color="#0f5b63" 
-                />
-                <Text style={styles.detailText}>
-                  {selectedPlace.category
-                    ? (i18n.language === "he" && selectedPlace.category.name_he
-                        ? selectedPlace.category.name_he
-                        : i18n.language === "ar" && selectedPlace.category.name_ar
-                        ? selectedPlace.category.name_ar
-                        : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
-                    : (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Phone */}
-              <View style={styles.detailRow}>
-                <Ionicons name="call-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.phone && styles.noDataText]}>
-                  {selectedPlace.phone || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Opening Hours */}
-              <View style={styles.detailRow}>
-                <Ionicons name="time-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.opening_hours && styles.noDataText]}>
-                  {selectedPlace.opening_hours || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Description */}
-              <View style={styles.descriptionSection}>
-                <Text style={styles.descriptionTitle}>
-                  {t("description") || "תיאור"}
-                </Text>
-                {selectedPlace.description ? (
-                  <Text style={styles.descriptionText}>
-                {selectedPlace.description}
-              </Text>
-                ) : (
-                  <Text style={styles.noDataText}>
-                    {t("no_data") || "אין נתונים"}
-              </Text>
-            )}
-          </View>
-
-              {/* Social Links */}
-              <View style={styles.detailRow}>
-                <Ionicons name="link-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.social_links && styles.noDataText]} numberOfLines={1}>
-                  {selectedPlace.social_links || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
+              {/* Social Links Card */}
+              {selectedPlace.social_links ? (
+                <TouchableOpacity
+                  style={styles.detailCard}
+                  onPress={() => {
+                    const url = selectedPlace.social_links!.startsWith('http') 
+                      ? selectedPlace.social_links! 
+                      : `https://${selectedPlace.social_links}`;
+                    Linking.openURL(url).catch(err => {
+                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                    });
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[styles.detailCardText, styles.socialLinkText]} numberOfLines={1}>
+                        {selectedPlace.social_links}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#666" />
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.detailCard}>
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[styles.detailCardText, styles.noDataText]}>
+                        {t("no_data") || "אין נתונים"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
             </View>
 
             {/* Business Owner Actions - Only for own places */}
@@ -844,7 +1353,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                 <TouchableOpacity style={styles.editButton} onPress={handleEditPlace}>
                   <Ionicons name="create-outline" size={20} color="#FFFFFF" />
                   <Text style={styles.editButtonText}>
-                    {t("edit_place_details") || "ערוך פרטי מקום"}
+                    {i18n.language === "ar" ? "تعديل معلومات عملي" : "ערוך את פרטי העסק שלי"}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -862,6 +1371,103 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           </>
         </Animated.View>
       )}
+
+      {/* Language Selector Modal */}
+      <Modal
+        visible={showLanguageSelector}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowLanguageSelector(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowLanguageSelector(false)}
+        >
+          <View style={styles.languageSelectorModal}>
+            <Text style={styles.languageSelectorTitle}>
+              {i18n.language === "ar" ? "اختر اللغة" : "בחר שפה"}
+            </Text>
+            <TouchableOpacity
+              style={styles.languageOption}
+              onPress={() => handleLanguageSelection("he")}
+            >
+              <Text style={styles.languageOptionText}>עברית</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.languageOption}
+              onPress={() => handleLanguageSelection("ar")}
+            >
+              <Text style={styles.languageOptionText}>العربية</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.languageSelectorCancel}
+              onPress={() => setShowLanguageSelector(false)}
+            >
+              <Text style={styles.languageSelectorCancelText}>
+                {i18n.language === "ar" ? "إلغاء" : "ביטול"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Photo Gallery Full Screen Modal */}
+      {selectedPlace && (() => {
+        const allImages: string[] = [];
+        if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
+          allImages.push(...selectedPlace.business_images_urls);
+        } else if (selectedPlace.main_image_url) {
+          allImages.push(selectedPlace.main_image_url);
+        }
+
+        if (allImages.length === 0) return null;
+
+        return (
+          <Modal
+            visible={photoModalVisible}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => setPhotoModalVisible(false)}
+          >
+            <View style={styles.photoModalContainer}>
+              <TouchableOpacity
+                style={styles.photoModalCloseButton}
+                onPress={() => setPhotoModalVisible(false)}
+              >
+                <Ionicons name="close" size={32} color="#fff" />
+              </TouchableOpacity>
+              <ScrollView
+                ref={photoScrollViewRef}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(event) => {
+                  const newIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+                  setSelectedPhotoIndex(newIndex);
+                }}
+                style={styles.photoModalScrollView}
+              >
+                {allImages.map((imageUri, index) => (
+                  <View key={index} style={styles.photoModalImageContainer}>
+                    <Image
+                      source={{ uri: imageUri }}
+                      style={styles.photoModalImage}
+                      resizeMode="contain"
+                    />
+                  </View>
+                ))}
+              </ScrollView>
+              {/* Photo counter */}
+              <View style={styles.photoCounter}>
+                <Text style={styles.photoCounterText}>
+                  {selectedPhotoIndex + 1} / {allImages.length}
+                </Text>
+              </View>
+            </View>
+          </Modal>
+        );
+      })()}
     </View>
   );
 }
@@ -1140,36 +1746,152 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#FFFFFF",
   },
-  imageGalleryContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
+  statusRow: {
+    marginTop: 8,
   },
-  sectionTitle: {
-    fontSize: 16,
+  statusBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  statusBadgeOpen: {
+    backgroundColor: "#E8F5E9",
+  },
+  statusBadgeClosed: {
+    backgroundColor: "#FFEBEE",
+  },
+  statusText: {
+    fontSize: 13,
     fontWeight: "600",
-    color: "#000",
+  },
+  statusTextOpen: {
+    color: "#4CAF50",
+  },
+  statusTextClosed: {
+    color: "#F44336",
+  },
+  announcementBanner: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: "#E8F4F8",
+    borderRadius: 12,
+    padding: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: "#0f5b63",
+  },
+  announcementHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
     marginBottom: 12,
   },
-  imageGalleryScrollContent: {
-    paddingRight: 16,
+  announcementTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#0f5b63",
+    flex: 1,
   },
-  galleryImage: {
-    width: 280,
-    height: 200,
-    borderRadius: 12,
-    backgroundColor: "#F2F2F7",
-    marginRight: 12,
+  translateButtonContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
-  noImagePlaceholder: {
-    width: "100%",
-    height: 200,
-    borderRadius: 12,
+  translateIconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: "#F2F2F7",
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#E5E5EA",
-    borderStyle: "dashed",
+    borderColor: "#0f5b63",
+  },
+  showOriginalButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#E8F4F8",
+    borderWidth: 1,
+    borderColor: "#0f5b63",
+  },
+  showOriginalButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#0f5b63",
+  },
+  announcementText: {
+    fontSize: 15,
+    color: "#000",
+    lineHeight: 22,
+    fontWeight: "400",
+  },
+  imageGalleryContainer: {
+    paddingBottom: 16,
+  },
+  imageScrollView: {
+    flexGrow: 0,
+  },
+  imageScrollContent: {
+    paddingHorizontal: 16,
+  },
+  imageGridItem: {
+    width: SCREEN_WIDTH * 0.40,
+    aspectRatio: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#F2F2F7",
+    marginRight: 8,
+  },
+  gridImage: {
+    width: "100%",
+    height: "100%",
+  },
+  photoModalContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalCloseButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalScrollView: {
+    flex: 1,
+  },
+  photoModalImageContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+  },
+  photoCounter: {
+    position: "absolute",
+    bottom: 50,
+    alignSelf: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  photoCounterText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
   },
   noDataText: {
     fontSize: 15,
@@ -1179,6 +1901,65 @@ const styles = StyleSheet.create({
   detailsSection: {
     paddingHorizontal: 16,
     paddingBottom: 16,
+  },
+  detailCard: {
+    backgroundColor: "#F5F5F5",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+  },
+  detailCardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  detailCardTextContainer: {
+    flex: 1,
+  },
+  detailCardText: {
+    fontSize: 15,
+    color: "#000",
+    fontWeight: "400",
+  },
+  detailCardStatus: {
+    fontSize: 15,
+    color: "#4CAF50",
+    fontWeight: "500",
+  },
+  detailCardStatusClosed: {
+    color: "#F44336",
+  },
+  openingHoursTable: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0",
+  },
+  openingHoursRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  openingHoursRowToday: {
+    backgroundColor: "transparent",
+  },
+  openingHoursDay: {
+    fontSize: 15,
+    color: "#666",
+    fontWeight: "400",
+  },
+  openingHoursDayToday: {
+    color: "#000",
+    fontWeight: "600",
+  },
+  openingHoursTime: {
+    fontSize: 15,
+    color: "#000",
+    fontWeight: "400",
+  },
+  openingHoursClosed: {
+    color: "#999",
   },
   detailRow: {
     flexDirection: "row",
@@ -1195,16 +1976,42 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 16,
   },
+  descriptionSectionInline: {
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  descriptionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
   descriptionTitle: {
     fontSize: 16,
     fontWeight: "600",
     color: "#000",
     marginBottom: 8,
   },
+  descriptionTitleInline: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000",
+    flex: 1,
+  },
   descriptionText: {
     fontSize: 15,
     color: "#333",
     lineHeight: 22,
+  },
+  descriptionTextInline: {
+    fontSize: 15,
+    color: "#333",
+    lineHeight: 22,
+  },
+  socialLinkText: {
+    fontSize: 15,
+    color: "#0f5b63",
+    textDecorationLine: "underline",
   },
   closeButton: {
     width: 36,
@@ -1249,5 +2056,52 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  languageSelectorModal: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 24,
+    width: SCREEN_WIDTH * 0.8,
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  languageSelectorTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#000",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  languageOption: {
+    backgroundColor: "#F2F2F7",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    alignItems: "center",
+  },
+  languageOptionText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f5b63",
+  },
+  languageSelectorCancel: {
+    marginTop: 8,
+    padding: 12,
+    alignItems: "center",
+  },
+  languageSelectorCancelText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#666",
   },
 });

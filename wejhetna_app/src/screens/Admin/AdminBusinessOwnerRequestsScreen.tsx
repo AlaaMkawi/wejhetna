@@ -55,6 +55,7 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
   const [requests, setRequests] = useState<BusinessOwnerRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [userNamesMap, setUserNamesMap] = useState<{ [key: number]: string }>({});
 
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<"oldest" | "newest">("newest");
@@ -63,12 +64,33 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
     setLoading(true);
     setError(null);
     try {
+      // Load requests
       const res = await fetch(`${API_BASE_URL}/admin/business-owner/requests`);
       const json = await res.json();
       if (!res.ok) {
         setError(json.detail || "Failed to load business owner requests");
       } else {
         setRequests(json);
+        
+        // Load user information for all unique user IDs
+        const userIds = [...new Set(json.map((req: BusinessOwnerRequest) => req.user_id))];
+        if (userIds.length > 0) {
+          try {
+            const usersRes = await fetch(`${API_BASE_URL}/admin/users`);
+            const users = await usersRes.json();
+            if (usersRes.ok && Array.isArray(users)) {
+              const namesMap: { [key: number]: string } = {};
+              users.forEach((user: { id: number; full_name: string }) => {
+                if (userIds.includes(user.id)) {
+                  namesMap[user.id] = user.full_name;
+                }
+              });
+              setUserNamesMap(namesMap);
+            }
+          } catch (userError) {
+            console.error("Error loading user names:", userError);
+          }
+        }
       }
     } catch (e: any) {
       setError("Network error: " + e.message);
@@ -88,7 +110,9 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
     // Apply search filter
     list = list.filter((req) => {
       const searchLower = search.toLowerCase();
+      const userName = userNamesMap[req.user_id] || "";
       return (
+        userName.toLowerCase().includes(searchLower) ||
         req.name.toLowerCase().includes(searchLower) ||
         req.name_ar.toLowerCase().includes(searchLower) ||
         req.name_he.toLowerCase().includes(searchLower)
@@ -134,7 +158,9 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
       >
         <View style={styles.cardContent}>
           <View style={styles.nameRow}>
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.cardTitle} numberOfLines={1}>
+              {userNamesMap[item.user_id] || t("user") || "User"}
+            </Text>
             <View style={[
               styles.statusBadge,
               item.status === "PENDING" && styles.statusBadgePending,

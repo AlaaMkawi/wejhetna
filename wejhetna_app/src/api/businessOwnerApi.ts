@@ -125,9 +125,11 @@ export interface BusinessPlaceOut {
   phone?: string;
   opening_hours?: string;
   main_image_url?: string;
+  business_images_urls?: string[];
   lat?: number;
   lon?: number;
   social_links?: string;
+  announcement?: string;
 }
 
 export interface BusinessOwnerProfileOut {
