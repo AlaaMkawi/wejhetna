@@ -14,7 +14,8 @@ export type RootStackParamList = {
   ForgotPasswordEnterEmail: undefined;
   ForgotPasswordVerifyCode: { email: string };
   ResetPassword: { email: string; code: string };
- 
+  ManageMyBusiness: { fromMap?: boolean } | undefined;
+
   AdminPanel: undefined;
   AdminHomeScreen: { adminUserId: number; role: "ADMIN" };
   Login: undefined;

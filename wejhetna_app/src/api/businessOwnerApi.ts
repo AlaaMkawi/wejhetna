@@ -106,3 +106,32 @@ export async function createBusinessOwnerPlaceRequest(
   );
   return res.data;
 }
+export type BusinessPlaceOut = {
+  id: number;
+  name: string;
+  name_ar?: string | null;
+  name_he?: string | null;
+
+  phone?: string | null;
+  description?: string | null;
+  city_name?: string | null;
+  social_links?: string | null;
+  announcement?: string | null;
+  opening_hours?: string | null;
+
+  main_image_url?: string | null;
+  business_images_urls?: string[] | null;
+
+  lat?: number | null;
+  lon?: number | null;
+};
+
+export type BusinessOwnerProfileOut = {
+  place: BusinessPlaceOut | null;
+};
+
+export async function getBusinessOwnerProfile(userId: number): Promise<BusinessOwnerProfileOut> {
+  const res = await fetch(`${API_BASE_URL}/business-owner/profile/${userId}`);
+  if (!res.ok) throw new Error("Failed to load business owner profile");
+  return res.json();
+}
