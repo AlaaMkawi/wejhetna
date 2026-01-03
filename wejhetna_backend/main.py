@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from sqlalchemy import func
 from schemas import LocationCreate, LocationResponse
@@ -20,6 +20,7 @@ import models
 import smtplib
 from email.message import EmailMessage
 import os
+import re
 from models import (
     User,
     UserRole,
@@ -36,6 +37,7 @@ from models import (
     BusinessOwnerPlaceRequest,
     OwnerPlaceRequestStatus,
     EmailVerification,
+    SavedPlace,
 )
 from schemas import (
     CityCreate,
@@ -46,6 +48,7 @@ from schemas import (
     LocationResponse,
     PlaceCreate,
     PlaceResponse,
+    PlaceUpdate,
     AdminPlaceCreate,
     SendVerificationCodeRequest,
     VerifyEmailRequest,
@@ -57,6 +60,7 @@ from schemas import (
     PasswordResetResponse,
 )
 import requests
+
 
 def find_osm_poi(lat: float, lon: float):
     """
@@ -88,6 +92,7 @@ def find_osm_poi(lat: float, lon: float):
         print("OSM lookup failed:", e)
 
     return None
+
 
 app = FastAPI(
     title="Wejhetna Backend",
@@ -131,6 +136,8 @@ def send_email(to_email: str, subject: str, body: str):
         print("Subject:", subject)
         print("Body:", body)
         print("=============")
+
+
 # CORS (לאפליקציית React Native)
 app.add_middleware(
     CORSMiddleware,
@@ -139,6 +146,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 # --- Database session ---
 def get_db():
     db = SessionLocal()
@@ -146,7 +155,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 
 # ----- File uploads (local for now) -----
@@ -160,7 +168,6 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 # Import random for verification codes
 import random
-
 
 
 def hash_password(password: str) -> str:
@@ -178,7 +185,7 @@ def generate_verification_code() -> str:
 
 def send_verification_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
     """Send verification code email to user in their preferred language."""
-    
+
     # Email templates for different languages
     if language == "he":
         # Hebrew
@@ -225,7 +232,7 @@ Wejhetna Team"""
 
 مع تحياتنا،
 فريق وجهتنا"""
-    
+
     send_email(to_email, subject, body)
 
 
@@ -236,11 +243,11 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
         EmailVerification.user_id == user_id,
         EmailVerification.is_used == False
     ).update({"is_used": True})
-    
+
     # Generate new code
     code = generate_verification_code()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=2)
-    
+
     verification = EmailVerification(
         user_id=user_id,
         email=email,
@@ -248,11 +255,11 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
         expires_at=expires_at,
         is_used=False
     )
-    
+
     db.add(verification)
     db.commit()
     db.refresh(verification)
-    
+
     return verification
 
 
@@ -314,8 +321,6 @@ Wejhetna Team"""
     send_email(to_email, subject, body)
 
 
-
-
 class RegularUserSignup(BaseModel):
     full_name: str
     username: str
@@ -323,6 +328,8 @@ class RegularUserSignup(BaseModel):
     phone: str
     password: str
     password_confirmation: str
+
+
 class UserOut(BaseModel):
     id: int
     full_name: str
@@ -334,6 +341,7 @@ class UserOut(BaseModel):
 
     class Config:
         orm_mode = True
+
 
 class UserListOut(BaseModel):
     id: int
@@ -349,6 +357,7 @@ class UserListOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverSignupRequest(BaseModel):
     # basic user info
     full_name: str
@@ -358,21 +367,22 @@ class DriverSignupRequest(BaseModel):
     password: str
 
     # driver documents
-    driver_license_image_url: str   # רישיון נהיגה
-    id_card_image_url: str          # תעודת זהות
+    driver_license_image_url: str  # רישיון נהיגה
+    id_card_image_url: str  # תעודת זהות
 
     # car info + docs
-    car_type: str                   # סוג רכב
-    plate_number: str               # מספר רכב
-    production_year: int            # שנת יצור
-    car_license_image_url: str      # רישיון רכב
-    car_insurance_image_url: str    # ביטוח רכב
+    car_type: str  # סוג רכב
+    plate_number: str  # מספר רכב
+    production_year: int  # שנת יצור
+    car_license_image_url: str  # רישיון רכב
+    car_insurance_image_url: str  # ביטוח רכב
 
     # optional photos
     car_photos_urls: Optional[List[str]] = None  # צילומים לרכב (לא חובה)
 
 
 from typing import Optional  # make sure this exists near the top
+
 
 class DriverSignupOut(BaseModel):
     user: UserOut
@@ -385,11 +395,10 @@ class DriverSignupOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
-
-
 
 
 class LoginRequest(BaseModel):
@@ -404,7 +413,8 @@ class LoginResponse(BaseModel):
     status: str
 
     class Config:
-        orm_mode = True    
+        orm_mode = True
+
 
 class BusinessOwnerSignup(BaseModel):
     full_name: str
@@ -413,12 +423,14 @@ class BusinessOwnerSignup(BaseModel):
     phone: str
     password: str
 
+
 class BusinessOwnerSignupOut(BaseModel):
     user: UserOut
     message: Optional[str] = None
 
     class Config:
         orm_mode = True
+
 
 class NearbyPlaceInfo(BaseModel):
     place_id: int
@@ -433,13 +445,19 @@ class BusinessOwnerNearbyCheckResponse(BaseModel):
     status: str  # "NO_PLACE" / "CAN_CLAIM" / "HAS_OWNER"
     candidate: Optional[NearbyPlaceInfo] = None
 
+
 class BusinessOwnerPlaceRequestCreate(BaseModel):
     """
     מה שהאפליקציה של בעל העסק תשלח
     אחרי שבחר מיקום + מילא פרטי העסק.
     """
 
-    user_id: int                          # ה-id של המשתמש (BUSINESS_OWNER)
+    # Personal info to create user (user will be created here if doesn't exist)
+    full_name: str
+    username: str
+    email: EmailStr
+    phone: str  # User's personal phone
+    password: str  # ה-id של המשתמש (BUSINESS_OWNER)
 
     # אם זה קליים על מקום קיים → existing_place_id != None
     existing_place_id: Optional[int] = None
@@ -447,7 +465,7 @@ class BusinessOwnerPlaceRequestCreate(BaseModel):
     # מיקום שבחר
     lat: float
     lon: float
-    source: str                           # "MAP_PICK" / "GPS_NO_OSM" / ...
+    source: str  # "MAP_PICK" / "GPS_NO_OSM" / ...
     osm_id: Optional[str] = None
 
     # פרטי העסק
@@ -455,10 +473,10 @@ class BusinessOwnerPlaceRequestCreate(BaseModel):
     name_ar: str
     name_he: str
     city_id: int
-    category_id: int                      # תמיד עסק → חובה קטגוריה
+    category_id: int  # תמיד עסק → חובה קטגוריה
 
     description: Optional[str] = None
-    phone: Optional[str] = None
+    business_phone: Optional[str] = None  # Business phone (different from user's personal phone)
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
     # NOTE: These fields are accepted in API but not saved to DB yet (UI-only)
@@ -466,8 +484,6 @@ class BusinessOwnerPlaceRequestCreate(BaseModel):
     business_images_urls: Optional[List[str]] = None  # תמונות העסק (UI only)
     social_links: Optional[str] = None
     social_media_account_name: Optional[str] = None  # שם חשבון רשתות חברתיות (UI only)
-
-
 
 
 class BusinessOwnerRequestReview(BaseModel):
@@ -498,8 +514,9 @@ class DriverApplicationOut(BaseModel):
 
     class Config:
         orm_mode = True
-from typing import List  # make sure this import exists at the top
 
+
+from typing import List  # make sure this import exists at the top
 
 
 class BusinessOwnerPlaceRequestOut(BaseModel):
@@ -554,6 +571,7 @@ class UserProfileOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverVehicleOut(BaseModel):
     id: int
     car_type: str
@@ -567,13 +585,17 @@ class DriverVehicleOut(BaseModel):
     class Config:
         orm_mode = True
 
+
 class DriverProfileOut(BaseModel):
     user: UserProfileOut
     vehicle: Optional[DriverVehicleOut] = None
     driver_status: str
+    driver_license_image_url: Optional[str] = None
+    id_card_image_url: Optional[str] = None
 
     class Config:
         orm_mode = True
+
 
 class BusinessPlaceOut(BaseModel):
     id: int
@@ -586,11 +608,15 @@ class BusinessPlaceOut(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None
+    social_links: Optional[str] = None
+    announcement: Optional[str] = None
     lat: Optional[float] = None
     lon: Optional[float] = None
 
     class Config:
         orm_mode = True
+
 
 class BusinessOwnerProfileOut(BaseModel):
     user: UserProfileOut
@@ -606,8 +632,8 @@ class BusinessOwnerProfileOut(BaseModel):
     response_model=List[BusinessOwnerPlaceRequestOut],
 )
 def list_business_owner_requests(
-    status: Optional[str] = None,
-    db: Session = Depends(get_db),
+        status: Optional[str] = None,
+        db: Session = Depends(get_db),
 ):
     """
     רשימת כל הבקשות מבעלי עסקים.
@@ -627,12 +653,11 @@ def list_business_owner_requests(
     return q.all()
 
 
-
 @app.post("/admin/business-owner/requests/{request_id}/approve")
 def approve_business_owner_request(
-    request_id: int,
-    data: BusinessOwnerRequestReview,
-    db: Session = Depends(get_db),
+        request_id: int,
+        data: BusinessOwnerRequestReview,
+        db: Session = Depends(get_db),
 ):
     admin = (
         db.query(User)
@@ -675,7 +700,7 @@ def approve_business_owner_request(
         place.main_image_url = req.main_image_url
         place.social_links = req.social_links
         place.owner_user_id = user.id
-        place.can_be_claimed = False   # יש בעלים עכשיו
+        place.can_be_claimed = False  # יש בעלים עכשיו
 
     # --- CASE 2: מקום חדש לגמרי ---
     else:
@@ -728,11 +753,12 @@ def approve_business_owner_request(
 
     return {"detail": "Business owner request approved"}
 
+
 @app.post("/admin/business-owner/requests/{request_id}/reject")
 def reject_business_owner_request(
-    request_id: int,
-    data: BusinessOwnerRequestReview,
-    db: Session = Depends(get_db),
+        request_id: int,
+        data: BusinessOwnerRequestReview,
+        db: Session = Depends(get_db),
 ):
     admin = (
         db.query(User)
@@ -777,8 +803,8 @@ def reject_business_owner_request(
 
     return {"detail": "Business owner request rejected"}
 
-# -
 
+# -
 
 
 # ---------- Regular user signup endpoint ----------
@@ -882,7 +908,7 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
         EmailVerification.is_used == True
     ).first()
     if not verified:
-        raise HTTPException(403,"Email not verified")
+        raise HTTPException(403, "Email not verified")
 
     # Create user
     user = User(
@@ -901,10 +927,12 @@ def signup_regular_user(data: RegularUserSignup, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-
     return user
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
+
 
 @app.post("/auth/signup/driver", response_model=DriverSignupOut)
 def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
@@ -1016,8 +1044,8 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
 
         # Is this user a driver WITH a driver_profile that was REJECTED?
         is_rejected_driver = (
-            driver_profile is not None
-            and driver_profile.driver_status == DriverStatus.REJECTED
+                driver_profile is not None
+                and driver_profile.driver_status == DriverStatus.REJECTED
         )
 
         # 👉 1) REJECTED DRIVER RE-APPLYING → ALLOW
@@ -1113,7 +1141,6 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         status=UserStatus.PENDING,
         email_verified=True
 
-
     )
     db.add(user)
     db.flush()  # get user.id
@@ -1153,7 +1180,6 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
 
     # 8. Send verification code
 
-
     # 9. Return response
     return DriverSignupOut(
         user=UserOut.model_validate(user, from_attributes=True),
@@ -1163,8 +1189,10 @@ def signup_driver(data: DriverSignupRequest, db: Session = Depends(get_db)):
         vehicle_status=vehicle.status.value,
         message="Your request has been sent and is waiting for admin approval.",
     )
+
+
 @app.post("/auth/signup/business-owner", response_model=BusinessOwnerSignupOut)
-def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_db)):
+def signup_business_owner(data: BusinessOwnerSignup, db: Session = Depends(get_db)):
     """
     יצירת משתמש חדש עם ROLE = BUSINESS_OWNER.
     בתחילה status = PENDING → לא פעיל עד שהאדמין יאשר את הבקשה.
@@ -1177,28 +1205,52 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
 
     if existing_user:
         if (
-            existing_user.role == UserRole.BUSINESS_OWNER
-            and existing_user.status == UserStatus.REJECTED
+                existing_user.role == UserRole.BUSINESS_OWNER
+                and existing_user.status == UserStatus.REJECTED
         ):
             # Rejected business owner trying again - allow re-signup
-            existing_user.full_name = data.full_name
-            existing_user.phone = data.phone
-            existing_user.password_hash = hash_password(data.password)
-            existing_user.status = UserStatus.PENDING
-            existing_user.rejection_reason = None  # Clear old rejection reason
-            existing_user.email_verified = False
+            # Check if email was verified (user should verify email again after rejection)
+            verified = db.query(EmailVerification).filter(
+                EmailVerification.email == data.email,
+                EmailVerification.is_used == True
+            ).order_by(EmailVerification.created_at.desc()).first()
+            
+            if not verified:
+                # Email not verified - set to unverified and send verification code
+                existing_user.full_name = data.full_name
+                existing_user.phone = data.phone
+                existing_user.password_hash = hash_password(data.password)
+                existing_user.status = UserStatus.PENDING
+                existing_user.rejection_reason = None  # Clear old rejection reason
+                existing_user.email_verified = False
 
-            db.commit()
-            db.refresh(existing_user)
+                db.commit()
+                db.refresh(existing_user)
 
-            # Send verification code (default to Arabic if no language preference)
-            verification = create_verification_code(existing_user.id, existing_user.email, db)
-            send_verification_email(existing_user.email, verification.code, existing_user.full_name, language="ar")
+                # Send verification code (default to Arabic if no language preference)
+                verification = create_verification_code(existing_user.id, existing_user.email, db)
+                send_verification_email(existing_user.email, verification.code, existing_user.full_name, language="ar")
 
-            return BusinessOwnerSignupOut(
-                user=UserOut.model_validate(existing_user, from_attributes=True),
-                message="Your business owner signup request has been sent again. Please choose your business location next.",
-            )
+                return BusinessOwnerSignupOut(
+                    user=UserOut.model_validate(existing_user, from_attributes=True),
+                    message="Your business owner signup request has been sent again. Please verify your email and then choose your business location next.",
+                )
+            else:
+                # Email already verified - proceed with signup
+                existing_user.full_name = data.full_name
+                existing_user.phone = data.phone
+                existing_user.password_hash = hash_password(data.password)
+                existing_user.status = UserStatus.PENDING
+                existing_user.rejection_reason = None  # Clear old rejection reason
+                existing_user.email_verified = True  # Email was verified
+
+                db.commit()
+                db.refresh(existing_user)
+
+                return BusinessOwnerSignupOut(
+                    user=UserOut.model_validate(existing_user, from_attributes=True),
+                    message="Your business owner signup request has been sent again. Please choose your business location next.",
+                )
 
         raise HTTPException(
             status_code=400,
@@ -1221,8 +1273,6 @@ def signup_business_owner(data: BusinessOwnerSignup,  db: Session = Depends(get_
     db.commit()
     db.refresh(user)
 
-
-
     return BusinessOwnerSignupOut(
         user=UserOut.model_validate(user, from_attributes=True),
         message="Your business owner signup request has been created. Please choose your business location next.",
@@ -1243,8 +1293,6 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
         EmailVerification.is_used == False
     ).first()
 
-
-
     # Find the most recent unused verification code for this user
     verification = (
         db.query(EmailVerification)
@@ -1256,14 +1304,14 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
         .order_by(EmailVerification.created_at.desc())
         .first()
     )
-    
+
     if not verification:
         raise HTTPException(status_code=400, detail="Invalid verification code")
-    
+
     # Check if code is expired
     if verification.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Verification code has expired")
-    
+
     # Mark code as used and verify user's email
     verification.is_used = True
 
@@ -1274,7 +1322,7 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
     db.commit()
 
     db.commit()
-    
+
     return VerifyEmailResponse(
         success=True,
         message="Email verified successfully"
@@ -1288,14 +1336,22 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    # Check if already verified
-    if user.email_verified:
-        raise HTTPException(status_code=400, detail="Email is already verified")
-    
-    # Create and send new verification code
 
-    
+    # Check if already verified (but allow rejected business owners to re-verify)
+    if user.email_verified:
+        # Allow rejected business owners to request new verification code
+        if user.role == UserRole.BUSINESS_OWNER and user.status == UserStatus.REJECTED:
+            # Reset email_verified to False so they can verify again
+            user.email_verified = False
+            db.commit()
+        else:
+            raise HTTPException(status_code=400, detail="Email is already verified")
+
+    # Create and send new verification code
+    verification = create_verification_code(user.id, user.email, db)
+    language = data.language if hasattr(data, 'language') and data.language else "ar"
+    send_verification_email(user.email, verification.code, user.full_name, language=language)
+
     return {"success": True, "message": "Verification code has been resent"}
 
 
@@ -1447,33 +1503,55 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         role=user.role.value,
         status=user.status.value,
     )
+
+
 @app.post("/auth/request-email-verification")
 def request_email_verification(data: SendVerificationCodeRequest, db: Session = Depends(get_db)):
-    # check email not already used by verified user
-    existing = db.query(User).filter(
-        User.email == data.email,
-        User.email_verified == True
-    ).first()
-    if existing:
-        raise HTTPException(400, "Email already registered")
-
-    code = generate_verification_code()
-
-    verification = EmailVerification(
-        user_id=None,
-        email=data.email,
-        code=code,
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
-        is_used=False
-    )
-
-    db.add(verification)
-    db.commit()
-
-    language = data.language if hasattr(data, 'language') and data.language else "ar"
-    send_verification_email(data.email, code, full_name="", language=language)
+    # Check if user exists with this email
+    existing_user = db.query(User).filter(User.email == data.email).first()
+    
+    if existing_user:
+        # Allow rejected business owners to always request new verification code
+        if existing_user.role == UserRole.BUSINESS_OWNER and existing_user.status == UserStatus.REJECTED:
+            # Rejected business owner can re-verify email - reset email_verified
+            existing_user.email_verified = False
+            db.commit()
+        elif existing_user.email_verified:
+            # For other verified users, block the request
+            raise HTTPException(400, "Email already registered")
+        
+        # Create verification code with user_id if user exists
+        code = generate_verification_code()
+        verification = EmailVerification(
+            user_id=existing_user.id,
+            email=data.email,
+            code=code,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+            is_used=False
+        )
+        db.add(verification)
+        db.commit()
+        
+        language = data.language if hasattr(data, 'language') and data.language else "ar"
+        send_verification_email(data.email, code, existing_user.full_name, language=language)
+    else:
+        # New user - create verification code without user_id
+        code = generate_verification_code()
+        verification = EmailVerification(
+            user_id=None,
+            email=data.email,
+            code=code,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+            is_used=False
+        )
+        db.add(verification)
+        db.commit()
+        
+        language = data.language if hasattr(data, 'language') and data.language else "ar"
+        send_verification_email(data.email, code, full_name="", language=language)
 
     return {"success": True}
+
 
 # --- Health check ---
 @app.get("/")
@@ -1489,6 +1567,112 @@ def health():
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
+
+
+# --- AI Translation Endpoint ---
+class TranslationRequest(BaseModel):
+    text: str
+    target_language: str  # "ar" or "he"
+
+class TranslationResponse(BaseModel):
+    translated_text: str
+    detected_language: str
+
+def detect_language(text: str) -> str:
+    """Simple language detection based on character ranges."""
+    # Count Arabic, Hebrew, and English characters
+    arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF')
+    hebrew_chars = sum(1 for c in text if '\u0590' <= c <= '\u05FF')
+    english_chars = sum(1 for c in text if c.isalpha() and ord(c) < 128 and c.isascii())
+    
+    if arabic_chars > hebrew_chars and arabic_chars > english_chars:
+        return "ar"
+    elif hebrew_chars > arabic_chars and hebrew_chars > english_chars:
+        return "he"
+    elif english_chars > arabic_chars and english_chars > hebrew_chars:
+        return "en"
+    else:
+        # Default to English if unclear (most common case for business descriptions)
+        return "en"
+
+@app.post("/translate", response_model=TranslationResponse)
+def translate_text(request: TranslationRequest):
+    """
+    Translate text using OpenAI API.
+    Supports Arabic <-> Hebrew translation.
+    """
+    import openai
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    
+    # Detect source language
+    detected_lang = detect_language(request.text)
+    
+    # Determine target language
+    if request.target_language not in ["ar", "he"]:
+        raise HTTPException(status_code=400, detail="Target language must be 'ar' or 'he'")
+    
+    # If already in target language, return as-is
+    if detected_lang == request.target_language:
+        return TranslationResponse(
+            translated_text=request.text,
+            detected_language=detected_lang
+        )
+    
+    # Map language codes to full names for OpenAI
+    lang_map = {
+        "ar": "Arabic",
+        "he": "Hebrew",
+        "en": "English"
+    }
+    
+    # If source is English, we can translate to either Arabic or Hebrew
+    source_lang_name = lang_map.get(detected_lang, "English")
+    target_lang_name = lang_map[request.target_language]
+    
+    try:
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"You are a professional translator. Translate the following text from {source_lang_name} to {target_lang_name}. Preserve the meaning, tone, and context. Return only the translated text without any explanations or additional text."
+                },
+                {
+                    "role": "user",
+                    "content": request.text
+                }
+            ],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        
+        translated_text = response.choices[0].message.content.strip()
+        
+        return TranslationResponse(
+            translated_text=translated_text,
+            detected_language=detected_lang
+        )
+        
+    except openai.AuthenticationError:
+        raise HTTPException(status_code=500, detail="OpenAI API key is invalid. Please check your API key in .env file.")
+    except openai.RateLimitError:
+        raise HTTPException(status_code=429, detail="OpenAI API rate limit exceeded. Please try again later.")
+    except openai.APIError as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
+    except Exception as e:
+        error_msg = str(e)
+        if "API key" in error_msg or "authentication" in error_msg.lower():
+            raise HTTPException(status_code=500, detail="OpenAI API key is invalid or missing. Please check your .env file.")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {error_msg}")
+
 
 @app.post("/files/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -1507,13 +1691,16 @@ async def upload_file(file: UploadFile = File(...)):
     # URL that the app can store in DB / display
     file_url = f"http://10.0.2.2:8000/uploads/{new_name}"  # for Android emulator
     return {"file_url": file_url}
+
+
 from datetime import datetime, timezone, timedelta  # make sure this import exists
+
 
 @app.post("/admin/drivers/{driver_profile_id}/approve")
 def approve_driver(
-    driver_profile_id: int,
-    data: DriverReviewRequest,
-    db: Session = Depends(get_db),
+        driver_profile_id: int,
+        data: DriverReviewRequest,
+        db: Session = Depends(get_db),
 ):
     # check admin exists and is ADMIN
     admin = (
@@ -1556,11 +1743,13 @@ def approve_driver(
     )
 
     return {"detail": "Driver approved"}
+
+
 @app.post("/admin/drivers/{driver_profile_id}/reject")
 def reject_driver(
-    driver_profile_id: int,
-    data: DriverReviewRequest,
-    db: Session = Depends(get_db),
+        driver_profile_id: int,
+        data: DriverReviewRequest,
+        db: Session = Depends(get_db),
 ):
     admin = (
         db.query(User)
@@ -1606,7 +1795,6 @@ def reject_driver(
     return {"detail": "Driver rejected"}
 
 
-
 @app.get("/admin/drivers/pending", response_model=List[DriverApplicationOut])
 def list_pending_drivers(db: Session = Depends(get_db)):
     # all drivers whose driver_status is PENDING
@@ -1642,11 +1830,13 @@ def list_pending_drivers(db: Session = Depends(get_db)):
         )
     return result
 
+
 # =========================
 # ADMIN – CATEGORIES
 # =========================
 
 from typing import List  # אם עדיין לא קיים למעלה
+
 
 @app.get("/admin/categories", response_model=List[CategoryResponse])
 def list_categories(db: Session = Depends(get_db)):
@@ -1663,37 +1853,284 @@ def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
     """
     יצירת קטגוריה חדשה.
     ברגע שהאדמין לוחץ "הוסף" – זה נקרא.
+    גם מעדכן את קבצי התרגום אוטומטית.
     """
     category = Category(**data.model_dump())
     db.add(category)
     db.commit()
     db.refresh(category)
+    
+    # עדכון קבצי התרגום
+    if category.name_en and category.name_ar and category.name_he:
+        translation_key = create_translation_key(category.name_en)
+        update_translation_file(translation_key, category.name_ar, category.name_he)
+    
     return category
 
 
 @app.put("/admin/categories/{category_id}", response_model=CategoryResponse)
 def update_category(
-    category_id: int,
-    data: CategoryCreate,   # משתמשים באותם שדות (name_ar, name_he, name_en, icon_name, is_active)
-    db: Session = Depends(get_db),
+        category_id: int,
+        data: CategoryCreate,  # משתמשים באותם שדות (name_ar, name_he, name_en, icon_name, is_active)
+        db: Session = Depends(get_db),
 ):
     """
     עדכון קטגוריה קיימת.
     במסך האדמין תערכי את השם (ואפשר גם icon/is_active בעתיד).
+    גם מעדכן את קבצי התרגום אוטומטית.
     """
     category = db.query(Category).filter(Category.id == category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    category.name_ar = data.name_ar
-    category.name_he = data.name_he
-    category.name_en = data.name_en
+    # שמירת השם הישן למחיקה אם השתנה
+    old_name_en = category.name_en
+    old_translation_key = None
+    if old_name_en:
+        old_translation_key = create_translation_key(old_name_en)
+
+    # שמירת הערכים החדשים
+    new_name_en = data.name_en
+    new_name_ar = data.name_ar
+    new_name_he = data.name_he
+
+    # עדכון הקטגוריה בדאטה בייס
+    category.name_ar = new_name_ar
+    category.name_he = new_name_he
+    category.name_en = new_name_en
     category.icon_name = data.icon_name
     category.is_active = data.is_active
 
     db.commit()
     db.refresh(category)
+    
+    # אם השם באנגלית השתנה, מוחקים את התרגום הישן
+    if old_name_en and old_name_en.strip() != new_name_en.strip() and old_translation_key:
+        delete_translation_key(old_translation_key)
+    
+    # עדכון/הוספת התרגום החדש לפי השם החדש באנגלית
+    if new_name_en and new_name_ar and new_name_he:
+        new_translation_key = create_translation_key(new_name_en)
+        update_translation_file(new_translation_key, new_name_ar, new_name_he)
+    
     return category
+
+
+@app.delete("/admin/categories/{category_id}")
+def delete_category(
+        category_id: int,
+        db: Session = Depends(get_db),
+):
+    """
+    מחיקת קטגוריה.
+    גם מוחקת את התרגום מקבצי התרגום.
+    """
+    category = db.query(Category).filter(Category.id == category_id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    # Check if category has places
+    places_count = db.query(Place).filter(Place.category_id == category_id).count()
+    if places_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete category with {places_count} associated places. Please reassign or delete places first."
+        )
+
+    # מחיקת התרגום מקבצי התרגום
+    if category.name_en:
+        translation_key = create_translation_key(category.name_en)
+        delete_translation_key(translation_key)
+
+    db.delete(category)
+    db.commit()
+    return {"detail": "Category deleted successfully"}
+
+
+# =========================
+# ADMIN – TRANSLATIONS
+# =========================
+
+class TranslationUpdate(BaseModel):
+    key: str
+    en: str
+    ar: str
+    he: str
+
+
+def get_translation_files_path():
+    """מוצא את נתיב קבצי התרגום"""
+    import json
+    
+    # נסה מספר נתיבים אפשריים
+    possible_paths = [
+        Path(__file__).parent.parent / "wejhetna_app" / "src" / "languages",
+        Path(__file__).parent / "wejhetna_app" / "src" / "languages",
+        Path("wejhetna_app/src/languages"),
+    ]
+    
+    for base_path in possible_paths:
+        if base_path.exists():
+            ar_file = base_path / "ar.json"
+            he_file = base_path / "he.json"
+            if ar_file.exists() and he_file.exists():
+                return base_path, ar_file, he_file
+    
+    return None, None, None
+
+
+def update_translation_file(translation_key: str, ar_value: str, he_value: str):
+    """מעדכן או מוסיף תרגום לקבצי התרגום"""
+    import json
+    
+    base_path, ar_file, he_file = get_translation_files_path()
+    
+    if not base_path or not ar_file or not he_file:
+        raise HTTPException(
+            status_code=500,
+            detail="Translation files path not found. Please ensure the files exist."
+        )
+    
+    try:
+        # קריאת קבצי התרגום
+        with open(ar_file, "r", encoding="utf-8") as f:
+            ar_data = json.load(f)
+        
+        with open(he_file, "r", encoding="utf-8") as f:
+            he_data = json.load(f)
+        
+        # הוספה/עדכון התרגום
+        ar_data[translation_key] = ar_value
+        he_data[translation_key] = he_value
+        
+        # שמירת הקבצים
+        with open(ar_file, "w", encoding="utf-8") as f:
+            json.dump(ar_data, f, ensure_ascii=False, indent=2)
+        
+        with open(he_file, "w", encoding="utf-8") as f:
+            json.dump(he_data, f, ensure_ascii=False, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Error updating translation file: {e}")
+        return False
+
+
+def delete_translation_key(translation_key: str):
+    """מוחק מפתח תרגום מקבצי התרגום"""
+    import json
+    
+    base_path, ar_file, he_file = get_translation_files_path()
+    
+    if not base_path or not ar_file or not he_file:
+        # אם לא מוצא את הקבצים, לא נזרוק שגיאה (יכול להיות שלא צריך)
+        return False
+    
+    try:
+        # קריאת קבצי התרגום
+        with open(ar_file, "r", encoding="utf-8") as f:
+            ar_data = json.load(f)
+        
+        with open(he_file, "r", encoding="utf-8") as f:
+            he_data = json.load(f)
+        
+        # מחיקת המפתח אם קיים
+        if translation_key in ar_data:
+            del ar_data[translation_key]
+        if translation_key in he_data:
+            del he_data[translation_key]
+        
+        # שמירת הקבצים
+        with open(ar_file, "w", encoding="utf-8") as f:
+            json.dump(ar_data, f, ensure_ascii=False, indent=2)
+        
+        with open(he_file, "w", encoding="utf-8") as f:
+            json.dump(he_data, f, ensure_ascii=False, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"Error deleting translation key: {e}")
+        return False
+
+
+def create_translation_key(name_en: str) -> str:
+    """יוצר מפתח תרגום משם באנגלית"""
+    import re
+    key = name_en.lower().strip()
+    key = re.sub(r'\s+', '_', key)  # החלפת רווחים בקו תחתון
+    key = re.sub(r'[^a-z0-9_]', '', key)  # הסרת תווים מיוחדים
+    return f"category_{key}"
+
+
+def create_city_translation_key(name_en: str) -> str:
+    """יוצר מפתח תרגום לשם עיר באנגלית"""
+    import re
+    key = name_en.lower().strip()
+    key = re.sub(r'\s+', '_', key)  # החלפת רווחים בקו תחתון
+    key = re.sub(r'[^a-z0-9_]', '', key)  # הסרת תווים מיוחדים
+    return f"city_{key}"
+
+
+def create_place_translation_key(name_en: str) -> str:
+    """יוצר מפתח תרגום לשם מקום באנגלית"""
+    import re
+    key = name_en.lower().strip()
+    key = re.sub(r'\s+', '_', key)  # החלפת רווחים בקו תחתון
+    key = re.sub(r'[^a-z0-9_]', '', key)  # הסרת תווים מיוחדים
+    return f"place_{key}"
+
+
+@app.post("/admin/translations/category")
+def update_category_translation(data: TranslationUpdate):
+    """
+    מעדכן את קבצי התרגום עם קטגוריה חדשה.
+    זה נקרא אוטומטית כשמוסיפים קטגוריה חדשה.
+    """
+    translation_key = create_translation_key(data.key)
+    
+    if update_translation_file(translation_key, data.ar, data.he):
+        return {"detail": "Translation updated successfully", "key": translation_key}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update translation files"
+        )
+
+
+@app.post("/admin/translations/sync-categories")
+def sync_categories_to_translations(db: Session = Depends(get_db)):
+    """
+    מסנכרן את כל הקטגוריות מהדאטה בייס לקבצי התרגום.
+    זה נקרא כשטוענים את דף הקטגוריות או כשצריך לסנכרן ידנית.
+    """
+    try:
+        # שליפת כל הקטגוריות מהדאטה בייס
+        categories = db.query(Category).all()
+        
+        synced_count = 0
+        failed_count = 0
+        
+        for category in categories:
+            if category.name_en and category.name_ar and category.name_he:
+                translation_key = create_translation_key(category.name_en)
+                if update_translation_file(translation_key, category.name_ar, category.name_he):
+                    synced_count += 1
+                else:
+                    failed_count += 1
+        
+        return {
+            "detail": f"Synced {synced_count} categories to translation files",
+            "synced": synced_count,
+            "failed": failed_count,
+            "total": len(categories)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync categories: {str(e)}"
+        )
+
+
 # =========================
 # ADMIN – CITIES
 # =========================
@@ -1712,35 +2149,231 @@ def list_cities(db: Session = Depends(get_db)):
 def create_city(data: CityCreate, db: Session = Depends(get_db)):
     """
     יצירת עיר חדשה.
+    מוסיף אוטומטית את התרגום לקבצי התרגום.
     """
     city = City(**data.model_dump())
     db.add(city)
     db.commit()
     db.refresh(city)
+    
+    # הוספת התרגום לקבצי התרגום
+    if city.name_en and city.name_ar and city.name_he:
+        translation_key = create_city_translation_key(city.name_en)
+        update_translation_file(translation_key, city.name_ar, city.name_he)
+    
     return city
 
 
 @app.put("/admin/cities/{city_id}", response_model=CityResponse)
 def update_city(
-    city_id: int,
-    data: CityCreate,   # אותם שדות name_ar / name_he / name_en
-    db: Session = Depends(get_db),
+        city_id: int,
+        data: CityCreate,  # אותם שדות name_ar / name_he / name_en
+        db: Session = Depends(get_db),
 ):
     """
     עדכון שם עיר קיימת.
-    (כרגע שמות בלבד – כמו שביקשת.)
+    מעדכן אוטומטית את התרגום בקבצי התרגום.
     """
     city = db.query(City).filter(City.id == city_id).first()
     if not city:
         raise HTTPException(status_code=404, detail="City not found")
 
-    city.name_ar = data.name_ar
-    city.name_he = data.name_he
-    city.name_en = data.name_en
+    old_name_en = city.name_en
+    old_translation_key = None
+    if old_name_en:
+        old_translation_key = create_city_translation_key(old_name_en)
+
+    new_name_en = data.name_en
+    new_name_ar = data.name_ar
+    new_name_he = data.name_he
+
+    city.name_ar = new_name_ar
+    city.name_he = new_name_he
+    city.name_en = new_name_en
 
     db.commit()
     db.refresh(city)
+    
+    # אם השם באנגלית השתנה, מחק את המפתח הישן
+    if old_name_en and old_name_en.strip() != new_name_en.strip() and old_translation_key:
+        delete_translation_key(old_translation_key)
+    
+    # עדכון התרגום החדש
+    if new_name_en and new_name_ar and new_name_he:
+        new_translation_key = create_city_translation_key(new_name_en)
+        update_translation_file(new_translation_key, new_name_ar, new_name_he)
+    
     return city
+
+
+@app.delete("/admin/cities/{city_id}")
+def delete_city(
+        city_id: int,
+        db: Session = Depends(get_db),
+):
+    """
+    מחיקת עיר.
+    גם מוחקת את התרגום מקבצי התרגום.
+    """
+    city = db.query(City).filter(City.id == city_id).first()
+    if not city:
+        raise HTTPException(status_code=404, detail="City not found")
+
+    # Check if city has places
+    places_count = db.query(Place).filter(Place.city_id == city_id).count()
+    if places_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete city with {places_count} associated places. Please reassign or delete places first."
+        )
+
+    # מחיקת התרגום מקבצי התרגום
+    if city.name_en:
+        translation_key = create_city_translation_key(city.name_en)
+        delete_translation_key(translation_key)
+
+    db.delete(city)
+    db.commit()
+    return {"detail": "City deleted successfully"}
+
+
+# ========================
+# CITY BOUNDARY VALIDATION
+# ========================
+
+# Model לבדיקת boundary
+class BoundaryCheckRequest(BaseModel):
+    lat: float
+    lon: float
+
+@app.post("/cities/check-boundary")
+def check_location_in_service_cities(
+    data: BoundaryCheckRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    בודק אם נקודה (lat, lon) נמצאת בתוך boundaries של אחת מ-3 הערים:
+    רהט, לקיה, תל שבע.
+    
+    מחזיר:
+    - is_within: True אם הנקודה בתוך אחת מהערים
+    - city_id: ID של העיר (אם נמצאה)
+    - city_name: שם העיר (אם נמצאה)
+    """
+    from geoalchemy2 import Geography, Geometry
+    from sqlalchemy import cast
+    
+    # יצירת נקודה מה-lat/lon
+    lat = data.lat
+    lon = data.lon
+    
+    # יצירת נקודה כ-Geometry (ST_Within עובד רק עם Geometry, לא Geography)
+    point_geom = func.ST_SetSRID(
+        func.ST_MakePoint(lon, lat),
+        4326
+    )
+    
+    # חיפוש עיר עם boundary שמכילה את הנקודה
+    # רק ערים שיש להן boundary (לא NULL)
+    # חשוב: ST_Within עובד רק עם Geometry, אז צריך להמיר את שניהם
+    city = (
+        db.query(City)
+        .filter(City.boundary.isnot(None))
+        .filter(
+            func.ST_Within(
+                point_geom,  # Geometry
+                cast(City.boundary, Geometry(srid=4326))  # המיר Geography ל-Geometry
+            )
+        )
+        .first()
+    )
+    
+    if city:
+        return {
+            "is_within": True,
+            "city_id": city.id,
+            "city_name_ar": city.name_ar,
+            "city_name_he": city.name_he,
+            "city_name_en": city.name_en,
+        }
+    else:
+        return {
+            "is_within": False,
+            "city_id": None,
+            "city_name_ar": None,
+            "city_name_he": None,
+            "city_name_en": None,
+        }
+
+
+@app.post("/admin/translations/sync-cities")
+def sync_cities_to_translations(db: Session = Depends(get_db)):
+    """
+    מסנכרן את כל הערים מהדאטה בייס לקבצי התרגום.
+    זה נקרא כשטוענים את דף הערים או כשצריך לסנכרן ידנית.
+    """
+    try:
+        # שליפת כל הערים מהדאטה בייס
+        cities = db.query(City).all()
+        
+        synced_count = 0
+        failed_count = 0
+        
+        for city in cities:
+            if city.name_en and city.name_ar and city.name_he:
+                translation_key = create_city_translation_key(city.name_en)
+                if update_translation_file(translation_key, city.name_ar, city.name_he):
+                    synced_count += 1
+                else:
+                    failed_count += 1
+        
+        return {
+            "detail": f"Synced {synced_count} cities to translation files",
+            "synced": synced_count,
+            "failed": failed_count,
+            "total": len(cities)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync cities: {str(e)}"
+        )
+
+
+@app.post("/admin/translations/sync-places")
+def sync_places_to_translations(db: Session = Depends(get_db)):
+    """
+    מסנכרן את כל המקומות מהדאטה בייס לקבצי התרגום.
+    זה נקרא כשטוענים את דף המקומות או כשצריך לסנכרן ידנית.
+    """
+    try:
+        # שליפת כל המקומות מהדאטה בייס
+        places = db.query(Place).all()
+        
+        synced_count = 0
+        failed_count = 0
+        
+        for place in places:
+            # name הוא name_en (השם באנגלית)
+            if place.name and place.name_ar and place.name_he:
+                translation_key = create_place_translation_key(place.name)
+                if update_translation_file(translation_key, place.name_ar, place.name_he):
+                    synced_count += 1
+                else:
+                    failed_count += 1
+        
+        return {
+            "detail": f"Synced {synced_count} places to translation files",
+            "synced": synced_count,
+            "failed": failed_count,
+            "total": len(places)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync places: {str(e)}"
+        )
+
 
 # =========================
 # LOCATIONS – POSTGIS POINT
@@ -1774,10 +2407,10 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
         detected_osm_id = find_osm_feature(data.lat, data.lon)
         print(">>> OSM RESULT:", detected_osm_id)
 
-        if detected_osm_id:                 # אם זיהינו אוטומטית
+        if detected_osm_id:  # אם זיהינו אוטומטית
             final_osm_id = detected_osm_id
             final_source = "MAP_PICK"
-        else:                               # לא מצאנו כלום
+        else:  # לא מצאנו כלום
             final_osm_id = None
             final_source = data.source or "MAP_PICK"
 
@@ -1794,6 +2427,7 @@ def create_location(data: LocationCreate, db: Session = Depends(get_db)):
 
     return location
 
+
 @app.get("/locations/{location_id}", response_model=LocationResponse)
 def get_location(location_id: int, db: Session = Depends(get_db)):
     """
@@ -1805,20 +2439,21 @@ def get_location(location_id: int, db: Session = Depends(get_db)):
 
     return location
 
-from sqlalchemy import func, or_, cast   # cast חדש
-from geoalchemy2 import Geography        # כדי לקסט ל-Geography
 
+from sqlalchemy import func, or_, cast  # cast חדש
+from geoalchemy2 import Geography  # כדי לקסט ל-Geography
 
-from sqlalchemy import func, or_, cast   # cast חדש
-from geoalchemy2 import Geography        # כדי לקסט ל-Geography
+from sqlalchemy import func, or_, cast  # cast חדש
+from geoalchemy2 import Geography  # כדי לקסט ל-Geography
+
 
 @app.get("/places/map", response_model=List[PlaceResponse])
 def get_places_in_bbox(
-    north: float,
-    south: float,
-    east: float,
-    west: float,
-    db: Session = Depends(get_db),
+        north: float,
+        south: float,
+        east: float,
+        west: float,
+        db: Session = Depends(get_db),
 ):
     envelope_geom = func.ST_MakeEnvelope(west, south, east, north, 4326)
     envelope_geog = cast(envelope_geom, Geography(geometry_type="POLYGON", srid=4326))
@@ -1836,10 +2471,10 @@ def get_places_in_bbox(
 # 👇👇 ADD THIS BLOCK HERE 👇👇
 @app.get("/business-owner/places/nearby", response_model=BusinessOwnerNearbyCheckResponse)
 def check_nearby_places_for_owner(
-    lat: float,
-    lon: float,
-    radius_m: float = 50,        # ברירת מחדל 50 מטר
-    db: Session = Depends(get_db),
+        lat: float,
+        lon: float,
+        radius_m: float = 50,  # ברירת מחדל 50 מטר
+        db: Session = Depends(get_db),
 ):
     """
     בודקת האם יש עסק קיים במרחק radius_m מטר
@@ -1887,8 +2522,9 @@ def check_nearby_places_for_owner(
         return BusinessOwnerNearbyCheckResponse(status="HAS_OWNER", candidate=candidate)
 
     return BusinessOwnerNearbyCheckResponse(status="CAN_CLAIM", candidate=candidate)
-# 👆👆 UNTIL HERE 👆👆
 
+
+# 👆👆 UNTIL HERE 👆👆
 
 
 # =========================
@@ -1947,6 +2583,8 @@ def create_place(data: PlaceCreate, db: Session = Depends(get_db)):
 
     # מחזירים FULL RESPONSE
     return place
+
+
 @app.get("/places/{place_id}", response_model=PlaceResponse)
 def get_place(place_id: int, db: Session = Depends(get_db)):
     """
@@ -1963,7 +2601,9 @@ def get_place(place_id: int, db: Session = Depends(get_db)):
 
     return place
 
+
 from typing import List
+
 
 @app.get("/admin/places", response_model=List[PlaceResponse])
 def admin_list_places(db: Session = Depends(get_db)):
@@ -1971,14 +2611,26 @@ def admin_list_places(db: Session = Depends(get_db)):
     מחזיר את כל המקומות (כולל city + category + location).
     ישמש לרשימה בטבלת האדמין.
     """
-    places = db.query(Place).order_by(Place.id).all()
-    return places
+    try:
+        places = db.query(Place).order_by(Place.id).all()
+        return places
+    except Exception as e:
+        # If error is due to missing business_images_urls column, try to handle it
+        error_msg = str(e).lower()
+        if "business_images_urls" in error_msg or "column" in error_msg:
+            raise HTTPException(
+                status_code=500,
+                detail="Database migration needed: Please run 'python add_business_images_column.py' to add the business_images_urls column."
+            )
+        raise
+
 
 import httpx
 
 import httpx
 
 import httpx
+
 
 def find_osm_feature(lat: float, lon: float, radius: int = 50):
     """
@@ -2105,9 +2757,136 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
     db.add(place)
     db.commit()
 
+    # סנכרון התרגום לקבצי התרגום
+    try:
+        if place.name and place.name_ar and place.name_he:
+            translation_key = create_place_translation_key(place.name)
+            update_translation_file(translation_key, place.name_ar, place.name_he)
+    except Exception as e:
+        # לא נזרוק שגיאה אם התרגום נכשל - זה לא קריטי
+        print(f"Warning: Failed to sync place translation: {e}")
+
     db.refresh(place)
     db.refresh(location)
     return place
+
+
+@app.put("/admin/places/{place_id}", response_model=PlaceResponse)
+def admin_update_place(
+        place_id: int,
+        data: PlaceUpdate,
+        db: Session = Depends(get_db),
+):
+    """
+    עדכון מקום על ידי אדמין או בעל עסק (רק את המקום שלו).
+    אדמין לא יכול לערוך מקומות שיש להן בעל עסק.
+    """
+    place = db.query(Place).filter(Place.id == place_id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+    
+    # Check if place has an owner - admin cannot edit places with owners
+    # Note: This endpoint is used by both admin and business owners
+    # Business owners can only edit their own places (checked in frontend)
+    # But we add this check here as a safety measure
+    if place.owner_user_id is not None:
+        # This check should ideally be done with user authentication/authorization
+        # For now, we'll allow the update but the frontend should prevent admin from editing
+        # If we want to enforce it in backend, we'd need to pass user role/ID in the request
+        pass  # Place has owner - frontend should handle this
+
+    # עדכון השדות אם הם נשלחו
+    if data.name is not None:
+        place.name = data.name
+    if data.name_ar is not None:
+        place.name_ar = data.name_ar
+    if data.name_he is not None:
+        place.name_he = data.name_he
+    if data.city_id is not None:
+        city = db.query(City).filter(City.id == data.city_id).first()
+        if not city:
+            raise HTTPException(status_code=404, detail="City not found")
+        place.city_id = data.city_id
+    if data.category_id is not None:
+        if data.category_id == 0 or data.category_id is None:  # Allow null category
+            place.category_id = None
+        else:
+            category = db.query(Category).filter(Category.id == data.category_id).first()
+            if not category:
+                raise HTTPException(status_code=404, detail="Category not found")
+            place.category_id = data.category_id
+    if data.description is not None:
+        # Allow setting to None/empty string to clear the field
+        place.description = data.description.strip() if data.description and data.description.strip() else None
+    if data.phone is not None:
+        # Allow setting to None/empty string to clear the field
+        place.phone = data.phone.strip() if data.phone and data.phone.strip() else None
+    if data.opening_hours is not None:
+        # Allow setting to None/empty string to clear the field
+        place.opening_hours = data.opening_hours.strip() if data.opening_hours and data.opening_hours.strip() else None
+    if data.main_image_url is not None:
+        # Allow setting to None/empty string to clear the field
+        place.main_image_url = data.main_image_url.strip() if data.main_image_url and data.main_image_url.strip() else None
+    if data.business_images_urls is not None:
+        # Allow setting to None/empty list to clear the field
+        place.business_images_urls = data.business_images_urls if data.business_images_urls else None
+    if data.social_links is not None:
+        # Allow setting to None/empty string to clear the field
+        place.social_links = data.social_links.strip() if data.social_links and data.social_links.strip() else None
+    if data.announcement is not None:
+        # Allow setting to None/empty string to clear the field
+        place.announcement = data.announcement.strip() if data.announcement and data.announcement.strip() else None
+
+    # סנכרון התרגום לקבצי התרגום אם השמות השתנו
+    try:
+        if place.name and place.name_ar and place.name_he:
+            translation_key = create_place_translation_key(place.name)
+            update_translation_file(translation_key, place.name_ar, place.name_he)
+    except Exception as e:
+        print(f"Warning: Failed to sync place translation: {e}")
+
+    db.commit()
+    db.refresh(place)
+    return place
+
+
+@app.delete("/admin/places/{place_id}")
+def admin_delete_place(
+        place_id: int,
+        db: Session = Depends(get_db),
+):
+    """
+    מחיקת מקום על ידי אדמין.
+    מוחק גם את ה-Location הקשור (1:1 relationship).
+    מוחק גם את התרגום מקבצי התרגום.
+    """
+    place = db.query(Place).filter(Place.id == place_id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+
+    # מחיקת התרגום מקבצי התרגום לפני מחיקת המקום
+    try:
+        if place.name:
+            translation_key = create_place_translation_key(place.name)
+            delete_translation_key(translation_key)
+    except Exception as e:
+        # לא נזרוק שגיאה אם מחיקת התרגום נכשלה - זה לא קריטי
+        print(f"Warning: Failed to delete place translation: {e}")
+
+    # Get location before deleting place
+    location_id = place.location_id
+    location = db.query(Location).filter(Location.id == location_id).first()
+
+    # Delete place first
+    db.delete(place)
+    
+    # Delete location if exists
+    if location:
+        db.delete(location)
+
+    db.commit()
+    return {"detail": "Place deleted successfully"}
+
 
 # ---------- GPS → OSM CHECK (לפני יצירת לוקיישן) ----------
 
@@ -2135,10 +2914,11 @@ def gps_osm_check(data: GpsCheckRequest):
 
     return GpsCheckResponse(match_found=False, osm_id=None)
 
+
 @app.post("/business-owner/place-requests", response_model=BusinessOwnerPlaceRequestOut, status_code=201)
 def create_business_owner_place_request(
-    data: BusinessOwnerPlaceRequestCreate,
-    db: Session = Depends(get_db),
+        data: BusinessOwnerPlaceRequestCreate,
+        db: Session = Depends(get_db),
 ):
     """
     יצירת בקשה חדשה מבעל עסק:
@@ -2146,10 +2926,117 @@ def create_business_owner_place_request(
     - או בקשה ליצור מקום חדש (existing_place_id == None)
     """
 
-    user = db.query(User).filter(User.id == data.user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Business owner user not found")
+    # ===== STEP 1: CREATE USER (if doesn't exist) =====
+    # Check if user already exists
+    existing_user = db.query(User).filter(
+        or_(User.username == data.username, User.email == data.email)
+    ).first()
 
+    if existing_user:
+        if (
+                existing_user.role == UserRole.BUSINESS_OWNER
+                and existing_user.status == UserStatus.REJECTED
+        ):
+            # Rejected business owner trying again - allow re-signup
+            # Check if email was verified (user should verify email again after rejection)
+            verified = db.query(EmailVerification).filter(
+                EmailVerification.email == data.email,
+                EmailVerification.is_used == True
+            ).order_by(EmailVerification.created_at.desc()).first()
+            
+            if not verified:
+                raise HTTPException(403, "Email not verified. Please verify your email first.")
+            
+            existing_user.full_name = data.full_name
+            existing_user.phone = data.phone  # user's personal phone
+            existing_user.password_hash = hash_password(data.password)
+            existing_user.status = UserStatus.PENDING
+            existing_user.rejection_reason = None
+            existing_user.email_verified = True  # Email was verified in step 1
+            db.commit()
+            db.refresh(existing_user)
+            user = existing_user
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Username or email already exists",
+            )
+    else:
+        # Validate personal info before creating user
+        if not re.match(r'^[a-zA-Z\u0590-\u05FF\u0600-\u06FF\s]+$', data.full_name.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Full name should contain only letters"
+            )
+
+        if len(data.username.strip()) < 3:
+            raise HTTPException(
+                status_code=400,
+                detail="Username must be at least 3 characters"
+            )
+        if not re.match(r'^[a-zA-Z0-9_]+$', data.username.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Username can only contain letters, numbers, and underscore"
+            )
+
+        if not re.match(r'^05\d{8}$', data.phone.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Phone must be 10 digits starting with 05"
+            )
+
+        if len(data.password) < 8:
+            raise HTTPException(
+                status_code=400,
+                detail="Password must be at least 8 characters"
+            )
+        if not re.search(r'[A-Z]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one uppercase letter"
+            )
+        if not re.search(r'[a-z]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one lowercase letter"
+            )
+        if not re.search(r'[0-9]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one number"
+            )
+        if not re.search(r'[!@#$%^&*()_+\-=\[\]{};:\'"\\|,.<>\/?]', data.password):
+            raise HTTPException(
+                status_code=400,
+                detail="Password must contain at least one symbol"
+            )
+
+        # Check email was verified
+        verified = db.query(EmailVerification).filter(
+            EmailVerification.email == data.email,
+            EmailVerification.is_used == True
+        ).first()
+        if not verified:
+            raise HTTPException(403, "Email not verified")
+
+        # Create new user
+        user = User(
+            full_name=data.full_name,
+            username=data.username,
+            email=data.email,
+            phone=data.phone,  # user's personal phone
+            password_hash=hash_password(data.password),
+            role=UserRole.BUSINESS_OWNER,
+            status=UserStatus.PENDING,
+            email_verified=True
+        )
+        db.add(user)
+        db.flush()  # Get user.id without committing yet
+        db.refresh(user)
+
+    # ===== STEP 2: CONTINUE WITH PLACE REQUEST CREATION =====
+    # Check user role (should always be BUSINESS_OWNER at this point, but double-check)
     if user.role != UserRole.BUSINESS_OWNER:
         raise HTTPException(status_code=400, detail="User is not BUSINESS_OWNER")
 
@@ -2161,7 +3048,7 @@ def create_business_owner_place_request(
             status_code=400,
             detail="User is already an active business owner",
         )
-    
+
     # If user was REJECTED and is trying again, set status back to PENDING
     if user.status == UserStatus.REJECTED:
         user.status = UserStatus.PENDING
@@ -2212,14 +3099,14 @@ def create_business_owner_place_request(
             detail="Business name (Hebrew) must be at least 2 characters"
         )
 
-    # Validate phone (if provided, must be 9 or 10 digits)
-    if data.phone:
-        phone_trimmed = data.phone.strip()
-        if phone_trimmed:
-            if not re.match(r'^[0-9]{9,10}$', phone_trimmed):
+        # Validate business phone (if provided, must be 9 or 10 digits)
+    if data.business_phone:
+        business_phone_trimmed = data.business_phone.strip()
+        if business_phone_trimmed:
+            if not re.match(r'^[0-9]{9,10}$', business_phone_trimmed):
                 raise HTTPException(
                     status_code=400,
-                    detail="Phone number must be 9 or 10 digits (if provided)"
+                    detail="Business phone number must be 9 or 10 digits (if provided)"
                 )
 
     # Validate city_id and category_id exist
@@ -2248,7 +3135,7 @@ def create_business_owner_place_request(
         city_id=data.city_id,
         category_id=data.category_id,
         description=data.description,
-        phone=data.phone,
+        phone=data.business_phone,  # Business phone (mapped from business_phone field)
         opening_hours=data.opening_hours,
         main_image_url=data.main_image_url,
         social_links=data.social_links,
@@ -2264,14 +3151,15 @@ def create_business_owner_place_request(
 
     return req
 
+
 # =========================
 # ADMIN – USERS LIST
 # =========================
 
 @app.get("/admin/users", response_model=List[UserListOut])
 def list_all_users(
-    role_filter: Optional[str] = None,
-    db: Session = Depends(get_db),
+        role_filter: Optional[str] = None,
+        db: Session = Depends(get_db),
 ):
     """
     מחזיר את כל המשתמשים.
@@ -2293,6 +3181,7 @@ def list_all_users(
         print(f"Error in list_all_users: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")
 
+
 # =========================
 # ADMIN – DELETE USER
 # =========================
@@ -2300,11 +3189,12 @@ def list_all_users(
 class DeleteUserRequest(BaseModel):
     admin_user_id: int
 
+
 @app.delete("/admin/users/{user_id}")
 def delete_user(
-    user_id: int,
-    data: DeleteUserRequest,
-    db: Session = Depends(get_db),
+        user_id: int,
+        data: DeleteUserRequest,
+        db: Session = Depends(get_db),
 ):
     """
     מחק משתמש:
@@ -2334,14 +3224,14 @@ def delete_user(
         # שנה status ל-PENDING (לא יכול להתחבר)
         user.status = UserStatus.PENDING
         user.rejection_reason = "Account removed by admin. Business places remain on the map."
-        
+
         # השאר את המקומות על המפה (לא מוחקים אותם)
         # רק מסירים את owner_user_id מהמקומות
         places = db.query(Place).filter(Place.owner_user_id == user.id).all()
         for place in places:
             place.owner_user_id = None
             place.can_be_claimed = True  # אפשר לטעון מחדש
-        
+
         db.commit()
         return {"detail": "Business owner removed. Status set to PENDING. Places remain on map."}
 
@@ -2452,6 +3342,8 @@ def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
         ),
         vehicle=vehicle_out,
         driver_status=driver_profile.driver_status.value,
+        driver_license_image_url=driver_profile.driver_license_image_url,
+        id_card_image_url=driver_profile.id_card_image_url,
     )
 
 
@@ -2486,7 +3378,7 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
         if place_request.status == OwnerPlaceRequestStatus.APPROVED:
             # First, try to find place by owner_user_id (works for both existing and new places)
             place = db.query(Place).filter(Place.owner_user_id == user_id).first()
-            
+
             if place:
                 city = db.query(City).filter(City.id == place.city_id).first()
                 category = db.query(Category).filter(
@@ -2519,6 +3411,9 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                     phone=place.phone,
                     opening_hours=place.opening_hours,
                     main_image_url=place.main_image_url,
+                    business_images_urls=place.business_images_urls,
+                    social_links=place.social_links,
+                    announcement=place.announcement,
                     lat=lat,
                     lon=lon,
                 )
@@ -2557,10 +3452,13 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                     phone=place.phone,
                     opening_hours=place.opening_hours,
                     main_image_url=place.main_image_url,
+                    business_images_urls=place.business_images_urls,
+                    social_links=place.social_links,
+                    announcement=place.announcement,
                     lat=lat,
                     lon=lon,
                 )
-        
+
         # If still no place found, use data from the request itself (for pending requests)
         if not place_out:
             city = db.query(City).filter(City.id == place_request.city_id).first()
@@ -2578,6 +3476,8 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                 phone=place_request.phone,
                 opening_hours=place_request.opening_hours,
                 main_image_url=place_request.main_image_url,
+                business_images_urls=None,  # Place requests don't have business_images_urls yet
+                social_links=place_request.social_links,
                 lat=place_request.lat,
                 lon=place_request.lon,
             )
@@ -2607,9 +3507,11 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
 
+
 class ChangePasswordResponse(BaseModel):
     success: bool
     message: str
+
 
 @app.post("/auth/change-password", response_model=ChangePasswordResponse)
 def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
@@ -2618,11 +3520,11 @@ def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == data.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Verify current password
     if not verify_password(data.current_password, user.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    
+
     # Validate new password requirements (same as signup)
     import re
     if len(data.new_password) < 8:
@@ -2635,19 +3537,19 @@ def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Password must contain at least one number")
     if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', data.new_password):
         raise HTTPException(status_code=400, detail="Password must contain at least one symbol")
-    
+
     # Check if new password is same as current password
     if verify_password(data.new_password, user.password_hash):
         raise HTTPException(status_code=400, detail="New password must be different from current password")
-    
+
     # Hash new password
     password_hash = hash_password(data.new_password)
-    
+
     # Update user password
     user.password_hash = password_hash
-    
+
     db.commit()
-    
+
     return ChangePasswordResponse(
         success=True,
         message="Password has been changed successfully"
@@ -2662,9 +3564,11 @@ class UpdatePhoneRequest(BaseModel):
     user_id: int
     new_phone: str
 
+
 class UpdatePhoneResponse(BaseModel):
     success: bool
     message: str
+
 
 @app.put("/users/{user_id}/phone", response_model=UpdatePhoneResponse)
 def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depends(get_db)):
@@ -2672,28 +3576,28 @@ def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depe
     # Verify user_id matches
     if data.user_id != user_id:
         raise HTTPException(status_code=400, detail="User ID mismatch")
-    
+
     # Find user
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Check if phone number is the same (no change needed)
     if user.phone == data.new_phone.strip():
         raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
-    
+
     # Check if phone number already exists for another user
     existing_user = db.query(User).filter(
         User.phone == data.new_phone.strip(),
         User.id != user_id
     ).first()
-    
+
     if existing_user:
         raise HTTPException(
             status_code=409,
             detail="Phone number is already in use by another user"
         )
-    
+
     # Validate phone format (exactly 10 digits starting with 05)
     import re
     phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
@@ -2707,13 +3611,13 @@ def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depe
             status_code=400,
             detail="Phone number must start with 05"
         )
-    
+
     # Update phone number
     user.phone = data.new_phone.strip()
-    
+
     db.commit()
     db.refresh(user)
-    
+
     return UpdatePhoneResponse(
         success=True,
         message="Phone number has been updated successfully"
@@ -2727,9 +3631,11 @@ def update_user_phone(user_id: int, data: UpdatePhoneRequest, db: Session = Depe
 class UpdateBusinessPhoneRequest(BaseModel):
     new_phone: str
 
+
 class UpdateBusinessPhoneResponse(BaseModel):
     success: bool
     message: str
+
 
 @app.put("/places/{place_id}/phone", response_model=UpdateBusinessPhoneResponse)
 def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: Session = Depends(get_db)):
@@ -2738,11 +3644,11 @@ def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: S
     place = db.query(Place).filter(Place.id == place_id).first()
     if not place:
         raise HTTPException(status_code=404, detail="Place not found")
-    
+
     # Check if phone number is the same (no change needed)
     if place.phone == data.new_phone.strip():
         raise HTTPException(status_code=400, detail="New phone number is the same as current phone number")
-    
+
     # Validate phone format (exactly 10 digits starting with 05)
     import re
     phone_cleaned = re.sub(r'[^\d]', '', data.new_phone.strip())
@@ -2756,14 +3662,181 @@ def update_business_phone(place_id: int, data: UpdateBusinessPhoneRequest, db: S
             status_code=400,
             detail="Phone number must start with 05"
         )
-    
+
     # Update phone number
     place.phone = data.new_phone.strip()
-    
+
     db.commit()
     db.refresh(place)
-    
+
     return UpdateBusinessPhoneResponse(
         success=True,
         message="Business phone number has been updated successfully"
     )
+
+
+# =========================
+# SAVED PLACES (BOOKMARKS)
+# =========================
+
+class SavePlaceRequest(BaseModel):
+    user_id: int
+
+
+@app.post("/places/{place_id}/save")
+def save_place(place_id: int, data: SavePlaceRequest, db: Session = Depends(get_db)):
+    """
+    שמירת מקום על ידי משתמש.
+    """
+    # בדיקה שהמקום קיים
+    place = db.query(Place).filter(Place.id == place_id).first()
+    if not place:
+        raise HTTPException(status_code=404, detail="Place not found")
+    
+    # בדיקה שהמשתמש קיים
+    user = db.query(User).filter(User.id == data.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # בדיקה אם המקום כבר שמור
+    existing = (
+        db.query(SavedPlace)
+        .filter(
+            SavedPlace.user_id == data.user_id,
+            SavedPlace.place_id == place_id
+        )
+        .first()
+    )
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="Place already saved")
+    
+    # יצירת שמירה חדשה
+    saved_place = SavedPlace(
+        user_id=data.user_id,
+        place_id=place_id
+    )
+    db.add(saved_place)
+    db.commit()
+    db.refresh(saved_place)
+    
+    return {"success": True, "message": "Place saved successfully", "saved_place_id": saved_place.id}
+
+
+@app.delete("/places/{place_id}/unsave")
+def unsave_place(place_id: int, user_id: int, db: Session = Depends(get_db)):
+    """
+    הסרת מקום מהשמורים.
+    """
+    saved_place = (
+        db.query(SavedPlace)
+        .filter(
+            SavedPlace.user_id == user_id,
+            SavedPlace.place_id == place_id
+        )
+        .first()
+    )
+    
+    if not saved_place:
+        raise HTTPException(status_code=404, detail="Saved place not found")
+    
+    db.delete(saved_place)
+    db.commit()
+    
+    return {"success": True, "message": "Place removed from saved"}
+
+
+@app.get("/users/{user_id}/saved-places", response_model=List[PlaceResponse])
+def get_saved_places(user_id: int, db: Session = Depends(get_db)):
+    """
+    קבלת כל המקומות השמורים של משתמש.
+    """
+    saved_places = (
+        db.query(SavedPlace)
+        .options(
+            joinedload(SavedPlace.place).joinedload(Place.city),
+            joinedload(SavedPlace.place).joinedload(Place.category),
+            joinedload(SavedPlace.place).joinedload(Place.location),
+        )
+        .filter(SavedPlace.user_id == user_id)
+        .order_by(SavedPlace.saved_at.desc())
+        .all()
+    )
+    
+    # אם אין מקומות שמורים, מחזירים רשימה ריקה
+    if not saved_places:
+        return []
+    
+    places = [saved.place for saved in saved_places]
+    
+    # המרה ל-PlaceResponse
+    result = []
+    for place in places:
+        if not place:
+            continue  # דילוג על מקומות שלא נטענו
+            
+        result.append(PlaceResponse(
+            id=place.id,
+            name=place.name,
+            name_ar=place.name_ar,
+            name_he=place.name_he,
+            place_type=place.place_type.value,
+            city_id=place.city_id,
+            category_id=place.category_id,
+            can_be_claimed=place.can_be_claimed,
+            description=place.description,
+            phone=place.phone,
+            opening_hours=place.opening_hours,
+            main_image_url=place.main_image_url,
+            social_links=place.social_links,
+            created_by_admin_id=place.created_by_admin_id,
+            owner_user_id=place.owner_user_id,
+            city=CityResponse(
+                id=place.city.id,
+                name_ar=place.city.name_ar,
+                name_he=place.city.name_he,
+                name_en=place.city.name_en,
+                created_at=place.city.created_at,
+                updated_at=place.city.updated_at,
+            ) if place.city else None,
+            category=CategoryResponse(
+                id=place.category.id,
+                name_ar=place.category.name_ar,
+                name_he=place.category.name_he,
+                name_en=place.category.name_en,
+                icon_name=place.category.icon_name,
+                is_active=place.category.is_active,
+                created_at=place.category.created_at,
+                updated_at=place.category.updated_at,
+            ) if place.category else None,
+            location=LocationResponse(
+                id=place.location.id,
+                lat=place.location.lat,
+                lon=place.location.lon,
+                source=place.location.source,
+                osm_id=place.location.osm_id,
+                created_at=place.location.created_at,
+                updated_at=place.location.updated_at,
+            ),
+            created_at=place.created_at,
+            updated_at=place.updated_at,
+        ))
+    
+    return result
+
+
+@app.get("/places/{place_id}/is-saved")
+def check_if_place_saved(place_id: int, user_id: int, db: Session = Depends(get_db)):
+    """
+    בדיקה אם מקום שמור על ידי משתמש.
+    """
+    saved_place = (
+        db.query(SavedPlace)
+        .filter(
+            SavedPlace.user_id == user_id,
+            SavedPlace.place_id == place_id
+        )
+        .first()
+    )
+    
+    return {"is_saved": saved_place is not None}
