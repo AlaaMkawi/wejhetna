@@ -14,8 +14,7 @@ import { useNavigation } from "@react-navigation/native";
 import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "./MessageModal"; // 👈 pretty popup
 import Ionicons from "react-native-vector-icons/Ionicons";
-
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../config";
 
 const MINT = "#9bd3d8";
 const DARK_TEAL = "#0f5b63";

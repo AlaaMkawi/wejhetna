@@ -16,6 +16,7 @@ import {
   Modal,
   ActivityIndicator,
   Linking,
+  TextInput,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -26,13 +27,14 @@ import Animated, {
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, translateText, Category } from "../../api/places";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, checkLocationInServiceCities, translateText, Category } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../../config";
+import Geolocation from "@react-native-community/geolocation";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -186,6 +188,19 @@ const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boole
   
   return false;
 };
+
+type RouteCoordinates = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    geometry: {
+      type: "LineString";
+      coordinates: [number, number][];
+    };
+    properties: Record<string, any>;
+  }>;
+};
+
 export default function AdminHomeScreen() {
   const { t } = useTranslation();
   const route = useRoute();
@@ -229,6 +244,129 @@ export default function AdminHomeScreen() {
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [languageSelectorType, setLanguageSelectorType] = useState<"announcement" | "description" | null>(null);
 
+  // Image error handling states
+  const [imageErrors, setImageErrors] = useState<{ [key: number]: boolean }>({});
+  const [imageLoading, setImageLoading] = useState<{ [key: number]: boolean }>({});
+
+  // GPS Location
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(true);
+  const [hasShownLocationPermissionMessage, setHasShownLocationPermissionMessage] = useState(false);
+  
+
+  // Destination
+  const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
+  const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
+
+  // Route
+  const [routeLoading, setRouteLoading] = useState(false);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+
+  // Helper function to format image URI - ensure it's a valid URL
+  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
+  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
+  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
+  const formatImageUri = (uri: string): string => {
+    if (!uri || !uri.trim()) {
+      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
+      return "";
+    }
+    
+    const trimmedUri = uri.trim();
+    
+    try {
+      // If it's already a full URL with the correct base, return as is
+      if (trimmedUri.startsWith(API_BASE_URL)) {
+        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's already a full URL (http:// or https://), extract just the path
+      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
+        // Manually extract the path from the URL
+        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
+        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
+        if (urlMatch && urlMatch[1]) {
+          const path = urlMatch[1];
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If regex fails, try to find /uploads/ in the string
+        const uploadsIndex = trimmedUri.indexOf("/uploads/");
+        if (uploadsIndex !== -1) {
+          const path = trimmedUri.substring(uploadsIndex);
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If we can't extract path, try the original URL (might work if same network)
+        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's a relative path starting with /, prepend API_BASE_URL
+      if (trimmedUri.startsWith("/")) {
+        const formatted = `${API_BASE_URL}${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // If it doesn't start with /, assume it's a filename and add /uploads/
+      // This handles cases where backend might return just "filename.jpg"
+      if (!trimmedUri.includes("/")) {
+        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // Otherwise, try to prepend API_BASE_URL
+      const formatted = `${API_BASE_URL}/${trimmedUri}`;
+      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
+      return formatted;
+    } catch (error) {
+      // If URL parsing fails, try to construct a valid URL
+      console.warn("Error formatting image URI:", trimmedUri, error);
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      return `${API_BASE_URL}/uploads/${trimmedUri}`;
+    }
+  };
+
+  // Handle image load error
+  const handleImageError = (error: any, index: number, allImages: string[]) => {
+    const originalUri = allImages[index];
+    const formattedUri = formatImageUri(originalUri);
+    console.warn(`Image ${index} failed to load:`, {
+      original: originalUri,
+      formatted: formattedUri,
+      error: error?.nativeEvent?.error || error,
+      errorMessage: error?.nativeEvent?.error?.message || "Unknown error"
+    });
+    setImageErrors((prev) => ({ ...prev, [index]: true }));
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+  };
+
+  // Handle image load success
+  const handleImageLoad = (index: number) => {
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+    setImageErrors((prev) => {
+      const newErrors = { ...prev };
+      delete newErrors[index];
+      return newErrors;
+    });
+  };
+
+  // Handle image load start
+  const handleImageLoadStart = (index: number) => {
+    setImageLoading((prev) => ({ ...prev, [index]: true }));
+  };
+
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -244,6 +382,118 @@ export default function AdminHomeScreen() {
     }
     loadUserId();
   }, []);
+
+  // Get user's GPS location
+  useEffect(() => {
+    setLocationLoading(true);
+    
+    Geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setUserLocation({ lat: latitude, lon: longitude });
+        setLocationLoading(false);
+      },
+      (error) => {
+        console.log("GPS error", error);
+        const currentLanguage = i18n.language || "ar";
+        let title = "";
+        let message = "";
+        
+        // Handle different error codes
+        if (error.code === 1) {
+          // PERMISSION_DENIED - Show initial permission message only once
+          if (!hasShownLocationPermissionMessage) {
+            title = currentLanguage === "ar"
+              ? "السماح بالموقع"
+              : currentLanguage === "he"
+              ? "אפשר גישת מיקום"
+              : "Allow Location Access";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
+              : currentLanguage === "he"
+              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
+              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
+            setHasShownLocationPermissionMessage(true);
+          } else {
+            title = currentLanguage === "ar" 
+              ? "السماح بالموقع مطلوب" 
+              : currentLanguage === "he"
+              ? "נדרש אישור מיקום"
+              : "Location Permission Required";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
+              : currentLanguage === "he"
+              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
+              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
+          }
+        } else if (error.code === 2) {
+          // POSITION_UNAVAILABLE
+          title = currentLanguage === "ar"
+            ? "الموقع غير متاح"
+            : currentLanguage === "he"
+            ? "מיקום לא זמין"
+            : "Location Unavailable";
+          message = currentLanguage === "ar"
+            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
+            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
+        } else if (error.code === 3) {
+          // TIMEOUT
+          title = currentLanguage === "ar"
+            ? "انتهت مهلة انتظار الموقع"
+            : currentLanguage === "he"
+            ? "זמן המיקום פג"
+            : "Location Timeout";
+          message = currentLanguage === "ar"
+            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+            : currentLanguage === "he"
+            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
+            : "Getting your location took too long. Please try again.";
+        } else {
+          // Generic error
+          title = currentLanguage === "ar"
+            ? "خطأ في الموقع"
+            : currentLanguage === "he"
+            ? "שגיאת מיקום"
+            : "Location Error";
+          message = currentLanguage === "ar"
+            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
+            : "Could not get your location. Using default location.";
+        }
+        
+        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
+        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
+        
+        Alert.alert(
+          title,
+          message,
+          [
+            {
+              text: cancelText,
+              style: "cancel"
+            },
+            {
+              text: allowText,
+              onPress: () => {
+                if (error.code === 1) {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
+        );
+        setLocationLoading(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 10000,
+      }
+    );
+  }, [t, hasShownLocationPermissionMessage]);
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -274,6 +524,9 @@ export default function AdminHomeScreen() {
     setDescriptionTargetLang(null);
     setShowLanguageSelector(false);
     setLanguageSelectorType(null);
+    // Reset image errors and loading states when place changes
+    setImageErrors({});
+    setImageLoading({});
   }, [selectedPlace]);
 
   // Open language selector for announcement
@@ -401,6 +654,266 @@ export default function AdminHomeScreen() {
       setSavingPlace(false);
     }
   };
+
+  // Handle map long press - set custom destination
+  const handleMapLongPress = async (e: any) => {
+    try {
+      const coords = e?.geometry?.coordinates;
+      if (Array.isArray(coords) && coords.length >= 2) {
+        const [lon, lat] = coords;
+        
+        // Check boundary - destination must be within service cities
+        try {
+          const boundaryCheck = await checkLocationInServiceCities(lat, lon);
+          if (!boundaryCheck.is_within) {
+            Alert.alert(
+              t("location_outside_service_area") || "Location Outside Service Area",
+              t("destination_must_be_in_service_cities") || "Destination must be within one of the 3 service cities: רהט (Rahat), לקיה (Lakiya), or תל שבע (Tel Sheva).\n\nPlease choose a location within these boundaries.",
+              [{ text: t("ok") || "OK" }]
+            );
+            return;
+          }
+        } catch (error: any) {
+          console.error("Error checking boundary:", error);
+          Alert.alert(
+            t("boundary_check_error") || "Boundary Check Error",
+            t("boundary_check_error_message") || "Failed to check location boundary. Please try again."
+          );
+          return;
+        }
+        
+        setCustomPin({ lat, lon });
+        setDestination({ lat, lon, name: `📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}` });
+        setSelectedPlace(null); // Clear selected place
+        setSearchResults([]);
+        setShowSearchModal(false);
+      }
+    } catch (error) {
+      console.error("Error handling long press:", error);
+    }
+  };
+
+  // Handle place marker tap - set as destination
+  const handlePlaceTap = async (place: PlaceForMap) => {
+    if (!place.location) return;
+    
+    // Places from database are already validated, so we can use them directly
+    // Only check boundary for custom pins (long press on map)
+    setSelectedPlace(place);
+    setDestination({
+      lat: place.location.lat,
+      lon: place.location.lon,
+      name: getPlaceName(place),
+    });
+    setCustomPin(null);
+    setSearchResults([]);
+    setShowSearchModal(false);
+  };
+
+  // Search places - comprehensive search across all fields
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    
+    // If query is empty, clear results
+    if (!query || query.trim().length === 0) {
+      setSearchResults([]);
+      return;
+    }
+
+    // Make sure places are loaded
+    if (!places || places.length === 0) {
+      console.log("No places loaded yet");
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const queryLower = query.toLowerCase().trim();
+      
+      // Filter places based on search query
+      const filtered = places.filter((place) => {
+        try {
+          // Search in name fields (English, Arabic, Hebrew)
+          const nameMatch = 
+            (place.name && typeof place.name === 'string' && place.name.toLowerCase().includes(queryLower)) ||
+            (place.name_ar && typeof place.name_ar === 'string' && place.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.name_he && typeof place.name_he === 'string' && place.name_he.toLowerCase().includes(queryLower));
+          
+          // Search in description
+          const descriptionMatch = 
+            place.description && typeof place.description === 'string' && 
+            place.description.toLowerCase().includes(queryLower);
+          
+          // Search in city name
+          const cityMatch = 
+            (place.city?.name_ar && typeof place.city.name_ar === 'string' && place.city.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_he && typeof place.city.name_he === 'string' && place.city.name_he.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_en && typeof place.city.name_en === 'string' && place.city.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in category name
+          const categoryMatch = 
+            (place.category?.name_ar && typeof place.category.name_ar === 'string' && place.category.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_he && typeof place.category.name_he === 'string' && place.category.name_he.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_en && typeof place.category.name_en === 'string' && place.category.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in phone number (remove spaces/dashes for better matching)
+          const phoneMatch = 
+            place.phone && typeof place.phone === 'string' && 
+            place.phone.replace(/[\s-]/g, '').includes(queryLower.replace(/[\s-]/g, ''));
+          
+          // Return true if any field matches
+          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
+        } catch (err) {
+          console.error("Error filtering place:", err, place);
+          return false;
+        }
+      });
+      
+      console.log(`Search for "${query}" found ${filtered.length} results out of ${places.length} places`);
+      setSearchResults(filtered);
+    } catch (error) {
+      console.error("Search error:", error);
+      setSearchResults([]);
+    }
+  };
+
+  // Get route from user location to destination using OSRM
+  const getRoute = async () => {
+    const currentLanguage = i18n.language || "ar";
+    
+    // Check if destination is selected
+    if (!destination) {
+      const title = currentLanguage === "ar"
+        ? "خطأ"
+        : currentLanguage === "he"
+        ? "שגיאה"
+        : "Error";
+      const message = currentLanguage === "ar"
+        ? "يرجى اختيار وجهة أولاً"
+        : currentLanguage === "he"
+        ? "אנא בחר יעד תחילה"
+        : "Please select a destination first";
+      Alert.alert(title, message);
+      return;
+    }
+    
+    // Check if user location is available
+    if (!userLocation) {
+      const title = currentLanguage === "ar"
+        ? "تفعيل الموقع مطلوب"
+        : currentLanguage === "he"
+        ? "נדרש הפעלת מיקום"
+        : "Location Required";
+      const message = currentLanguage === "ar"
+        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
+        : currentLanguage === "he"
+        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
+        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
+      Alert.alert(title, message);
+      
+      // Try to get location again
+      setLocationLoading(true);
+      Geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lon: longitude });
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.log("GPS error when retrying:", error);
+          setLocationLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000,
+        }
+      );
+      return;
+    }
+
+    setRouteLoading(true);
+    
+    try {
+      // Using OSRM (Open Source Routing Machine) - free, no API key needed
+      const profile = "driving"; // driving, walking, or cycling
+      const coordinates = `${userLocation.lon},${userLocation.lat};${destination.lon},${destination.lat}`;
+      
+      // Using OSRM public server (free, no API key required)
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=false&steps=false`;
+      
+      console.log("Requesting route from OSRM:", url);
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("OSRM API error:", response.status, errorText);
+        throw new Error(`Routing service error: ${response.status} - ${errorText}`);
+      }
+      
+      const routeData = await response.json();
+      
+      // OSRM response format: { code: "Ok", routes: [{ distance, duration, geometry }] }
+      if (routeData.code === "Ok" && routeData.routes && routeData.routes.length > 0) {
+        const routeInfo = routeData.routes[0];
+        
+        // Extract route information
+        const distance = routeInfo.distance || 0; // in meters
+        const duration = routeInfo.duration || 0; // in seconds
+        
+        // OSRM geometry format is already GeoJSON LineString
+        const routeGeometry = routeInfo.geometry || {
+          type: "LineString",
+          coordinates: [
+            [userLocation.lon, userLocation.lat],
+            [destination.lon, destination.lat],
+          ],
+        };
+        
+        // Store route info (distance, duration)
+        const routeInfoData = {
+          distance,
+          duration,
+          startAddress: t("your_location") || "Your Location",
+          endAddress: destination.name || t("destination") || "Destination",
+        };
+
+        // Store route coordinates
+        const routeCoords: RouteCoordinates = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: routeGeometry,
+              properties: {},
+            },
+          ],
+        };
+
+        // Navigate directly to RouteDetailsScreen
+        navigation.navigate("RouteDetails", {
+          routeInfo: routeInfoData,
+          destination,
+          userLocation,
+          routeCoordinates: routeCoords,
+        });
+      } else {
+        const errorMsg = routeData.code === "NoRoute" 
+          ? t("no_route_found") || "No route found between these points"
+          : routeData.message || t("no_route_found") || "No route found in response";
+        throw new Error(errorMsg);
+      }
+      } catch (error: any) {
+      console.error("Route error:", error?.message || String(error));
+      Alert.alert(
+        t("route_error") || "Route Error",
+        error?.message || t("could_not_get_route") || "Could not get driving directions. Please try again."
+      );
+      } finally {
+        setRouteLoading(false);
+      }
+    };
 
   // Bottom sheet animation values
   const translateY = useSharedValue(SCREEN_HEIGHT);
@@ -607,10 +1120,122 @@ export default function AdminHomeScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <TouchableOpacity
+          style={styles.searchInputTouchable}
+          onPress={() => setShowSearchModal(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="search-outline" size={20} color="#666" style={styles.searchIcon} />
+          <Text style={styles.searchInputPlaceholder}>
+            {searchQuery || (t("search_places") || "Search places...")}
+          </Text>
+        </TouchableOpacity>
+        {locationLoading && (
+          <ActivityIndicator size="small" color="#0f5b63" style={styles.loader} />
+        )}
+      </View>
+
+      {/* Search Results Modal */}
+      <Modal
+        visible={showSearchModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSearchModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t("search_places") || "Search Places"}</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSearchModal(false);
+                setSearchQuery("");
+              }}>
+                <Text style={styles.modalCloseButton}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Search Input Inside Modal */}
+            <View style={styles.modalSearchContainer}>
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder={t("search_places") || "Search places..."}
+                placeholderTextColor="#666"
+                value={searchQuery}
+                onChangeText={handleSearch}
+                autoFocus={true}
+              />
+              <Ionicons name="search-outline" size={20} color="#666" style={styles.modalSearchIcon} />
+            </View>
+            <ScrollView style={styles.searchResultsList} keyboardShouldPersistTaps="handled">
+              {searchQuery.trim().length === 0 && (
+                <Text style={styles.noResults}>{t("start_typing_to_search") || "Start typing to search places..."}</Text>
+              )}
+              {searchResults.length === 0 && searchQuery.trim().length > 0 && (
+                <Text style={styles.noResults}>{t("no_places_found") || "No places found"}</Text>
+              )}
+              {searchResults.map((place) => (
+                <TouchableOpacity
+                  key={place.id}
+                  style={styles.searchResultItem}
+                  onPress={() => {
+                    handlePlaceTap(place);
+                    setSearchQuery("");
+                    setShowSearchModal(false);
+                  }}
+                >
+                  <Text style={styles.searchResultName}>{getPlaceName(place)}</Text>
+                  <View style={styles.searchResultDetails}>
+                    {getCityName(place.city) && (
+                      <Text style={styles.searchResultCity}>{getCityName(place.city)}</Text>
+                    )}
+                    {place.category && (
+                      <>
+                        {getCityName(place.city) && <Text style={styles.searchResultSeparator}> • </Text>}
+                        <Text style={styles.searchResultCategory}>
+                          {i18n.language === "he" && place.category.name_he
+                            ? place.category.name_he
+                            : i18n.language === "ar" && place.category.name_ar
+                            ? place.category.name_ar
+                            : place.category.name_ar || place.category.name_he || ""}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
+        onLongPress={handleMapLongPress}
+        onPress={(e: any) => {
+          // Handle regular tap - check if tapping near a place
+          try {
+            const coords = e?.geometry?.coordinates;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              const [lon, lat] = coords;
+              // Find nearest place within reasonable distance
+              const nearestPlace = places.find((place) => {
+                if (!place.location) return false;
+                const distance = Math.sqrt(
+                  Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
+                );
+                return distance < 0.001; // ~100 meters
+              });
+              if (nearestPlace) {
+                handlePlaceTap(nearestPlace);
+              }
+            }
+          } catch {
+            // Ignore tap errors
+          }
+        }}
         scrollEnabled={true}
         rotateEnabled={false}
         pitchEnabled={false}
@@ -635,6 +1260,33 @@ export default function AdminHomeScreen() {
           maxZoomLevel={18}
           animationMode="flyTo"
         />
+
+        {/* User Location Marker */}
+        {userLocation && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Custom Pin Marker (destination from map tap) */}
+        {customPin && (
+          <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
+            <View style={styles.customPinMarker}>
+              <View style={styles.customPinDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Destination Marker (from place selection) */}
+        {destination && !customPin && (
+          <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
+            <View style={styles.destinationMarker}>
+              <Text style={styles.destinationMarkerText}>📍</Text>
+            </View>
+          </PointAnnotation>
+        )}
 
         {places.map((place) => {
           if (!place.location) return null;
@@ -663,8 +1315,7 @@ export default function AdminHomeScreen() {
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
-                selectedPlaceIdRef.current = place.id;
-                setSelectedPlace(place);
+                handlePlaceTap(place);
               }}
             >
               <View style={styles.nativeMarkerContainer}>
@@ -787,7 +1438,7 @@ export default function AdminHomeScreen() {
         </View>
       </View>
 
-      {!selectedPlace && (
+      {!selectedPlace && !destination && (
         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
           <Text style={styles.recenterButtonText}>🎯</Text>
         </TouchableOpacity>
@@ -963,19 +1614,43 @@ export default function AdminHomeScreen() {
                   {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="navigate-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("start") || "התחלה"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonPrimary}>
-                <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                <Text style={styles.actionButtonPrimaryText}>
-                  {t("route") || "מסלול"}
-                </Text>
-            </TouchableOpacity>
-          </View>
+              
+              {/* Get Directions Button - Navigates directly to RouteDetailsScreen */}
+              {destination && (
+                <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={getRoute}
+                  disabled={routeLoading || !userLocation}
+                >
+                  {routeLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
+                      <Text style={styles.actionButtonPrimaryText}>
+                        {t("get_directions") || "Get Directions"}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {!destination && (
+                <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={() => {
+                    if (selectedPlace && selectedPlace.location) {
+                      handlePlaceTap(selectedPlace);
+                    }
+                  }}
+                >
+                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.actionButtonPrimaryText}>
+                    {t("set_destination") || "Set Destination"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
             {/* Announcement Banner */}
             {selectedPlace.announcement && (
@@ -1025,13 +1700,72 @@ export default function AdminHomeScreen() {
             {(() => {
               // Get all images: business_images_urls first, then main_image_url as fallback
               const allImages: string[] = [];
-              if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
-                allImages.push(...selectedPlace.business_images_urls);
+              
+              // Handle business_images_urls - check if it's an array, if not, try to parse it
+              let businessImages: string[] = [];
+              if (selectedPlace.business_images_urls) {
+                if (Array.isArray(selectedPlace.business_images_urls)) {
+                  businessImages = selectedPlace.business_images_urls;
+                } else if (typeof selectedPlace.business_images_urls === 'string') {
+                  // If it's a string, try to parse it as JSON (defensive)
+                  try {
+                    const parsed = JSON.parse(selectedPlace.business_images_urls);
+                    if (Array.isArray(parsed)) {
+                      businessImages = parsed;
+                    } else {
+                      console.warn("business_images_urls is a string but not a valid JSON array:", selectedPlace.business_images_urls);
+                    }
+                  } catch (e) {
+                    console.warn("Failed to parse business_images_urls as JSON:", selectedPlace.business_images_urls, e);
+                  }
+                } else {
+                  console.warn("business_images_urls is not an array or string:", typeof selectedPlace.business_images_urls, selectedPlace.business_images_urls);
+                }
+              }
+              
+              if (businessImages.length > 0) {
+                allImages.push(...businessImages);
               } else if (selectedPlace.main_image_url) {
                 allImages.push(selectedPlace.main_image_url);
               }
 
-              if (allImages.length > 0) {
+              // Filter out duplicates, empty strings, null, and undefined
+              const uniqueImages = Array.from(new Set(
+                allImages
+                  .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+                  .map(img => img.trim())
+              ));
+
+              // Debug logging
+              if (__DEV__ && uniqueImages.length > 0) {
+                console.log("=== LOADING PLACE IMAGES ===");
+                console.log("Raw business_images_urls:", selectedPlace.business_images_urls, "Type:", typeof selectedPlace.business_images_urls);
+                console.log("Parsed businessImages:", businessImages);
+                console.log("Raw main_image_url:", selectedPlace.main_image_url);
+                console.log("Filtered unique images:", uniqueImages);
+                console.log("API_BASE_URL:", API_BASE_URL);
+                uniqueImages.forEach((img, idx) => {
+                  const formatted = formatImageUri(img);
+                  console.log(`Image ${idx}:`, {
+                    original: img,
+                    formatted: formatted,
+                    isValid: formatted && formatted.startsWith('http')
+                  });
+                  // Test if URL is accessible (only in dev mode to avoid performance issues)
+                  if (formatted && formatted.startsWith('http')) {
+                    fetch(formatted, { method: 'HEAD' })
+                      .then(res => {
+                        console.log(`✅ Image ${idx} URL accessible:`, formatted, "Status:", res.status);
+                      })
+                      .catch(err => {
+                        console.error(`❌ Image ${idx} URL NOT accessible:`, formatted, "Error:", err.message);
+                      });
+                  }
+                });
+                console.log("===========================");
+              }
+
+              if (uniqueImages.length > 0) {
                 return (
                   <View style={styles.imageGalleryContainer}>
                     <ScrollView
@@ -1040,29 +1774,97 @@ export default function AdminHomeScreen() {
                       contentContainerStyle={styles.imageScrollContent}
                       style={styles.imageScrollView}
                     >
-                      {allImages.map((imageUri, index) => (
-                        <TouchableOpacity
-                          key={index}
-                          onPress={() => {
-                            setSelectedPhotoIndex(index);
-                            setPhotoModalVisible(true);
-                            // Scroll to selected photo after modal opens
-                            setTimeout(() => {
-                              photoScrollViewRef.current?.scrollTo({
-                                x: index * SCREEN_WIDTH,
-                                animated: false,
-                              });
-                            }, 100);
-                          }}
-                          style={styles.imageGridItem}
-                        >
-                          <Image 
-                            source={{ uri: imageUri }}
-                            style={styles.gridImage}
-                            resizeMode="cover"
-                          />
-                        </TouchableOpacity>
-                      ))}
+                      {uniqueImages.map((imageUri, index) => {
+                        const hasError = imageErrors[index];
+                        const isLoading = imageLoading[index];
+                        const formattedUri = formatImageUri(imageUri);
+                        
+                        // Always render - let Image component handle invalid URIs
+                        return (
+                          <TouchableOpacity
+                            key={`image-${index}-${imageUri?.substring(0, 20) || index}`}
+                            onPress={() => {
+                              setSelectedPhotoIndex(index);
+                              setPhotoModalVisible(true);
+                              // Scroll to selected photo after modal opens
+                              setTimeout(() => {
+                                photoScrollViewRef.current?.scrollTo({
+                                  x: index * SCREEN_WIDTH,
+                                  animated: false,
+                                });
+                              }, 100);
+                            }}
+                            style={styles.imageGridItem}
+                            activeOpacity={0.8}
+                          >
+                            {!formattedUri ? (
+                              <View style={styles.photoErrorPlaceholder}>
+                                <Ionicons name="image-outline" size={32} color="#999" />
+                                <Text style={styles.photoErrorText} numberOfLines={2}>
+                                  {t("invalid_image_url") || "Invalid URL"}
+                                </Text>
+                              </View>
+                            ) : hasError ? (
+                              <View style={styles.photoErrorPlaceholder}>
+                                <Ionicons name="image-outline" size={32} color="#999" />
+                                <Text style={styles.photoErrorText} numberOfLines={2}>
+                                  {t("image_failed_to_load") || "Failed to load"}
+                                </Text>
+                                {__DEV__ && (
+                                  <Text style={[styles.photoErrorText, { fontSize: 8, marginTop: 4 }]} numberOfLines={1}>
+                                    {formattedUri.substring(0, 30)}...
+                                  </Text>
+                                )}
+                              </View>
+                            ) : (
+                              <View style={styles.photoContainer}>
+                                <Image 
+                                  source={{ uri: formattedUri }}
+                                  style={styles.gridImage}
+                                  resizeMode="cover"
+                                  onError={(e) => {
+                                    if (__DEV__) {
+                                      console.error(`❌ Image ${index} failed:`, {
+                                        original: imageUri,
+                                        formatted: formattedUri,
+                                        error: e?.nativeEvent?.error || e,
+                                        errorCode: e?.nativeEvent?.error?.code,
+                                        errorMessage: e?.nativeEvent?.error?.message
+                                      });
+                                      // Try to fetch the URL to see if it's accessible
+                                      fetch(formattedUri, { method: 'HEAD' })
+                                        .then(res => {
+                                          console.log(`🔍 Fetch test for ${formattedUri}:`, res.status, res.statusText, res.headers.get('content-type'));
+                                        })
+                                        .catch(err => {
+                                          console.error(`🔍 Fetch test failed for ${formattedUri}:`, err.message);
+                                        });
+                                    }
+                                    handleImageError(e, index, uniqueImages);
+                                  }}
+                                  onLoad={() => {
+                                    if (__DEV__) {
+                                      console.log(`✅ Image ${index} loaded successfully:`, formattedUri);
+                                    }
+                                    handleImageLoad(index);
+                                  }}
+                                  onLoadStart={() => {
+                                    if (__DEV__) {
+                                      console.log(`🔄 Image ${index} loading:`, formattedUri);
+                                    }
+                                    handleImageLoadStart(index);
+                                  }}
+                                />
+                                {isLoading && (
+                                  <View style={styles.photoLoadingOverlay}>
+                                    <ActivityIndicator size="small" color="#fff" />
+                                  </View>
+                                )}
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
                     </ScrollView>
                   </View>
                 );
@@ -1213,7 +2015,7 @@ export default function AdminHomeScreen() {
         onRequestClose={() => setShowLanguageSelector(false)}
       >
         <TouchableOpacity
-          style={styles.modalOverlay}
+          style={styles.languageSelectorModalOverlay}
           activeOpacity={1}
           onPress={() => setShowLanguageSelector(false)}
         >
@@ -1248,13 +2050,39 @@ export default function AdminHomeScreen() {
       {/* Photo Gallery Full Screen Modal */}
       {selectedPlace && (() => {
         const allImages: string[] = [];
-        if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
-          allImages.push(...selectedPlace.business_images_urls);
+        
+        // Handle business_images_urls - check if it's an array, if not, try to parse it
+        let businessImages: string[] = [];
+        if (selectedPlace.business_images_urls) {
+          if (Array.isArray(selectedPlace.business_images_urls)) {
+            businessImages = selectedPlace.business_images_urls;
+          } else if (typeof selectedPlace.business_images_urls === 'string') {
+            // If it's a string, try to parse it as JSON (defensive)
+            try {
+              const parsed = JSON.parse(selectedPlace.business_images_urls);
+              if (Array.isArray(parsed)) {
+                businessImages = parsed;
+              }
+            } catch (e) {
+              console.warn("Failed to parse business_images_urls as JSON in modal:", selectedPlace.business_images_urls, e);
+            }
+          }
+        }
+        
+        if (businessImages.length > 0) {
+          allImages.push(...businessImages);
         } else if (selectedPlace.main_image_url) {
           allImages.push(selectedPlace.main_image_url);
         }
 
-        if (allImages.length === 0) return null;
+        // Filter out duplicates, empty strings, null, and undefined
+        const uniqueImages = Array.from(new Set(
+          allImages
+            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+            .map(img => img.trim())
+        ));
+
+        if (uniqueImages.length === 0) return null;
 
         return (
           <Modal
@@ -1281,26 +2109,51 @@ export default function AdminHomeScreen() {
                 }}
                 style={styles.photoModalScrollView}
               >
-                {allImages.map((imageUri, index) => (
-                  <View key={index} style={styles.photoModalImageContainer}>
-                    <Image
-                      source={{ uri: imageUri }}
-                      style={styles.photoModalImage}
-                      resizeMode="contain"
-                    />
-                  </View>
-                ))}
+                {uniqueImages.map((imageUri, index) => {
+                  const formattedUri = formatImageUri(imageUri);
+                  return (
+                    <View key={`modal-image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoModalImageContainer}>
+                      <Image
+                        source={{ uri: formattedUri }}
+                        style={styles.photoModalImage}
+                        resizeMode="contain"
+                        onError={(e) => {
+                          if (__DEV__) {
+                            console.error(`Modal image ${index} failed:`, {
+                              original: imageUri,
+                              formatted: formattedUri,
+                              error: e?.nativeEvent?.error || e
+                            });
+                          }
+                          // Don't show alert for every failed image, just log it
+                        }}
+                        onLoad={() => {
+                          if (__DEV__) {
+                            console.log(`✅ Modal image ${index} loaded:`, formattedUri);
+                          }
+                        }}
+                      />
+                    </View>
+                  );
+                })}
               </ScrollView>
               {/* Photo counter */}
               <View style={styles.photoCounter}>
                 <Text style={styles.photoCounterText}>
-                  {selectedPhotoIndex + 1} / {allImages.length}
+                  {selectedPhotoIndex + 1} / {uniqueImages.length}
                 </Text>
               </View>
             </View>
           </Modal>
         );
       })()}
+
+      {!selectedPlace && !destination && (
+        <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
+          <Text style={styles.recenterButtonText}>🎯</Text>
+        </TouchableOpacity>
+      )}
+
     </View>
   );
 }
@@ -1671,6 +2524,37 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
+  photoContainer: {
+    width: "100%",
+    height: "100%",
+    position: "relative",
+  },
+  photoErrorPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#f5f5f5",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 12,
+  },
+  photoErrorText: {
+    fontSize: 10,
+    color: "#999",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  photoLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   photoModalContainer: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.95)",
@@ -1979,7 +2863,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  modalOverlay: {
+  languageSelectorModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "center",
@@ -2025,5 +2909,171 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "500",
     color: "#666",
+  },
+  searchContainer: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    right: 16,
+    zIndex: 1000,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInputTouchable: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInputPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: "#666",
+  },
+  loader: {
+    marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 20,
+    maxHeight: "80%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+  },
+  modalCloseButton: {
+    fontSize: 24,
+    color: "#666",
+    fontWeight: "300",
+  },
+  modalSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8F9FA",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  modalSearchInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: "#333",
+  },
+  modalSearchIcon: {
+    marginLeft: 8,
+  },
+  searchResultsList: {
+    maxHeight: 400,
+  },
+  searchResultItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  searchResultName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 4,
+  },
+  searchResultDetails: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  searchResultCity: {
+    fontSize: 14,
+    color: "#666",
+  },
+  searchResultSeparator: {
+    fontSize: 14,
+    color: "#999",
+    marginHorizontal: 4,
+  },
+  searchResultCategory: {
+    fontSize: 14,
+    color: "#666",
+  },
+  noResults: {
+    padding: 16,
+    textAlign: "center",
+    color: "#999",
+    fontSize: 14,
+  },
+  userLocationMarker: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(15, 91, 99, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#0f5b63",
+  },
+  userLocationDot: {
+    flex: 1,
+    borderRadius: 7,
+    backgroundColor: "#0f5b63",
+    width: 14,
+    height: 14,
+  },
+  customPinMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 107, 107, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#ff6b6b",
+  },
+  customPinDot: {
+    flex: 1,
+    borderRadius: 9,
+    backgroundColor: "#ff6b6b",
+    width: 18,
+    height: 18,
+  },
+  destinationMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(15, 91, 99, 0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#0f5b63",
+  },
+  destinationMarkerText: {
+    fontSize: 24,
   },
 });

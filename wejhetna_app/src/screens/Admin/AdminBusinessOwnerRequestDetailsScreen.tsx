@@ -26,9 +26,9 @@ import i18n from "../../i18n";
 
 import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
-
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
+
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminBusinessOwnerRequestDetails">;
 
@@ -42,25 +42,25 @@ type UserInfo = {
   status: string;
   created_at: string;
 };
+
 export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { adminUserId, request } = route.params;
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [processing, setProcessing] = useState(false);
-  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  const [loadingUser, setLoadingUser] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const cameraRef = useRef<any>(null);
+    const [successModalVisible, setSuccessModalVisible] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string }>({
     visible: false,
     title: "",
     message: "",
   });
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [loadingUser, setLoadingUser] = useState(false);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const cameraRef = useRef<any>(null);
-
-  // Fetch user information
+    // Fetch user information
   useEffect(() => {
     async function loadUserInfo() {
       if (!request.user_id) return;
@@ -109,18 +109,6 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
       }, 100);
     }
   }, [request.lat, request.lon]);
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
   // Helper function to get category name based on current language
   const getCategoryName = (category: Category | null | undefined): string => {
     if (!category) return "";
@@ -142,8 +130,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
   const requestCategory = request.category_id 
     ? categories.find(cat => cat.id === request.category_id)
     : null;
-
-  const handleApprove = async () => {
+      const handleApprove = async () => {
     Alert.alert(
       t("accept"),
       t("approve_request_message") || "Are you sure you want to approve this business owner request?",
@@ -240,7 +227,17 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
   };
 
   const canReview = request.status === "PENDING";
+  const formatDate = (dateString?: string | null): string => {
+    if (!dateString) return "";
 
+    const date = new Date(dateString);
+
+    return date.toLocaleDateString(i18n.language || "en", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  };
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -249,7 +246,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
       <View style={styles.header}>
         <Text style={styles.title}>{request.name}</Text>
       </View>
-
+      
       <ScrollView 
         style={styles.scrollView} 
         contentContainerStyle={styles.scrollContent}
@@ -455,53 +452,12 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
             </MapView>
           </View>
 
-          {/* Location Details */}
-          <View style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{t("latitude")}</Text>
-            <Text style={styles.infoValue}>{request.lat.toFixed(6)}</Text>
-          </View>
-
-          <View style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{t("longitude")}</Text>
-            <Text style={styles.infoValue}>{request.lon.toFixed(6)}</Text>
-          </View>
-
-          <View style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{t("source") || "Source"}</Text>
-            <Text style={styles.infoValue}>{request.source}</Text>
-          </View>
-
-          {request.existing_place_id ? (
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>{t("type") || "Type"}</Text>
-              <View style={styles.statusBadge}>
-                <Text style={styles.statusText}>{t("claiming_existing_place") || "Claiming Existing Place"}</Text>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.infoCard}>
-              <Text style={styles.infoLabel}>{t("type") || "Type"}</Text>
-              <View style={styles.statusBadge}>
-                <Text style={styles.statusText}>{t("new_place_request") || "New Place Request"}</Text>
-              </View>
-            </View>
-          )}
         </View>
 
         {/* Request Details */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("request_details") || "Request Details"}</Text>
           
-          <View style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{t("request_id") || "Request ID"}</Text>
-            <Text style={styles.infoValue}>#{request.id}</Text>
-          </View>
-
-          <View style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{t("user_id") || "User ID"}</Text>
-            <Text style={styles.infoValue}>#{request.user_id}</Text>
-          </View>
-
           <View style={styles.infoCard}>
             <Text style={styles.infoLabel}>{t("submitted") || "Submitted"}</Text>
             <Text style={styles.infoValue}>{formatDate(request.created_at)}</Text>
@@ -606,8 +562,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
           </View>
         </View>
       </Modal>
-
-      {/* Success Modal */}
+            {/* Success Modal */}
       <MessageModal
         visible={successModalVisible}
         type="success"
@@ -724,7 +679,6 @@ const styles = StyleSheet.create({
     color: "#F44336",
     fontStyle: "italic",
   },
-
   noDataText: {
     color: "#999",
     fontStyle: "italic",
@@ -891,7 +845,6 @@ const styles = StyleSheet.create({
     height: "100%",
     resizeMode: "cover",
   },
-
   mapContainer: {
     width: "100%",
     height: 200,
@@ -929,6 +882,5 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
-  }
+  },
 });
-

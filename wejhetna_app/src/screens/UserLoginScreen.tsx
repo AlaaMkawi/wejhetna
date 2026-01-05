@@ -10,7 +10,6 @@ import {
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
 import { API_BASE_URL } from "../../config";
-
 type Props = NativeStackScreenProps<RootStackParamList, "UserLogin">;
 
 export default function UserLoginScreen({ route }: Props) {

@@ -347,6 +347,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   // GPS Location
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
+  const [hasShownLocationPermissionMessage, setHasShownLocationPermissionMessage] = useState(false);
 
   // Destination
   const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
@@ -413,6 +414,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   // Get user's GPS location
   useEffect(() => {
     setLocationLoading(true);
+    
     Geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
@@ -421,9 +423,95 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
       },
       (error) => {
         console.log("GPS error", error);
+        const currentLanguage = i18n.language || "ar";
+        let title = "";
+        let message = "";
+        
+        // Handle different error codes
+        if (error.code === 1) {
+          // PERMISSION_DENIED - Show initial permission message only once
+          if (!hasShownLocationPermissionMessage) {
+            title = currentLanguage === "ar"
+              ? "السماح بالموقع"
+              : currentLanguage === "he"
+              ? "אפשר גישת מיקום"
+              : "Allow Location Access";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
+              : currentLanguage === "he"
+              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
+              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
+            setHasShownLocationPermissionMessage(true);
+          } else {
+            title = currentLanguage === "ar" 
+              ? "السماح بالموقع مطلوب" 
+              : currentLanguage === "he"
+              ? "נדרש אישור מיקום"
+              : "Location Permission Required";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
+              : currentLanguage === "he"
+              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
+              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
+          }
+        } else if (error.code === 2) {
+          // POSITION_UNAVAILABLE
+          title = currentLanguage === "ar"
+            ? "الموقع غير متاح"
+            : currentLanguage === "he"
+            ? "מיקום לא זמין"
+            : "Location Unavailable";
+          message = currentLanguage === "ar"
+            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
+            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
+        } else if (error.code === 3) {
+          // TIMEOUT
+          title = currentLanguage === "ar"
+            ? "انتهت مهلة انتظار الموقع"
+            : currentLanguage === "he"
+            ? "זמן המיקום פג"
+            : "Location Timeout";
+          message = currentLanguage === "ar"
+            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+            : currentLanguage === "he"
+            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
+            : "Getting your location took too long. Please try again.";
+        } else {
+          // Generic error
+          title = currentLanguage === "ar"
+            ? "خطأ في الموقع"
+            : currentLanguage === "he"
+            ? "שגיאת מיקום"
+            : "Location Error";
+          message = currentLanguage === "ar"
+            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
+            : "Could not get your location. Using default location.";
+        }
+        
+        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
+        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
+        
         Alert.alert(
-          t("location_error") || "Location Error",
-          t("failed_to_read_location") || "Could not get your location. Using default location."
+          title,
+          message,
+          [
+            {
+              text: cancelText,
+              style: "cancel"
+            },
+            {
+              text: allowText,
+              onPress: () => {
+                if (error.code === 1) {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
         );
         setLocationLoading(false);
       },
@@ -433,7 +521,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
         maximumAge: 10000,
       }
     );
-  }, [t]);
+  }, [t, hasShownLocationPermissionMessage]);
 
   // Fetch all places on mount and when screen is focused
   useFocusEffect(
@@ -730,10 +818,55 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
 
   // Get route from user location to destination using OSRM
   const getRoute = async () => {
-    if (!userLocation || !destination) {
-      Alert.alert(
-        t("error") || "Error",
-        t("please_select_destination") || "Please select a destination first"
+    const currentLanguage = i18n.language || "ar";
+    
+      // Check if destination is selected
+    if (!destination) {
+      const title = currentLanguage === "ar"
+        ? "خطأ"
+        : currentLanguage === "he"
+        ? "שגיאה"
+        : "Error";
+      const message = currentLanguage === "ar"
+        ? "يرجى اختيار وجهة أولاً"
+        : currentLanguage === "he"
+        ? "אנא בחר יעד תחילה"
+        : "Please select a destination first";
+      Alert.alert(title, message);
+      return;
+    }
+    
+    // Check if user location is available
+    if (!userLocation) {
+      const title = currentLanguage === "ar"
+        ? "تفعيل الموقع مطلوب"
+        : currentLanguage === "he"
+        ? "נדרש הפעלת מיקום"
+        : "Location Required";
+      const message = currentLanguage === "ar"
+        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
+        : currentLanguage === "he"
+        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
+        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
+      Alert.alert(title, message);
+      
+      // Try to get location again
+      setLocationLoading(true);
+      Geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lon: longitude });
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.log("GPS error when retrying:", error);
+          setLocationLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000,
+        }
       );
       return;
     }
@@ -812,10 +945,17 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
       }
       } catch (error: any) {
       console.error("Route error:", error?.message || String(error));
-      Alert.alert(
-        t("route_error") || "Route Error",
-        error?.message || t("could_not_get_route") || "Could not get driving directions. Please try again."
-      );
+      const title = currentLanguage === "ar"
+        ? "خطأ في المسار"
+        : currentLanguage === "he"
+        ? "שגיאת מסלול"
+        : "Route Error";
+      const message = error?.message || (currentLanguage === "ar"
+        ? "لا يمكن الحصول على اتجاهات القيادة. يرجى المحاولة مرة أخرى."
+        : currentLanguage === "he"
+        ? "לא ניתן לקבל הוראות נסיעה. אנא נסה שוב."
+        : "Could not get driving directions. Please try again.");
+      Alert.alert(title, message);
     } finally {
       setRouteLoading(false);
     }
@@ -836,77 +976,163 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
 
   // Open language selector for announcement
   const handleTranslateAnnouncementClick = () => {
-    if (announcementIsTranslated) {
-      setAnnouncementIsTranslated(false);
-      return;
+    try {
+      if (announcementIsTranslated) {
+        setAnnouncementIsTranslated(false);
+        return;
+      }
+      if (!selectedPlace?.announcement) {
+        const currentLanguage = i18n.language || "ar";
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد إعلان للترجمة"
+            : currentLanguage === "he"
+            ? "אין הודעה לתרגום"
+            : "No announcement to translate"
+        );
+        return;
+      }
+      setLanguageSelectorType("announcement");
+      setShowLanguageSelector(true);
+    } catch (error) {
+      console.error("Error opening language selector for announcement:", error);
     }
-    setLanguageSelectorType("announcement");
-    setShowLanguageSelector(true);
   };
 
   // Open language selector for description
   const handleTranslateDescriptionClick = () => {
-    if (descriptionIsTranslated) {
-      setDescriptionIsTranslated(false);
-      return;
+    try {
+      if (descriptionIsTranslated) {
+        setDescriptionIsTranslated(false);
+        return;
+      }
+      if (!selectedPlace?.description) {
+        const currentLanguage = i18n.language || "ar";
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد وصف للترجمة"
+            : currentLanguage === "he"
+            ? "אין תיאור לתרגום"
+            : "No description to translate"
+        );
+        return;
+      }
+      setLanguageSelectorType("description");
+      setShowLanguageSelector(true);
+    } catch (error) {
+      console.error("Error opening language selector for description:", error);
     }
-    setLanguageSelectorType("description");
-    setShowLanguageSelector(true);
   };
 
   // Handle language selection and translation
   const handleLanguageSelection = async (targetLang: "ar" | "he") => {
-    if (!languageSelectorType) return;
+    if (!languageSelectorType) {
+      setShowLanguageSelector(false);
+      setLanguageSelectorType(null);
+      return;
+    }
     
     setShowLanguageSelector(false);
     
+    const currentLanguage = i18n.language || "ar";
+    
     if (languageSelectorType === "announcement") {
-      if (!selectedPlace?.announcement) return;
+      if (!selectedPlace?.announcement) {
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد إعلان للترجمة"
+            : currentLanguage === "he"
+            ? "אין הודעה לתרגום"
+            : "No announcement to translate"
+        );
+        setLanguageSelectorType(null);
+        return;
+      }
       
       if (announcementTranslated && announcementTargetLang === targetLang) {
         setAnnouncementIsTranslated(true);
+        setLanguageSelectorType(null);
         return;
       }
 
       setAnnouncementTranslating(true);
       try {
         const result = await translateText(selectedPlace.announcement, targetLang);
-        setAnnouncementTranslated(result.translated_text);
-        setAnnouncementTargetLang(targetLang);
-        setAnnouncementIsTranslated(true);
+        if (result && result.translated_text) {
+          setAnnouncementTranslated(result.translated_text);
+          setAnnouncementTargetLang(targetLang);
+          setAnnouncementIsTranslated(true);
+        } else {
+          throw new Error("Translation returned no result");
+        }
       } catch (error: any) {
-        Alert.alert(
-          t("error") || "שגיאה",
-          error.message || t("translation_failed") || "נכשל בתרגום"
-        );
+        console.error("Translation error:", error);
+        const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+        const errorMessage = error?.message || (currentLanguage === "ar"
+          ? "فشل الترجمة. يرجى التأكد من أن الخادم يعمل والمحاولة مرة أخرى."
+          : currentLanguage === "he"
+          ? "התרגום נכשל. אנא ודא שהשרת רץ ונסה שוב."
+          : "Translation failed. Please make sure the server is running and try again.");
+        Alert.alert(errorTitle, errorMessage);
+        setAnnouncementIsTranslated(false);
+        setAnnouncementTranslated(null);
+        setAnnouncementTargetLang(null);
       } finally {
         setAnnouncementTranslating(false);
+        setLanguageSelectorType(null);
       }
     } else if (languageSelectorType === "description") {
-      if (!selectedPlace?.description) return;
+      if (!selectedPlace?.description) {
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد وصف للترجمة"
+            : currentLanguage === "he"
+            ? "אין תיאור לתרגום"
+            : "No description to translate"
+        );
+        setLanguageSelectorType(null);
+        return;
+      }
       
       if (descriptionTranslated && descriptionTargetLang === targetLang) {
         setDescriptionIsTranslated(true);
+        setLanguageSelectorType(null);
         return;
       }
 
       setDescriptionTranslating(true);
       try {
         const result = await translateText(selectedPlace.description, targetLang);
-        setDescriptionTranslated(result.translated_text);
-        setDescriptionTargetLang(targetLang);
-        setDescriptionIsTranslated(true);
+        if (result && result.translated_text) {
+          setDescriptionTranslated(result.translated_text);
+          setDescriptionTargetLang(targetLang);
+          setDescriptionIsTranslated(true);
+        } else {
+          throw new Error("Translation returned no result");
+        }
       } catch (error: any) {
-        Alert.alert(
-          t("error") || "שגיאה",
-          error.message || t("translation_failed") || "נכשל בתרגום"
-        );
+        console.error("Translation error:", error);
+        const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+        const errorMessage = error?.message || (currentLanguage === "ar"
+          ? "فشل الترجمة. يرجى التأكد من أن الخادم يعمل والمحاولة مرة أخرى."
+          : currentLanguage === "he"
+          ? "התרגום נכשל. אנא ודא שהשרת רץ ונסה שוב."
+          : "Translation failed. Please make sure the server is running and try again.");
+        Alert.alert(errorTitle, errorMessage);
+        setDescriptionIsTranslated(false);
+        setDescriptionTranslated(null);
+        setDescriptionTargetLang(null);
       } finally {
         setDescriptionTranslating(false);
+        setLanguageSelectorType(null);
       }
+    } else {
+      setLanguageSelectorType(null);
     }
-    
-    setLanguageSelectorType(null);
   };
 
   // Bottom sheet animation values
@@ -1545,75 +1771,6 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
               )}
             </View>
 
-            {/* Details Section */}
-            <View style={styles.detailsSection}>
-              {/* Location */}
-              <View style={styles.detailRow}>
-                <Ionicons name="location-outline" size={20} color="#0f5b63" />
-                <Text style={styles.detailText}>
-                  {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
-                </Text>
-              </View>
-
-              {/* Category */}
-              <View style={styles.detailRow}>
-                <MaterialCommunityIcons 
-                  name={selectedPlace.category?.icon_name as any || "tag"} 
-                  size={20} 
-                  color="#0f5b63" 
-                />
-                <Text style={styles.detailText}>
-                  {selectedPlace.category
-                    ? (i18n.language === "he" && selectedPlace.category.name_he
-                        ? selectedPlace.category.name_he
-                        : i18n.language === "ar" && selectedPlace.category.name_ar
-                        ? selectedPlace.category.name_ar
-                        : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
-                    : (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Phone */}
-              <View style={styles.detailRow}>
-                <Ionicons name="call-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.phone && styles.noDataText]}>
-                  {selectedPlace.phone || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Opening Hours */}
-              <View style={styles.detailRow}>
-                <Ionicons name="time-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.opening_hours && styles.noDataText]}>
-                  {selectedPlace.opening_hours || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Description */}
-              <View style={styles.descriptionSection}>
-                <Text style={styles.descriptionTitle}>
-                  {t("description") || "תיאור"}
-                </Text>
-                {selectedPlace.description ? (
-                  <Text style={styles.descriptionText}>
-                {selectedPlace.description}
-              </Text>
-                ) : (
-                  <Text style={styles.noDataText}>
-                    {t("no_data") || "אין נתונים"}
-              </Text>
-            )}
-          </View>
-
-              {/* Social Links */}
-              <View style={styles.detailRow}>
-                <Ionicons name="link-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.social_links && styles.noDataText]} numberOfLines={1}>
-                  {selectedPlace.social_links || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-            </View>
-
             {/* Announcement Banner */}
             {selectedPlace.announcement && (
               <View style={styles.announcementBanner}>
@@ -1880,39 +2037,66 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
         visible={showLanguageSelector}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setShowLanguageSelector(false)}
+        onRequestClose={() => {
+          setShowLanguageSelector(false);
+          setLanguageSelectorType(null);
+        }}
       >
-        <TouchableOpacity
-          style={styles.languageSelectorModalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowLanguageSelector(false)}
-        >
+        <View style={styles.languageSelectorModalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => {
+              setShowLanguageSelector(false);
+              setLanguageSelectorType(null);
+            }}
+          />
           <View style={styles.languageSelectorModal}>
             <Text style={styles.languageSelectorTitle}>
-              {i18n.language === "ar" ? "اختر اللغة" : "בחר שפה"}
+              {i18n.language === "ar" ? "اختر اللغة" : i18n.language === "he" ? "בחר שפה" : "Select Language"}
+            </Text>
+            <Text style={styles.languageSelectorSubtitle}>
+              {i18n.language === "ar" 
+                ? "اختر اللغة التي تريد الترجمة إليها"
+                : i18n.language === "he"
+                ? "בחר את השפה שאליה תרצה לתרגם"
+                : "Select the language you want to translate to"}
             </Text>
             <TouchableOpacity
               style={styles.languageOption}
-              onPress={() => handleLanguageSelection("he")}
+              onPress={() => {
+                if (languageSelectorType) {
+                  handleLanguageSelection("he");
+                }
+              }}
+              disabled={!languageSelectorType}
             >
               <Text style={styles.languageOptionText}>עברית</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.languageOption}
-              onPress={() => handleLanguageSelection("ar")}
+              onPress={() => {
+                if (languageSelectorType) {
+                  handleLanguageSelection("ar");
+                }
+              }}
+              disabled={!languageSelectorType}
             >
               <Text style={styles.languageOptionText}>العربية</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.languageSelectorCancel}
-              onPress={() => setShowLanguageSelector(false)}
+              onPress={() => {
+                setShowLanguageSelector(false);
+                setLanguageSelectorType(null);
+              }}
             >
               <Text style={styles.languageSelectorCancelText}>
-                {i18n.language === "ar" ? "إلغاء" : "ביטול"}
+                {i18n.language === "ar" ? "إلغاء" : i18n.language === "he" ? "ביטול" : "Cancel"}
               </Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* Photo Gallery Full Screen Modal */}
@@ -1971,6 +2155,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           </Modal>
         );
       })()}
+
     </View>
   );
 }
@@ -2782,6 +2967,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#000",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  languageSelectorSubtitle: {
+    fontSize: 14,
+    color: "#666",
     marginBottom: 20,
     textAlign: "center",
   },

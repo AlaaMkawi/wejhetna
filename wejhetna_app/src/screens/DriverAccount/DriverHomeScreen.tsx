@@ -370,6 +370,7 @@ export default function DriverHomeScreen({ }: Props) {
   // GPS Location
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
+  const [hasShownLocationPermissionMessage, setHasShownLocationPermissionMessage] = useState(false);
 
   // Destination
   const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
@@ -401,6 +402,7 @@ export default function DriverHomeScreen({ }: Props) {
   // Get user's GPS location
   useEffect(() => {
     setLocationLoading(true);
+    
     Geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
@@ -409,9 +411,95 @@ export default function DriverHomeScreen({ }: Props) {
       },
       (error) => {
         console.log("GPS error", error);
+        const currentLanguage = i18n.language || "ar";
+        let title = "";
+        let message = "";
+        
+        // Handle different error codes
+        if (error.code === 1) {
+          // PERMISSION_DENIED - Show initial permission message only once
+          if (!hasShownLocationPermissionMessage) {
+            title = currentLanguage === "ar"
+              ? "السماح بالموقع"
+              : currentLanguage === "he"
+              ? "אפשר גישת מיקום"
+              : "Allow Location Access";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
+              : currentLanguage === "he"
+              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
+              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
+            setHasShownLocationPermissionMessage(true);
+          } else {
+            title = currentLanguage === "ar" 
+              ? "السماح بالموقع مطلوب" 
+              : currentLanguage === "he"
+              ? "נדרש אישור מיקום"
+              : "Location Permission Required";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
+              : currentLanguage === "he"
+              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
+              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
+          }
+        } else if (error.code === 2) {
+          // POSITION_UNAVAILABLE
+          title = currentLanguage === "ar"
+            ? "الموقع غير متاح"
+            : currentLanguage === "he"
+            ? "מיקום לא זמין"
+            : "Location Unavailable";
+          message = currentLanguage === "ar"
+            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
+            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
+        } else if (error.code === 3) {
+          // TIMEOUT
+          title = currentLanguage === "ar"
+            ? "انتهت مهلة انتظار الموقع"
+            : currentLanguage === "he"
+            ? "זמן המיקום פג"
+            : "Location Timeout";
+          message = currentLanguage === "ar"
+            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+            : currentLanguage === "he"
+            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
+            : "Getting your location took too long. Please try again.";
+        } else {
+          // Generic error
+          title = currentLanguage === "ar"
+            ? "خطأ في الموقع"
+            : currentLanguage === "he"
+            ? "שגיאת מיקום"
+            : "Location Error";
+          message = currentLanguage === "ar"
+            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
+            : "Could not get your location. Using default location.";
+        }
+        
+        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
+        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
+        
         Alert.alert(
-          t("location_error") || "Location Error",
-          t("failed_to_read_location") || "Could not get your location. Using default location."
+          title,
+          message,
+          [
+            {
+              text: cancelText,
+              style: "cancel"
+            },
+            {
+              text: allowText,
+              onPress: () => {
+                if (error.code === 1) {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
         );
         setLocationLoading(false);
       },
@@ -421,7 +509,7 @@ export default function DriverHomeScreen({ }: Props) {
         maximumAge: 10000,
       }
     );
-  }, [t]);
+  }, [t, hasShownLocationPermissionMessage]);
 
   // Fetch all places on mount
   useEffect(() => {
@@ -718,10 +806,55 @@ export default function DriverHomeScreen({ }: Props) {
 
   // Get route from user location to destination using OSRM
   const getRoute = async () => {
-    if (!userLocation || !destination) {
-      Alert.alert(
-        t("error") || "Error",
-        t("please_select_destination") || "Please select a destination first"
+    const currentLanguage = i18n.language || "ar";
+    
+    // Check if destination is selected
+    if (!destination) {
+      const title = currentLanguage === "ar"
+        ? "خطأ"
+        : currentLanguage === "he"
+        ? "שגיאה"
+        : "Error";
+      const message = currentLanguage === "ar"
+        ? "يرجى اختيار وجهة أولاً"
+        : currentLanguage === "he"
+        ? "אנא בחר יעד תחילה"
+        : "Please select a destination first";
+      Alert.alert(title, message);
+      return;
+    }
+    
+    // Check if user location is available
+    if (!userLocation) {
+      const title = currentLanguage === "ar"
+        ? "تفعيل الموقع مطلوب"
+        : currentLanguage === "he"
+        ? "נדרש הפעלת מיקום"
+        : "Location Required";
+      const message = currentLanguage === "ar"
+        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
+        : currentLanguage === "he"
+        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
+        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
+      Alert.alert(title, message);
+      
+      // Try to get location again
+      setLocationLoading(true);
+      Geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lon: longitude });
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.log("GPS error when retrying:", error);
+          setLocationLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000,
+        }
       );
       return;
     }
@@ -1444,7 +1577,51 @@ export default function DriverHomeScreen({ }: Props) {
           )}
             </View>
 
-            {/* Image Gallery - Horizontal Scroll (Lena's version with multiple images) */}
+            {/* Announcement Banner */}
+            {selectedPlace.announcement && (
+              <View style={styles.announcementBanner}>
+                <View style={styles.announcementHeader}>
+                  <Ionicons name="megaphone-outline" size={20} color="#0f5b63" />
+                  <Text style={styles.announcementTitle}>
+                    {i18n.language === "ar" 
+                      ? "أخبار مهمة من المالك" 
+                      : i18n.language === "he"
+                      ? "חדשות חשובות מהבעלים"
+                      : "Important News from Owner"}
+                  </Text>
+                  <View style={styles.translateButtonContainer}>
+                    {announcementIsTranslated && (
+                      <TouchableOpacity
+                        onPress={() => setAnnouncementIsTranslated(false)}
+                        style={styles.showOriginalButton}
+                      >
+                        <Text style={styles.showOriginalButtonText}>
+                          {i18n.language === "ar" ? "عرض الأصل" : "הצג מקור"}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      onPress={handleTranslateAnnouncementClick}
+                      disabled={announcementTranslating}
+                      style={styles.translateIconButton}
+                    >
+                      {announcementTranslating ? (
+                        <ActivityIndicator size="small" color="#0f5b63" />
+                      ) : (
+                        <Ionicons name="language-outline" size={20} color="#0f5b63" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <Text style={styles.announcementText}>
+                  {announcementIsTranslated && announcementTranslated
+                    ? announcementTranslated
+                    : selectedPlace.announcement}
+                </Text>
+              </View>
+            )}
+
+            {/* Image Gallery - Horizontal Scroll */}
             {(() => {
               // Get all images: business_images_urls first, then main_image_url as fallback
               const allImages: string[] = [];
@@ -1457,9 +1634,6 @@ export default function DriverHomeScreen({ }: Props) {
               if (allImages.length > 0) {
                 return (
                   <View style={styles.imageGalleryContainer}>
-                    <Text style={styles.sectionTitle}>
-                      {t("photos") || "תמונות"}
-                    </Text>
                     <ScrollView
                       horizontal
                       showsHorizontalScrollIndicator={true}
@@ -1493,155 +1667,13 @@ export default function DriverHomeScreen({ }: Props) {
                   </View>
                 );
               } else {
-                return (
-                  <View style={styles.imageGalleryContainer}>
-                    <Text style={styles.sectionTitle}>
-                      {t("photos") || "תמונות"}
-                    </Text>
-                    <View style={styles.noImagePlaceholder}>
-                      <Ionicons name="image-outline" size={40} color="#999" />
-                      <Text style={styles.noDataText}>
-                        {t("no_photos") || "אין תמונות"}
-                      </Text>
-                    </View>
-                  </View>
-                );
+                return null; // Don't show anything if no images
               }
             })()}
 
-            {/* Details Section */}
+            {/* Details Section - Card Style */}
             <View style={styles.detailsSection}>
-              {/* Location */}
-              <View style={styles.detailRow}>
-                <Ionicons name="location-outline" size={20} color="#0f5b63" />
-                <Text style={styles.detailText}>
-                  {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
-                </Text>
-              </View>
-
-              {/* Category */}
-              <View style={styles.detailRow}>
-                <MaterialCommunityIcons 
-                  name={selectedPlace.category?.icon_name as any || "tag"} 
-                  size={20} 
-                  color="#0f5b63" 
-                />
-                <Text style={styles.detailText}>
-                  {selectedPlace.category
-                    ? (i18n.language === "he" && selectedPlace.category.name_he
-                        ? selectedPlace.category.name_he
-                        : i18n.language === "ar" && selectedPlace.category.name_ar
-                        ? selectedPlace.category.name_ar
-                        : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
-                    : (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Phone */}
-              <View style={styles.detailRow}>
-                <Ionicons name="call-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.phone && styles.noDataText]}>
-                  {selectedPlace.phone || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Opening Hours */}
-              <View style={styles.detailRow}>
-                <Ionicons name="time-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.opening_hours && styles.noDataText]}>
-                  {selectedPlace.opening_hours || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Description */}
-              <View style={styles.descriptionSection}>
-                <Text style={styles.descriptionTitle}>
-                  {t("description") || "תיאור"}
-                </Text>
-                {selectedPlace.description ? (
-                  <Text style={styles.descriptionText}>
-                {selectedPlace.description}
-              </Text>
-                ) : (
-                  <Text style={styles.noDataText}>
-                    {t("no_data") || "אין נתונים"}
-              </Text>
-            )}
-          </View>
-
-              {/* Social Links */}
-              {selectedPlace.social_links ? (
-                <TouchableOpacity
-                  style={styles.detailRow}
-                  onPress={() => {
-                    const url = selectedPlace.social_links!.startsWith('http') 
-                      ? selectedPlace.social_links! 
-                      : `https://${selectedPlace.social_links}`;
-                    Linking.openURL(url).catch(() => {
-                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
-                    });
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="link-outline" size={20} color="#0f5b63" />
-                  <Text style={[styles.detailText, styles.socialLinkText]} numberOfLines={1}>
-                    {selectedPlace.social_links}
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.detailRow}>
-                  <Ionicons name="link-outline" size={20} color="#0f5b63" />
-                  <Text style={[styles.detailText, styles.noDataText]} numberOfLines={1}>
-                    {t("no_data") || "אין נתונים"}
-                  </Text>
-                </View>
-              )}
-
-              {/* Announcement Banner */}
-              {selectedPlace.announcement && (
-                <View style={styles.announcementBanner}>
-                  <View style={styles.announcementHeader}>
-                    <Ionicons name="megaphone-outline" size={20} color="#0f5b63" />
-                    <Text style={styles.announcementTitle}>
-                      {i18n.language === "ar" 
-                        ? "أخبار مهمة من المالك" 
-                        : i18n.language === "he"
-                        ? "חדשות חשובות מהבעלים"
-                        : "Important News from Owner"}
-                    </Text>
-                    <View style={styles.translateButtonContainer}>
-                      {announcementIsTranslated && (
-                        <TouchableOpacity
-                          onPress={() => setAnnouncementIsTranslated(false)}
-                          style={styles.showOriginalButton}
-                        >
-                          <Text style={styles.showOriginalButtonText}>
-                            {i18n.language === "ar" ? "عرض الأصل" : "הצג מקור"}
-                          </Text>
-                        </TouchableOpacity>
-                      )}
-                      <TouchableOpacity
-                        onPress={handleTranslateAnnouncementClick}
-                        disabled={announcementTranslating}
-                        style={styles.translateIconButton}
-                      >
-                        {announcementTranslating ? (
-                          <ActivityIndicator size="small" color="#0f5b63" />
-                        ) : (
-                          <Ionicons name="language-outline" size={20} color="#0f5b63" />
-                        )}
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  <Text style={styles.announcementText}>
-                    {announcementIsTranslated && announcementTranslated
-                      ? announcementTranslated
-                      : selectedPlace.announcement}
-                  </Text>
-                </View>
-              )}
-
-              {/* Opening Hours Card - Expandable (Lena's version) */}
+              {/* Opening Hours Card - Expandable */}
               {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
                 <TouchableOpacity
                   style={styles.detailCard}
@@ -1693,6 +1725,91 @@ export default function DriverHomeScreen({ }: Props) {
                     </View>
                   )}
                 </TouchableOpacity>
+              )}
+
+              {/* Location Card */}
+              <View style={styles.detailCard}>
+                <View style={styles.detailCardContent}>
+                  <Ionicons name="location-outline" size={20} color="#000" />
+                  <View style={styles.detailCardTextContainer}>
+                    <Text style={styles.detailCardText}>
+                      {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Category Card */}
+              {selectedPlace.category && (
+                <View style={styles.detailCard}>
+                  <View style={styles.detailCardContent}>
+                    <MaterialCommunityIcons 
+                      name={selectedPlace.category?.icon_name as any || "tag"} 
+                      size={20} 
+                      color="#000" 
+                    />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={styles.detailCardText}>
+                        {selectedPlace.category
+                          ? (i18n.language === "he" && selectedPlace.category.name_he
+                              ? selectedPlace.category.name_he
+                              : i18n.language === "ar" && selectedPlace.category.name_ar
+                              ? selectedPlace.category.name_ar
+                              : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
+                          : (t("no_data") || "אין נתונים")}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Phone Card */}
+              <View style={styles.detailCard}>
+                <View style={styles.detailCardContent}>
+                  <Ionicons name="call-outline" size={20} color="#000" />
+                  <View style={styles.detailCardTextContainer}>
+                    <Text style={[styles.detailCardText, !selectedPlace.phone && styles.noDataText]}>
+                      {selectedPlace.phone || (t("no_data") || "אין נתונים")}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Social Links Card */}
+              {selectedPlace.social_links ? (
+                <TouchableOpacity
+                  style={styles.detailCard}
+                  onPress={() => {
+                    const url = selectedPlace.social_links!.startsWith('http') 
+                      ? selectedPlace.social_links! 
+                      : `https://${selectedPlace.social_links}`;
+                    Linking.openURL(url).catch(() => {
+                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                    });
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[styles.detailCardText, styles.socialLinkText]} numberOfLines={1}>
+                        {selectedPlace.social_links}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#666" />
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.detailCard}>
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[styles.detailCardText, styles.noDataText]}>
+                        {t("no_data") || "אין נתונים"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
               )}
             </View>
             </ScrollView>
@@ -1796,6 +1913,7 @@ export default function DriverHomeScreen({ }: Props) {
           </Modal>
         );
       })()}
+
     </View>
   );
 }

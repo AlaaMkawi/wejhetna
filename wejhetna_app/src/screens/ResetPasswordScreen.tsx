@@ -17,12 +17,11 @@ import {
 import Ionicons from "react-native-vector-icons/Ionicons";
 import SuccessModal from "../components/SuccessModal";
 import MessageModal from "./MessageModal";
+import { API_BASE_URL } from "../../config";
 
 const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
-import { API_BASE_URL } from "../../config";
-
 export default function ResetPasswordScreen({ route, navigation }: any) {
   const { t } = useTranslation();
   const emailFromRoute = route?.params?.email || "";

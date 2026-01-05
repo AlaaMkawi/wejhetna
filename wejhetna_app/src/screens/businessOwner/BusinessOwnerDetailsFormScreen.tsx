@@ -32,10 +32,10 @@ import {
 import MessageModal from "../MessageModal";
 
 const DARK_TEAL = "#0f5b63";
-const SOFT_TEAL = "#3a8d96";
-const MINT = "#9bd3d8";
 import { API_BASE_URL } from "../../../config";
 
+const SOFT_TEAL = "#3a8d96";
+const MINT = "#9bd3d8";
 type BusinessOwnerDetailsFormRoute = RouteProp<
   RootStackParamList,
   "BusinessOwnerDetailsForm"
@@ -432,6 +432,18 @@ export default function BusinessOwnerDetailsFormScreen() {
           // Handle different error response formats
           if (typeof errorData?.detail === "string") {
             errorMessage = errorData.detail;
+            
+            // Handle specific "already exists" errors with better messages
+            const errorDetailLower = errorMessage.toLowerCase();
+            if (errorDetailLower.includes("username") && errorDetailLower.includes("already exists")) {
+              errorMessage = t("username_already_exists") || t("username_taken") || "Username already exists. Please choose a different username.";
+            } else if (errorDetailLower.includes("email") && errorDetailLower.includes("already exists")) {
+              errorMessage = t("email_already_exists") || "Email already exists. Please use a different email or try logging in.";
+            } else if (errorDetailLower.includes("phone") && (errorDetailLower.includes("already exists") || errorDetailLower.includes("already"))) {
+              errorMessage = t("phone_already_exists") || t("phone_taken") || "Phone number already exists. Please use a different phone number.";
+            } else if (errorDetailLower.includes("username or email") && errorDetailLower.includes("already exists")) {
+              errorMessage = t("username_or_email_exists") || "Username or email already exists. Please use different credentials or try logging in.";
+            }
           } else if (Array.isArray(errorData?.detail)) {
             // FastAPI validation errors
             const msgs = errorData.detail

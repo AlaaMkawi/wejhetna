@@ -16,6 +16,8 @@ import { RootStackParamList } from "../../navigation/types";
 import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
 import Geolocation from "@react-native-community/geolocation";
 import Ionicons from "react-native-vector-icons/Ionicons";
+import i18n from "../../i18n";
+import { Modal, Alert } from "react-native";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -37,6 +39,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [isFollowingUser, setIsFollowingUser] = useState(false);
   const [currentHeading, setCurrentHeading] = useState<number | null>(null);
   const [mapBearing, setMapBearing] = useState<number>(0);
+  const [hasArrived, setHasArrived] = useState(false);
+  const [showArrivalModal, setShowArrivalModal] = useState(false);
   
   // Animation values for pulsing effect
   const pulseAnim1 = useRef(new Animated.Value(0)).current;
@@ -168,6 +172,26 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
   };
 
+  // Calculate distance between two coordinates in meters (Haversine formula)
+  const calculateDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number => {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
   // Show full route overview
   const showFullRouteOverview = () => {
     if (initialRouteCoordinates && initialRouteCoordinates.features.length > 0) {
@@ -233,6 +257,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     setIsNavigating(true);
     setIsFollowingUser(true);
     setShowFullRoute(false);
+    setHasArrived(false); // Reset arrival state when starting new navigation
+    setShowArrivalModal(false); // Close modal if it was open
     
     // Immediately center on user when starting navigation - smoother transition
     if (userLocation && cameraRef.current) {
@@ -253,6 +279,24 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         const { latitude, longitude, heading, accuracy } = position.coords;
         const newLocation = { lat: latitude, lon: longitude };
         setUserLocation(newLocation);
+
+        // Check if user has arrived at destination (within 50 meters)
+        if (destination && !hasArrived) {
+          const distanceToDestination = calculateDistance(
+            latitude,
+            longitude,
+            destination.lat,
+            destination.lon
+          );
+          
+          if (distanceToDestination <= 50) {
+            // User has arrived!
+            setHasArrived(true);
+            setShowArrivalModal(true);
+            // Stop navigation automatically when arriving
+            stopNavigation();
+          }
+        }
 
         // Update heading for compass
         if (heading !== null && heading !== undefined && !isNaN(heading)) {
@@ -311,6 +355,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     }
     setIsNavigating(false);
     setIsFollowingUser(false);
+    // Don't reset hasArrived - keep it true if user arrived
   };
 
   // Toggle follow user mode
@@ -650,6 +695,66 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           )}
         </View>
       </View>
+
+      {/* Arrival Modal */}
+      <Modal
+        visible={showArrivalModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowArrivalModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.arrivalModalContainer}>
+            <View style={styles.arrivalModalContent}>
+              {/* Success Icon */}
+              <View style={styles.arrivalIconContainer}>
+                <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
+              </View>
+              
+              {/* Title */}
+              <Text style={styles.arrivalModalTitle}>
+                {i18n.language === "ar"
+                  ? "وصلت إلى وجهتك"
+                  : i18n.language === "he"
+                  ? "הגעת ליעד שלך"
+                  : "You Arrived at Your Destination"}
+              </Text>
+              
+              {/* Message */}
+              <Text style={styles.arrivalModalMessage}>
+                {i18n.language === "ar"
+                  ? destination?.name
+                    ? `لقد وصلت إلى ${destination.name}`
+                    : "لقد وصلت إلى وجهتك بنجاح"
+                  : i18n.language === "he"
+                  ? destination?.name
+                    ? `הגעת ל${destination.name}`
+                    : "הגעת ליעד שלך בהצלחה"
+                  : destination?.name
+                  ? `You have arrived at ${destination.name}`
+                  : "You have successfully arrived at your destination"}
+              </Text>
+              
+              {/* Close Button */}
+              <TouchableOpacity
+                style={styles.arrivalModalButton}
+                onPress={() => {
+                  setShowArrivalModal(false);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.arrivalModalButtonText}>
+                  {i18n.language === "ar"
+                    ? "حسناً"
+                    : i18n.language === "he"
+                    ? "אישור"
+                    : "OK"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1059,6 +1164,74 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#4285F4",
     letterSpacing: 0.2,
+  },
+  // Arrival Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  arrivalModalContainer: {
+    width: "85%",
+    maxWidth: 400,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  arrivalModalContent: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    padding: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  arrivalIconContainer: {
+    marginBottom: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  arrivalModalTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 12,
+    textAlign: "center",
+    letterSpacing: -0.5,
+  },
+  arrivalModalMessage: {
+    fontSize: 16,
+    color: "#6B7280",
+    textAlign: "center",
+    marginBottom: 24,
+    lineHeight: 24,
+    paddingHorizontal: 8,
+  },
+  arrivalModalButton: {
+    backgroundColor: DARK_TEAL,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    minWidth: 120,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  arrivalModalButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
 });
 

@@ -34,6 +34,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { API_BASE_URL } from "../../../config";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -156,6 +157,46 @@ const parseOpeningHours = (openingHours: string | null | undefined): Array<{day:
   return parsed;
 };
 
+// Helper function to check if business is currently open
+const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boolean => {
+  if (!openingHours) return false;
+
+  const now = new Date();
+  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const currentDayName = dayNames[currentDay];
+
+  // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
+  const dayEntries = openingHours.split(",").map(s => s.trim());
+  
+  for (const entry of dayEntries) {
+    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
+    if (match) {
+      const [, startH, startM, startP, endH, endM, endP] = match;
+      
+      const startHour = parseInt(startH, 10);
+      const startMin = parseInt(startM, 10);
+      const endHour = parseInt(endH, 10);
+      const endMin = parseInt(endM, 10);
+      
+      // Convert to 24-hour format
+      let startMinutes = startHour * 60 + startMin;
+      let endMinutes = endHour * 60 + endMin;
+      
+      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
+      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
+      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
+      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
+      
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+  }
+  
+  return false;
+};
+
 // Helper function to get opening hours status text (e.g., "Closed · Opens 10:30 Sat")
 const getOpeningHoursStatus = (openingHours: string | null | undefined): string => {
   if (!openingHours) {
@@ -228,46 +269,6 @@ const getOpeningHoursStatus = (openingHours: string | null | undefined): string 
   }
   
   return i18n.language === "ar" ? "مغلق" : "סגור";
-};
-
-// Helper function to check if business is currently open
-const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boolean => {
-  if (!openingHours) return false;
-
-  const now = new Date();
-  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const currentDayName = dayNames[currentDay];
-
-  // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
-  const dayEntries = openingHours.split(",").map(s => s.trim());
-  
-  for (const entry of dayEntries) {
-    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
-    if (match) {
-      const [, startH, startM, startP, endH, endM, endP] = match;
-      
-      const startHour = parseInt(startH, 10);
-      const startMin = parseInt(startM, 10);
-      const endHour = parseInt(endH, 10);
-      const endMin = parseInt(endM, 10);
-      
-      // Convert to 24-hour format
-      let startMinutes = startHour * 60 + startMin;
-      let endMinutes = endHour * 60 + endMin;
-      
-      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
-      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
-      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
-      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
-      
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      
-      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-    }
-  }
-  
-  return false;
 };
 
 // Helper function to get icon for a place based on category and type
@@ -350,6 +351,7 @@ export default function RegularHomeScreen({}: Props) {
   // GPS Location
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
+  const [hasShownLocationPermissionMessage, setHasShownLocationPermissionMessage] = useState(false);
 
   // Destination
   const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
@@ -370,8 +372,6 @@ export default function RegularHomeScreen({}: Props) {
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
   const photoScrollViewRef = useRef<ScrollView>(null);
 
-  // Opening hours expand state
-  const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
 
   // Translation states
   const [announcementTranslated, setAnnouncementTranslated] = useState<string | null>(null);
@@ -388,6 +388,80 @@ export default function RegularHomeScreen({}: Props) {
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
   const [languageSelectorType, setLanguageSelectorType] = useState<"announcement" | "description" | null>(null);
 
+  // Opening hours expand state
+  const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
+
+  // Helper function to format image URI - ensure it's a valid URL
+  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
+  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
+  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
+  const formatImageUri = (uri: string): string => {
+    if (!uri || !uri.trim()) {
+      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
+      return "";
+    }
+    
+    const trimmedUri = uri.trim();
+    
+    try {
+      // If it's already a full URL with the correct base, return as is
+      if (trimmedUri.startsWith(API_BASE_URL)) {
+        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's already a full URL (http:// or https://), extract just the path
+      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
+        // Manually extract the path from the URL
+        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
+        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
+        if (urlMatch && urlMatch[1]) {
+          const path = urlMatch[1];
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If regex fails, try to find /uploads/ in the string
+        const uploadsIndex = trimmedUri.indexOf("/uploads/");
+        if (uploadsIndex !== -1) {
+          const path = trimmedUri.substring(uploadsIndex);
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If we can't extract path, try the original URL (might work if same network)
+        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's a relative path starting with /, prepend API_BASE_URL
+      if (trimmedUri.startsWith("/")) {
+        const formatted = `${API_BASE_URL}${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // If it doesn't start with /, assume it's a filename and add /uploads/
+      // This handles cases where backend might return just "filename.jpg"
+      if (!trimmedUri.includes("/")) {
+        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // Otherwise, try to prepend API_BASE_URL
+      const formatted = `${API_BASE_URL}/${trimmedUri}`;
+      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
+      return formatted;
+    } catch (error) {
+      // If URL parsing fails, try to construct a valid URL
+      console.warn("Error formatting image URI:", trimmedUri, error);
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      return `${API_BASE_URL}/uploads/${trimmedUri}`;
+    }
+  };
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -407,6 +481,7 @@ export default function RegularHomeScreen({}: Props) {
   // Get user's GPS location
   useEffect(() => {
     setLocationLoading(true);
+    
     Geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
@@ -415,9 +490,95 @@ export default function RegularHomeScreen({}: Props) {
       },
       (error) => {
         console.log("GPS error", error);
+        const currentLanguage = i18n.language || "ar";
+        let title = "";
+        let message = "";
+        
+        // Handle different error codes
+        if (error.code === 1) {
+          // PERMISSION_DENIED - Show initial permission message only once
+          if (!hasShownLocationPermissionMessage) {
+            title = currentLanguage === "ar"
+              ? "السماح بالموقع"
+              : currentLanguage === "he"
+              ? "אפשר גישת מיקום"
+              : "Allow Location Access";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
+              : currentLanguage === "he"
+              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
+              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
+            setHasShownLocationPermissionMessage(true);
+          } else {
+            title = currentLanguage === "ar" 
+              ? "السماح بالموقع مطلوب" 
+              : currentLanguage === "he"
+              ? "נדרש אישור מיקום"
+              : "Location Permission Required";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
+              : currentLanguage === "he"
+              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
+              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
+          }
+        } else if (error.code === 2) {
+          // POSITION_UNAVAILABLE
+          title = currentLanguage === "ar"
+            ? "الموقع غير متاح"
+            : currentLanguage === "he"
+            ? "מיקום לא זמין"
+            : "Location Unavailable";
+          message = currentLanguage === "ar"
+            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
+            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
+        } else if (error.code === 3) {
+          // TIMEOUT
+          title = currentLanguage === "ar"
+            ? "انتهت مهلة انتظار الموقع"
+            : currentLanguage === "he"
+            ? "זמן המיקום פג"
+            : "Location Timeout";
+          message = currentLanguage === "ar"
+            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+            : currentLanguage === "he"
+            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
+            : "Getting your location took too long. Please try again.";
+        } else {
+          // Generic error
+          title = currentLanguage === "ar"
+            ? "خطأ في الموقع"
+            : currentLanguage === "he"
+            ? "שגיאת מיקום"
+            : "Location Error";
+          message = currentLanguage === "ar"
+            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
+            : "Could not get your location. Using default location.";
+        }
+        
+        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
+        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
+        
         Alert.alert(
-          t("location_error") || "Location Error",
-          t("failed_to_read_location") || "Could not get your location. Using default location."
+          title,
+          message,
+          [
+            {
+              text: cancelText,
+              style: "cancel"
+            },
+            {
+              text: allowText,
+              onPress: () => {
+                if (error.code === 1) {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
         );
         setLocationLoading(false);
       },
@@ -427,7 +588,7 @@ export default function RegularHomeScreen({}: Props) {
         maximumAge: 10000,
       }
     );
-  }, [t]);
+  }, [t, hasShownLocationPermissionMessage]);
 
   // Fetch all places on mount
   useEffect(() => {
@@ -484,7 +645,7 @@ export default function RegularHomeScreen({}: Props) {
     checkSaved();
   }, [selectedPlace, userId]);
 
-  // Reset opening hours expanded state when place changes
+  // Reset translation states when place changes
   useEffect(() => {
     setOpeningHoursExpanded(false);
     // Reset translation states
@@ -840,10 +1001,55 @@ export default function RegularHomeScreen({}: Props) {
 
   // Get route from user location to destination using OSRM
   const getRoute = async () => {
-    if (!userLocation || !destination) {
-      Alert.alert(
-        t("error") || "Error",
-        t("please_select_destination") || "Please select a destination first"
+    const currentLanguage = i18n.language || "ar";
+    
+    // Check if destination is selected
+    if (!destination) {
+      const title = currentLanguage === "ar"
+        ? "خطأ"
+        : currentLanguage === "he"
+        ? "שגיאה"
+        : "Error";
+      const message = currentLanguage === "ar"
+        ? "يرجى اختيار وجهة أولاً"
+        : currentLanguage === "he"
+        ? "אנא בחר יעד תחילה"
+        : "Please select a destination first";
+      Alert.alert(title, message);
+      return;
+    }
+    
+    // Check if user location is available
+    if (!userLocation) {
+      const title = currentLanguage === "ar"
+        ? "تفعيل الموقع مطلوب"
+        : currentLanguage === "he"
+        ? "נדרש הפעלת מיקום"
+        : "Location Required";
+      const message = currentLanguage === "ar"
+        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
+        : currentLanguage === "he"
+        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
+        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
+      Alert.alert(title, message);
+      
+      // Try to get location again
+      setLocationLoading(true);
+      Geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lon: longitude });
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.log("GPS error when retrying:", error);
+          setLocationLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000,
+        }
       );
       return;
     }
@@ -1740,13 +1946,39 @@ export default function RegularHomeScreen({}: Props) {
       {/* Photo Gallery Full Screen Modal */}
       {selectedPlace && (() => {
         const allImages: string[] = [];
-        if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
-          allImages.push(...selectedPlace.business_images_urls);
+        
+        // Handle business_images_urls - check if it's an array, if not, try to parse it
+        let businessImages: string[] = [];
+        if (selectedPlace.business_images_urls) {
+          if (Array.isArray(selectedPlace.business_images_urls)) {
+            businessImages = selectedPlace.business_images_urls;
+          } else if (typeof selectedPlace.business_images_urls === 'string') {
+            // If it's a string, try to parse it as JSON (defensive)
+            try {
+              const parsed = JSON.parse(selectedPlace.business_images_urls);
+              if (Array.isArray(parsed)) {
+                businessImages = parsed;
+              }
+            } catch (e) {
+              console.warn("Failed to parse business_images_urls as JSON in modal:", selectedPlace.business_images_urls, e);
+            }
+          }
+        }
+        
+        if (businessImages.length > 0) {
+          allImages.push(...businessImages);
         } else if (selectedPlace.main_image_url) {
           allImages.push(selectedPlace.main_image_url);
         }
 
-        if (allImages.length === 0) return null;
+        // Filter out duplicates, empty strings, null, and undefined
+        const uniqueImages = Array.from(new Set(
+          allImages
+            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+            .map(img => img.trim())
+        ));
+
+        if (uniqueImages.length === 0) return null;
 
         return (
           <Modal
@@ -1773,26 +2005,45 @@ export default function RegularHomeScreen({}: Props) {
                 }}
                 style={styles.photoModalScrollView}
               >
-                {allImages.map((imageUri, index) => (
-                  <View key={index} style={styles.photoModalImageContainer}>
-                    <Image
-                      source={{ uri: imageUri }}
-                      style={styles.photoModalImage}
-                      resizeMode="contain"
-                    />
-                  </View>
-                ))}
+                {uniqueImages.map((imageUri, index) => {
+                  const formattedUri = formatImageUri(imageUri);
+                  return (
+                    <View key={`modal-image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoModalImageContainer}>
+                      <Image
+                        source={{ uri: formattedUri }}
+                        style={styles.photoModalImage}
+                        resizeMode="contain"
+                        onError={(e) => {
+                          if (__DEV__) {
+                            console.error(`Modal image ${index} failed:`, {
+                              original: imageUri,
+                              formatted: formattedUri,
+                              error: e?.nativeEvent?.error || e
+                            });
+                          }
+                          // Don't show alert for every failed image, just log it
+                        }}
+                        onLoad={() => {
+                          if (__DEV__) {
+                            console.log(`✅ Modal image ${index} loaded:`, formattedUri);
+                          }
+                        }}
+                      />
+                    </View>
+                  );
+                })}
               </ScrollView>
               {/* Photo counter */}
               <View style={styles.photoCounter}>
                 <Text style={styles.photoCounterText}>
-                  {selectedPhotoIndex + 1} / {allImages.length}
+                  {selectedPhotoIndex + 1} / {uniqueImages.length}
                 </Text>
               </View>
             </View>
           </Modal>
         );
       })()}
+
     </View>
   );
 }
@@ -2211,6 +2462,37 @@ const styles = StyleSheet.create({
   gridImage: {
     width: "100%",
     height: "100%",
+  },
+  photoContainer: {
+    width: "100%",
+    height: "100%",
+    position: "relative",
+  },
+  photoErrorPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#f5f5f5",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 12,
+  },
+  photoErrorText: {
+    fontSize: 10,
+    color: "#999",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  photoLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
   },
   photoModalContainer: {
     flex: 1,

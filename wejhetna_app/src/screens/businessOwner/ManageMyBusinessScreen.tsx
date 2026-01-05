@@ -33,8 +33,9 @@ import {
 import { updatePlace } from "../../api/places";
 import i18n from "../../i18n";
 import { launchImageLibrary } from "react-native-image-picker";
+import MessageModal from "../MessageModal";
+import { API_BASE_URL } from "../../../config";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
 const MINT = "#9bd3d8";
@@ -64,8 +65,8 @@ export default function ManageMyBusinessScreen() {
   const [editingField, setEditingField] = useState<string | null>(null);
 
   // Form states
-  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("");
   const [socialLink, setSocialLink] = useState("");
@@ -95,7 +96,28 @@ export default function ManageMyBusinessScreen() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [deletingImageIndex, setDeletingImageIndex] = useState<number | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  const [imageErrors, setImageErrors] = useState<{ [key: number]: boolean }>({});
+  const [imageLoading, setImageLoading] = useState<{ [key: number]: boolean }>({});
   const scrollViewRef = useRef<any>(null);
+  
+  // Message modal state
+  const [messageModalVisible, setMessageModalVisible] = useState(false);
+  const [messageModalType, setMessageModalType] = useState<"error" | "success">("success");
+  const [messageModalTitle, setMessageModalTitle] = useState("");
+  const [messageModalMessage, setMessageModalMessage] = useState("");
+  
+  // Helper function to show styled message
+  const showMessage = (type: "error" | "success", title: string, message: string) => {
+    setMessageModalType(type);
+    setMessageModalTitle(title);
+    setMessageModalMessage(message);
+    setMessageModalVisible(true);
+  };
+  
+  // Helper function to close message modal
+  const closeMessage = () => {
+    setMessageModalVisible(false);
+  };
   
   // Picker modal state
   const [pickerModalVisible, setPickerModalVisible] = useState(false);
@@ -153,7 +175,8 @@ export default function ManageMyBusinessScreen() {
   };
   
   // Parse opening hours string from database
-  const parseOpeningHours = React.useCallback((hoursString: string | null | undefined): { [key: string]: HourData } => {
+const parseOpeningHours = React.useCallback(
+  (hoursString: string | null | undefined): { [key: string]: HourData } => {
     const defaultHours: { [key: string]: HourData } = {
       Sunday: null,
       Monday: null,
@@ -163,12 +186,11 @@ export default function ManageMyBusinessScreen() {
       Friday: null,
       Saturday: null,
     };
-    
+
     if (!hoursString) return defaultHours;
-    
-    // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
+
     const dayEntries = hoursString.split(",").map(s => s.trim());
-    
+
     dayEntries.forEach(entry => {
       const match = entry.match(/(\w+):\s*(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
       if (match) {
@@ -186,12 +208,47 @@ export default function ManageMyBusinessScreen() {
     });
     
     return defaultHours;
-  }, []);
+  },[]
+);
   
   // Format hours for display
   const formatHours = (hours: HourData): string => {
     if (!hours) return "";
     return `${hours.startHour} ${hours.startPeriod} - ${hours.endHour} ${hours.endPeriod}`;
+  };
+  
+  // Check if business is currently open
+  const isCurrentlyOpen = (day: string, hours: HourData): boolean => {
+    if (!hours) return false;
+    
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    const dayMap: { [key: string]: number } = {
+      Sunday: 0,
+      Monday: 1,
+      Tuesday: 2,
+      Wednesday: 3,
+      Thursday: 4,
+      Friday: 5,
+      Saturday: 6,
+    };
+    
+    if (dayMap[day] !== currentDay) return false;
+    
+    const [startH, startM] = hours.startHour.split(":").map(Number);
+    const [endH, endM] = hours.endHour.split(":").map(Number);
+    
+    let startMinutes = startH * 60 + startM;
+    let endMinutes = endH * 60 + endM;
+    
+    if (hours.startPeriod === "PM" && startH !== 12) startMinutes += 12 * 60;
+    if (hours.startPeriod === "AM" && startH === 12) startMinutes -= 12 * 60;
+    if (hours.endPeriod === "PM" && endH !== 12) endMinutes += 12 * 60;
+    if (hours.endPeriod === "AM" && endH === 12) endMinutes -= 12 * 60;
+    
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
   };
   
   const loadBusinessData = React.useCallback(async (forceReload: boolean = false) => {
@@ -205,7 +262,14 @@ export default function ManageMyBusinessScreen() {
       setLoading(true);
       const userId = await AsyncStorage.getItem("userId");
       if (!userId) {
-        Alert.alert(t("error") || "שגיאה", t("user_id_not_found") || "User ID not found");
+        const currentLanguage = i18n.language || "ar";
+        const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+        const message = currentLanguage === "ar" 
+          ? "لم يتم العثور على معرف المستخدم"
+          : currentLanguage === "he"
+          ? "מזהה משתמש לא נמצא"
+          : "User ID not found";
+        showMessage("error", title, message);
         navigation.goBack();
         return;
       }
@@ -228,17 +292,74 @@ export default function ManageMyBusinessScreen() {
         // Load business images if available
         // Use business_images_urls if available, otherwise fallback to main_image_url
         const images: string[] = [];
-        if (
-          profileData.place.business_images_urls &&
-          Array.isArray(profileData.place.business_images_urls) &&
-          profileData.place.business_images_urls.length > 0
-        ) {
-          images.push(...profileData.place.business_images_urls);
+        
+        // Handle business_images_urls - check if it's an array, if not, try to parse it
+        let parsedBusinessImages: string[] = [];
+        if (profileData.place.business_images_urls) {
+          if (Array.isArray(profileData.place.business_images_urls)) {
+            parsedBusinessImages = profileData.place.business_images_urls;
+          } else if (typeof profileData.place.business_images_urls === 'string') {
+            // If it's a string, try to parse it as JSON (defensive)
+            try {
+              const parsed = JSON.parse(profileData.place.business_images_urls);
+              if (Array.isArray(parsed)) {
+                parsedBusinessImages = parsed;
+              } else {
+                console.warn("business_images_urls is a string but not a valid JSON array:", profileData.place.business_images_urls);
+              }
+            } catch (e) {
+              console.warn("Failed to parse business_images_urls as JSON:", profileData.place.business_images_urls, e);
+            }
+          } else {
+            console.warn("business_images_urls is not an array or string:", typeof profileData.place.business_images_urls, profileData.place.business_images_urls);
+          }
+        }
+        
+        if (parsedBusinessImages.length > 0) {
+          images.push(...parsedBusinessImages);
         } else if (profileData.place.main_image_url) {
           // Fallback to main_image_url for backward compatibility
           images.push(profileData.place.main_image_url);
         }
-        setBusinessImages(images);
+        // Filter out duplicates, empty strings, null, and undefined
+        const uniqueImages = Array.from(new Set(
+          images
+            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+            .map(img => img.trim())
+        ));
+        
+        // Debug logging
+        if (__DEV__) {
+          console.log("=== LOADING BUSINESS IMAGES ===");
+          console.log("Raw business_images_urls:", profileData.place.business_images_urls);
+          console.log("Raw main_image_url:", profileData.place.main_image_url);
+          console.log("Filtered unique images:", uniqueImages);
+          console.log("API_BASE_URL:", API_BASE_URL);
+          uniqueImages.forEach((img, idx) => {
+            const formatted = formatImageUri(img);
+            console.log(`Image ${idx}:`, {
+              original: img,
+              formatted: formatted,
+              isValid: formatted && formatted.startsWith('http')
+            });
+            // Test if URL is accessible (only in dev mode)
+            if (formatted && formatted.startsWith('http')) {
+              fetch(formatted, { method: 'HEAD' })
+                .then(res => {
+                  console.log(`✅ Image ${idx} URL accessible:`, formatted, "Status:", res.status);
+                })
+                .catch(err => {
+                  console.error(`❌ Image ${idx} URL NOT accessible:`, formatted, "Error:", err.message);
+                });
+            }
+          });
+          console.log("=============================");
+        }
+        
+        setBusinessImages(uniqueImages);
+        // Reset image errors and loading states when loading new images
+        setImageErrors({});
+        setImageLoading({});
         // Parse and load opening hours
         if (profileData.place.opening_hours) {
           const parsedHours = parseOpeningHours(profileData.place.opening_hours);
@@ -246,14 +367,18 @@ export default function ManageMyBusinessScreen() {
         }
       }
     } catch (error: any) {
-      Alert.alert(
-        t("error") || "שגיאה",
-        error.message || t("failed_to_load_business_data") || "Failed to load business data"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const message = error.message || (currentLanguage === "ar"
+        ? "فشل تحميل بيانات العمل"
+        : currentLanguage === "he"
+        ? "נכשל בטעינת נתוני העסק"
+        : "Failed to load business data");
+      showMessage("error", title, message);
     } finally {
       setLoading(false);
     }
-  }, [navigation, t, lastLoadTime, parseOpeningHours]);
+  }, [navigation, lastLoadTime, parseOpeningHours]);
   useFocusEffect(
     React.useCallback(() => {
       // Only reload if data is older than 30 seconds when screen comes into focus
@@ -264,7 +389,7 @@ export default function ManageMyBusinessScreen() {
     }, [loadBusinessData, lastLoadTime])
   );
 
-  async function handleSaveField(field: string): Promise<boolean> {
+  async function handleSaveField(field: string, fieldValue?: string): Promise<boolean> {
     if (!place) return false;
 
     try {
@@ -299,7 +424,10 @@ export default function ManageMyBusinessScreen() {
           updateData.social_links = socialLink.trim() || null;
           break;
         case "announcement":
-          updateData.announcement = announcement.trim() || null;
+          // Use fieldValue if provided (for deletion), otherwise use current state
+          const announcementValue = fieldValue !== undefined ? fieldValue : announcement;
+          const trimmedAnnouncement = announcementValue.trim();
+          updateData.announcement = trimmedAnnouncement.length > 0 ? trimmedAnnouncement : null;
           break;
         case "opening_hours":
           // Format opening hours string
@@ -322,11 +450,16 @@ export default function ManageMyBusinessScreen() {
         const savedValue = updateData[field];
         // Ensure state is set to the value that was saved to backend
         if (field === "announcement") {
+          // If savedValue is null (deleted), set to empty string to clear the UI
           const savedAnnouncement = savedValue || "";
+          // Force state update to ensure UI reflects the deletion
           setAnnouncement(savedAnnouncement);
+          // Update place object to reflect deletion
           if (place) {
-            setPlace({ ...place, announcement: savedAnnouncement || null });
+            setPlace({ ...place, announcement: savedValue }); // Use savedValue directly (null if deleted)
           }
+          // Force a re-render by updating a dummy state if needed
+          // The announcement state should already be updated above
         } else if (field === "description") {
           // Use the trimmed description that was saved (or empty string if deleted)
           const trimmedDesc = description.trim();
@@ -347,10 +480,14 @@ export default function ManageMyBusinessScreen() {
           }
         }
         setEditingField(null);
-        Alert.alert(
-          t("success") || "הצלחה",
-          t("updated_successfully") || "Updated successfully"
-        );
+        const currentLanguage = i18n.language || "ar";
+        const successTitle = currentLanguage === "ar" ? "نجح" : currentLanguage === "he" ? "הצלחה" : "Success";
+        const successMessage = currentLanguage === "ar"
+          ? "تم التحديث بنجاح"
+          : currentLanguage === "he"
+          ? "עודכן בהצלחה"
+          : "Updated successfully";
+        showMessage("success", successTitle, successMessage);
         return true;
       }
 
@@ -359,17 +496,25 @@ export default function ManageMyBusinessScreen() {
 
       setEditingField(null);
 
-      Alert.alert(
-        t("success") || "הצלחה",
-        t("updated_successfully") || "Updated successfully"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const successTitle = currentLanguage === "ar" ? "نجح" : currentLanguage === "he" ? "הצלחה" : "Success";
+      const successMessage = currentLanguage === "ar"
+        ? "تم التحديث بنجاح"
+        : currentLanguage === "he"
+        ? "עודכן בהצלחה"
+        : "Updated successfully";
+      showMessage("success", successTitle, successMessage);
       return true;
     } catch (error: any) {
       console.error("Error updating field:", error);
-      Alert.alert(
-        t("error") || "שגיאה",
-        error.message || t("failed_to_update") || "Failed to update"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const errorMessage = error.message || (currentLanguage === "ar"
+        ? "فشل التحديث"
+        : currentLanguage === "he"
+        ? "העדכון נכשל"
+        : "Failed to update");
+      showMessage("error", errorTitle, errorMessage);
       return false;
     } finally {
       setUpdating(false);
@@ -379,10 +524,14 @@ export default function ManageMyBusinessScreen() {
   // Handle image upload
   async function handleAddPhoto() {
     if (businessImages.length >= 20) {
-      Alert.alert(
-        t("error") || "שגיאה",
-        t("max_photos_reached") || "Maximum 20 photos allowed"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const message = currentLanguage === "ar"
+        ? "الحد الأقصى 20 صورة مسموح"
+        : currentLanguage === "he"
+        ? "מקסימום 20 תמונות מותר"
+        : "Maximum 20 photos allowed";
+      showMessage("error", title, message);
       return;
     }
 
@@ -434,27 +583,39 @@ export default function ManageMyBusinessScreen() {
               // Save to backend in background
               saveBusinessImages(finalImages).catch((error) => {
                 console.error("Background save error:", error);
-                Alert.alert(
-                  t("warning") || "אזהרה",
-                  t("image_added_but_save_failed") || "Image added but failed to save. Please try again."
-                );
+                const currentLanguage = i18n.language || "ar";
+                const title = currentLanguage === "ar" ? "تحذير" : currentLanguage === "he" ? "אזהרה" : "Warning";
+                const message = currentLanguage === "ar"
+                  ? "تمت إضافة الصورة لكن فشل الحفظ. يرجى المحاولة مرة أخرى."
+                  : currentLanguage === "he"
+                  ? "התמונה נוספה אבל השמירה נכשלה. אנא נסה שוב."
+                  : "Image added but failed to save. Please try again.";
+                showMessage("error", title, message);
               });
             } else {
               // Remove the local image if upload failed
               setBusinessImages(businessImages);
-              Alert.alert(
-                t("error") || "שגיאה",
-                t("failed_to_upload_image") || "Failed to upload image"
-              );
+              const currentLanguage = i18n.language || "ar";
+              const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+              const message = currentLanguage === "ar"
+                ? "فشل تحميل الصورة"
+                : currentLanguage === "he"
+                ? "העלאת התמונה נכשלה"
+                : "Failed to upload image";
+              showMessage("error", title, message);
             }
           } catch (e: any) {
             console.log("Upload error", e?.message || e);
             // Remove the local image if upload failed
             setBusinessImages(businessImages);
-            Alert.alert(
-              t("error") || "שגיאה",
-              t("failed_to_upload_image") || "Failed to upload image: " + (e?.message || "Unknown error")
-            );
+            const currentLanguage = i18n.language || "ar";
+            const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+            const message = currentLanguage === "ar"
+              ? `فشل تحميل الصورة: ${e?.message || "خطأ غير معروف"}`
+              : currentLanguage === "he"
+              ? `העלאת התמונה נכשלה: ${e?.message || "שגיאה לא ידועה"}`
+              : `Failed to upload image: ${e?.message || "Unknown error"}`;
+            showMessage("error", title, message);
           } finally {
             setUploadingImage(false);
           }
@@ -514,10 +675,14 @@ export default function ManageMyBusinessScreen() {
             } catch (error: any) {
               // Revert on error - restore original images
               await loadBusinessData(true);
-              Alert.alert(
-                t("error") || "שגיאה",
-                error.message || t("failed_to_delete_image") || "Failed to delete image"
-              );
+              const currentLanguage = i18n.language || "ar";
+              const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+              const message = error.message || (currentLanguage === "ar"
+                ? "فشل حذف الصورة"
+                : currentLanguage === "he"
+                ? "מחיקת התמונה נכשלה"
+                : "Failed to delete image");
+              showMessage("error", title, message);
             } finally {
               setDeletingImageIndex(null);
             }
@@ -526,6 +691,7 @@ export default function ManageMyBusinessScreen() {
       ]
     );
   }
+
   function getPlaceName(): string {
     if (!place) return "";
     const currentLanguage = i18n.language || "ar";
@@ -534,10 +700,131 @@ export default function ManageMyBusinessScreen() {
     return place.name;
   }
 
-function getDayName(day: string): string {
-  const dayKey = `day_${day.toLowerCase()}`;
-  return t(dayKey) || day;
-}
+  function getDayName(day: string): string {
+    const dayKey = `day_${day.toLowerCase()}`;
+    return t(dayKey) || day;
+  }
+
+  // Helper function to format image URI - ensure it's a valid URL
+  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
+  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
+  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
+  function formatImageUri(uri: string): string {
+    if (!uri || !uri.trim()) {
+      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
+      return "";
+    }
+    
+    const trimmedUri = uri.trim();
+    
+    try {
+      // If it's already a full URL with the correct base, return as is
+      if (trimmedUri.startsWith(API_BASE_URL)) {
+        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's already a full URL (http:// or https://), extract just the path
+      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
+        // Manually extract the path from the URL
+        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
+        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
+        if (urlMatch && urlMatch[1]) {
+          const path = urlMatch[1];
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If regex fails, try to find /uploads/ in the string
+        const uploadsIndex = trimmedUri.indexOf("/uploads/");
+        if (uploadsIndex !== -1) {
+          const path = trimmedUri.substring(uploadsIndex);
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If we can't extract path, try the original URL (might work if same network)
+        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's a relative path starting with /, prepend API_BASE_URL
+      if (trimmedUri.startsWith("/")) {
+        const formatted = `${API_BASE_URL}${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // If it doesn't start with /, assume it's a filename and add /uploads/
+      // This handles cases where backend might return just "filename.jpg"
+      if (!trimmedUri.includes("/")) {
+        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // Otherwise, try to prepend API_BASE_URL
+      const formatted = `${API_BASE_URL}/${trimmedUri}`;
+      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
+      return formatted;
+    } catch (error) {
+      // If URL parsing fails, try to construct a valid URL
+      console.warn("Error formatting image URI:", trimmedUri, error);
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      return `${API_BASE_URL}/uploads/${trimmedUri}`;
+    }
+  }
+
+  // Handle image load error
+  const handleImageError = (error: any, index: number) => {
+    const originalUri = businessImages[index];
+    const formattedUri = formatImageUri(originalUri);
+    console.warn(`❌ Image ${index} failed to load:`, {
+      original: originalUri,
+      formatted: formattedUri,
+      error: error?.nativeEvent?.error || error,
+      errorCode: error?.nativeEvent?.error?.code,
+      errorMessage: error?.nativeEvent?.error?.message
+    });
+    
+    // Test URL accessibility in dev mode
+    if (__DEV__ && formattedUri) {
+      fetch(formattedUri, { method: 'HEAD' })
+        .then(res => {
+          console.log(`🔍 Fetch test for image ${index}:`, formattedUri, "Status:", res.status, res.statusText);
+        })
+        .catch(err => {
+          console.error(`🔍 Fetch test failed for image ${index}:`, formattedUri, "Error:", err.message);
+        });
+    }
+    
+    setImageErrors((prev) => ({ ...prev, [index]: true }));
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+  };
+
+  // Handle image load success
+  const handleImageLoad = (index: number) => {
+    if (__DEV__) {
+      console.log(`✅ Image ${index} loaded successfully:`, formatImageUri(businessImages[index]));
+    }
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+    setImageErrors((prev) => {
+      const newErrors = { ...prev };
+      delete newErrors[index];
+      return newErrors;
+    });
+  };
+
+  // Handle image load start
+  const handleImageLoadStart = (index: number) => {
+    if (__DEV__) {
+      console.log(`🔄 Image ${index} loading:`, formatImageUri(businessImages[index]));
+    }
+    setImageLoading((prev) => ({ ...prev, [index]: true }));
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -697,8 +984,16 @@ function getDayName(day: string): string {
                 style={styles.socialLinkContainer}
                 onPress={() => {
                   const url = socialLink.startsWith('http') ? socialLink : `https://${socialLink}`;
-                  Linking.openURL(url).catch(() => {
-                    Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                  Linking.openURL(url).catch(err => {
+                      console.error(err);
+                      const currentLanguage = i18n.language || "ar";
+                      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+                      const message = currentLanguage === "ar"
+                        ? "لا يمكن فتح الرابط"
+                        : currentLanguage === "he"
+                        ? "לא ניתן לפתוח את הקישור"
+                        : "Could not open link";
+                      showMessage("error", title, message);
                   });
                 }}
               >
@@ -820,271 +1115,279 @@ function getDayName(day: string): string {
             animationType="slide"
             onRequestClose={() => setShowSocialLinkModal(false)}
           >
-  <View style={styles.modalOverlay}>
-    <View style={styles.modalContent}>
-      <View style={styles.modalHeader}>
-        <Text style={styles.modalTitle}>
-          {socialLink ? t("edit_social_link") || "Edit Social Link" : t("add_social_link") || "Add Social Link"}
-        </Text>
-        <TouchableOpacity
-          onPress={() => setShowSocialLinkModal(false)}
-          style={styles.modalCloseButton}
-        >
-          <Ionicons name="close" size={24} color={DARK_TEAL} />
-        </TouchableOpacity>
-      </View>
-      <TextInput
-        style={styles.modalInput}
-        value={socialLink}
-        onChangeText={setSocialLink}
-        placeholder={t("social_link_placeholder") || "https://facebook.com/yourpage or https://instagram.com/yourpage"}
-        placeholderTextColor="#9ab8bd"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        contextMenuHidden={false}
-      />
-      <View style={styles.modalButtons}>
-        <TouchableOpacity
-          style={[styles.modalButton, styles.modalCancelButton]}
-          onPress={() => {
-            setSocialLink(place?.social_links || "");
-            setShowSocialLinkModal(false);
-          }}
-        >
-          <Text style={styles.modalCancelText}>
-            {t("cancel") || "Cancel"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.modalButton, styles.modalSaveButton]}
-          onPress={async () => {
-            await handleSaveField("social_link");
-            setShowSocialLinkModal(false);
-          }}
-          disabled={updating}
-        >
-          {updating ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={styles.modalSaveText}>
-              {t("save") || "Save"}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </View>
-  </View>
-</Modal>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>
+                    {socialLink ? t("edit_social_link") || "Edit Social Link" : t("add_social_link") || "Add Social Link"}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setShowSocialLinkModal(false)}
+                    style={styles.modalCloseButton}
+                  >
+                    <Ionicons name="close" size={24} color={DARK_TEAL} />
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.modalInput}
+                  value={socialLink}
+                  onChangeText={setSocialLink}
+                  placeholder={t("social_link_placeholder") || "https://facebook.com/yourpage or https://instagram.com/yourpage"}
+                  placeholderTextColor="#9ab8bd"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  contextMenuHidden={false}
+                />
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalCancelButton]}
+                    onPress={() => {
+                      setSocialLink(place?.social_links || "");
+                      setShowSocialLinkModal(false);
+                    }}
+                  >
+                    <Text style={styles.modalCancelText}>
+                      {t("cancel") || "Cancel"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalSaveButton]}
+                    onPress={async () => {
+                      await handleSaveField("social_link");
+                      setShowSocialLinkModal(false);
+                    }}
+                    disabled={updating}
+                  >
+                    {updating ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.modalSaveText}>
+                        {t("save") || "Save"}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
 
-{/* Description Modal */}
-<Modal
-  visible={showDescriptionModal}
-  transparent={true}
-  animationType="slide"
-  onRequestClose={() => setShowDescriptionModal(false)}
->
-  <View style={styles.modalOverlay}>
-    <View style={styles.modalContent}>
-      <View style={styles.modalHeader}>
-        <Text style={styles.modalTitle}>
-          {description ? t("edit_description") || "Edit Description" : t("add_description") || "Add Description"}
-        </Text>
-        <TouchableOpacity
-          onPress={() => {
-            setDescription(place?.description || "");
-            setShowDescriptionModal(false);
-          }}
-          style={styles.modalCloseButton}
-        >
-          <Ionicons name="close" size={24} color={DARK_TEAL} />
-        </TouchableOpacity>
-      </View>
-      <TextInput
-        style={[styles.modalInput, styles.descriptionTextArea]}
-        value={description}
-        onChangeText={setDescription}
-        placeholder={t("description_placeholder") || "Write about your business, services, special offers..."}
-        placeholderTextColor="#9ab8bd"
-        multiline={true}
-        numberOfLines={6}
-        textAlignVertical="top"
-        maxLength={1000}
-      />
-      <Text style={styles.characterCount}>
-        {description.length}/1000
-      </Text>
-      <View style={styles.modalButtons}>
-        <TouchableOpacity
-          style={[styles.modalButton, styles.modalCancelButton]}
-          onPress={() => {
-            setDescription(place?.description || "");
-            setShowDescriptionModal(false);
-          }}
-        >
-          <Text style={styles.modalCancelText}>
-            {t("cancel") || "Cancel"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.modalButton, styles.modalSaveButton]}
-          onPress={async () => {
-            const success = await handleSaveField("description");
-            if (success) {
-              // State is already updated in handleSaveField
-              setShowDescriptionModal(false);
-            }
-          }}
-          disabled={updating}
-        >
-          {updating ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={styles.modalSaveText}>
-              {t("save") || "Save"}
-            </Text>
-          )}
-        </TouchableOpacity>
-      </View>
-    </View>
-  </View>
-</Modal>
-
-{/* Announcement Section */}
-<View style={styles.section}>
-  <View style={[styles.sectionHeader, I18nManager.isRTL && styles.sectionHeaderRTL]}>
-    <Text style={[styles.sectionTitle, I18nManager.isRTL && styles.sectionTitleRTL]}>
-      {t("announcement") || "Announcement"}
-    </Text>
-    <TouchableOpacity onPress={() => setShowAnnouncementModal(true)}>
-      <Ionicons name="create-outline" size={20} color={DARK_TEAL} />
-    </TouchableOpacity>
-  </View>
-  
-  {announcement && announcement.trim() ? (
-    <View style={styles.announcementBox}>
-      <Text style={styles.announcementText}>{announcement}</Text>
-      <TouchableOpacity
-        style={styles.deleteAnnouncementButton}
-        onPress={async () => {
-          Alert.alert(
-            t("delete_announcement") || "Delete Announcement",
-            t("delete_announcement_confirmation") || "Are you sure you want to delete this announcement?",
-            [
-              {
-                text: t("cancel") || "Cancel",
-                style: "cancel"
-              },
-              {
-                text: t("delete") || "Delete",
-                style: "destructive",
-                onPress: async () => {
-                  setAnnouncement("");
-                  await handleSaveField("announcement");
-                }
-              }
-            ]
-          );
-        }}
-      >
-        <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
-      </TouchableOpacity>
-    </View>
-  ) : (
-    <TouchableOpacity 
-      style={styles.addAnnouncementButton}
-      onPress={() => setShowAnnouncementModal(true)}
-    >
-      <Ionicons name="megaphone-outline" size={20} color={DARK_TEAL} />
-      <Text style={styles.addAnnouncementText}>
-        + {t("add_announcement") || "Add Announcement"}
-      </Text>
-    </TouchableOpacity>
-  )}
-
-  {/* Announcement Modal */}
-  <Modal
-    visible={showAnnouncementModal}
-    transparent={true}
-    animationType="slide"
-    onRequestClose={() => setShowAnnouncementModal(false)}
-  >
-    <View style={styles.modalOverlay}>
-      <View style={styles.modalContent}>
-        <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>
-            {announcement ? t("update_announcement") || "Update Announcement" : t("add_announcement") || "Add Announcement"}
-          </Text>
-          <TouchableOpacity
-            onPress={() => {
-              setAnnouncement(place?.announcement || "");
-              setShowAnnouncementModal(false);
-            }}
-            style={styles.modalCloseButton}
+          {/* Description Modal */}
+          <Modal
+            visible={showDescriptionModal}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setShowDescriptionModal(false)}
           >
-            <Ionicons name="close" size={24} color={DARK_TEAL} />
-          </TouchableOpacity>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>
+                    {description ? t("edit_description") || "Edit Description" : t("add_description") || "Add Description"}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setDescription(place?.description || "");
+                      setShowDescriptionModal(false);
+                    }}
+                    style={styles.modalCloseButton}
+                  >
+                    <Ionicons name="close" size={24} color={DARK_TEAL} />
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={[styles.modalInput, styles.descriptionTextArea]}
+                  value={description}
+                  onChangeText={setDescription}
+                  placeholder={t("description_placeholder") || "Write about your business, services, special offers..."}
+                  placeholderTextColor="#9ab8bd"
+                  multiline={true}
+                  numberOfLines={6}
+                  textAlignVertical="top"
+                  maxLength={1000}
+                />
+                <Text style={styles.characterCount}>
+                  {description.length}/1000
+                </Text>
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalCancelButton]}
+                    onPress={() => {
+                      setDescription(place?.description || "");
+                      setShowDescriptionModal(false);
+                    }}
+                  >
+                    <Text style={styles.modalCancelText}>
+                      {t("cancel") || "Cancel"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalSaveButton]}
+                    onPress={async () => {
+                      const success = await handleSaveField("description");
+                      if (success) {
+                        // State is already updated in handleSaveField
+                        setShowDescriptionModal(false);
+                      }
+                    }}
+                    disabled={updating}
+                  >
+                    {updating ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.modalSaveText}>
+                        {t("save") || "Save"}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
         </View>
-        <TextInput
-          style={[styles.modalInput, styles.announcementTextArea]}
-          value={announcement}
-          onChangeText={setAnnouncement}
-          placeholder={t("announcement_placeholder") || "Today only 20% discount..."}
-          placeholderTextColor="#9ab8bd"
-          multiline={true}
-          numberOfLines={4}
-          textAlignVertical="top"
-          maxLength={500}
-        />
-        <Text style={styles.characterCount}>
-          {announcement.length}/500
-        </Text>
-        <View style={styles.modalButtons}>
-          <TouchableOpacity
-            style={[styles.modalButton, styles.modalCancelButton]}
-            onPress={() => {
-              // Reset to saved value on cancel
-              const savedAnnouncement = place?.announcement || "";
-              setAnnouncement(savedAnnouncement);
-              setShowAnnouncementModal(false);
-            }}
-          >
-            <Text style={styles.modalCancelText}>
-              {t("cancel") || "Cancel"}
+
+        {/* Announcement Section */}
+        <View style={styles.section}>
+          <View style={[styles.sectionHeader, I18nManager.isRTL && styles.sectionHeaderRTL]}>
+            <Text style={[styles.sectionTitle, I18nManager.isRTL && styles.sectionTitleRTL]}>
+              {t("announcement") || "Announcement"}
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.modalButton, styles.modalSaveButton]}
-            onPress={async () => {
-              const success = await handleSaveField("announcement");
-              if (success) {
-                // Keep the announcement state as is (already updated from input)
-                setShowAnnouncementModal(false);
-              }
-            }}
-            disabled={updating}
-          >
-            {updating ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.modalSaveText}>
-                {t("save") || "Save"}
+            <TouchableOpacity onPress={() => setShowAnnouncementModal(true)}>
+              <Ionicons name="create-outline" size={20} color={DARK_TEAL} />
+            </TouchableOpacity>
+          </View>
+          
+          {announcement && announcement.trim() ? (
+            <View style={styles.announcementBox}>
+              <Text style={styles.announcementText}>{announcement}</Text>
+              <TouchableOpacity
+                style={styles.deleteAnnouncementButton}
+                onPress={async () => {
+                  Alert.alert(
+                    t("delete_announcement") || "Delete Announcement",
+                    t("delete_announcement_confirmation") || "Are you sure you want to delete this announcement?",
+                    [
+                      {
+                        text: t("cancel") || "Cancel",
+                        style: "cancel"
+                      },
+                      {
+                        text: t("delete") || "Delete",
+                        style: "destructive",
+                        onPress: async () => {
+                          // Clear state immediately using functional update to ensure it works
+                          setAnnouncement(() => "");
+                          // Update place object immediately to reflect deletion in UI
+                          if (place) {
+                            setPlace((prevPlace) => ({ ...prevPlace, announcement: null }));
+                          }
+                          // Pass empty string directly to handleSaveField to ensure it uses the deleted value
+                          await handleSaveField("announcement", "");
+                          // Force a final state update after save to ensure UI reflects deletion
+                          setAnnouncement(() => "");
+                          if (place) {
+                            setPlace((prevPlace) => ({ ...prevPlace, announcement: null }));
+                          }
+                        }
+                      }
+                    ]
+                  );
+                }}
+              >
+                <Ionicons name="trash-outline" size={18} color="#ff6b6b" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={styles.addAnnouncementButton}
+              onPress={() => setShowAnnouncementModal(true)}
+            >
+              <Ionicons name="megaphone-outline" size={20} color={DARK_TEAL} />
+              <Text style={styles.addAnnouncementText}>
+                + {t("add_announcement") || "Add Announcement"}
               </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  </Modal>
-</View>
+            </TouchableOpacity>
+          )}
+
+          {/* Announcement Modal */}
+          <Modal
+            visible={showAnnouncementModal}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setShowAnnouncementModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>
+                    {announcement ? t("update_announcement") || "Update Announcement" : t("add_announcement") || "Add Announcement"}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setAnnouncement(place?.announcement || "");
+                      setShowAnnouncementModal(false);
+                    }}
+                    style={styles.modalCloseButton}
+                  >
+                    <Ionicons name="close" size={24} color={DARK_TEAL} />
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={[styles.modalInput, styles.announcementTextArea]}
+                  value={announcement}
+                  onChangeText={setAnnouncement}
+                  placeholder={t("announcement_placeholder") || "Today only 20% discount..."}
+                  placeholderTextColor="#9ab8bd"
+                  multiline={true}
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                  maxLength={500}
+                />
+                <Text style={styles.characterCount}>
+                  {announcement.length}/500
+                </Text>
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalCancelButton]}
+                    onPress={() => {
+                      // Reset to saved value on cancel
+                      const savedAnnouncement = place?.announcement || "";
+                      setAnnouncement(savedAnnouncement);
+                      setShowAnnouncementModal(false);
+                    }}
+                  >
+                    <Text style={styles.modalCancelText}>
+                      {t("cancel") || "Cancel"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalSaveButton]}
+                    onPress={async () => {
+                      const success = await handleSaveField("announcement");
+                      if (success) {
+                        // Keep the announcement state as is (already updated from input)
+                        setShowAnnouncementModal(false);
+                      }
+                    }}
+                    disabled={updating}
+                  >
+                    {updating ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.modalSaveText}>
+                        {t("save") || "Save"}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
         </View>
 
         {/* Opening and Closing Hours Section */}
         <View style={styles.section}>
           <View style={[styles.sectionHeader, I18nManager.isRTL && styles.sectionHeaderRTL]}>
-            <Text style={styles.sectionTitle}>
-              {t("opening_and_closing_hours") || "Opening and Closing Hours"}
-            </Text>
             {editingField === "opening_hours" && (
               <TouchableOpacity
                 style={styles.saveChangesButton}
@@ -1100,10 +1403,14 @@ function getDayName(day: string): string {
                 )}
               </TouchableOpacity>
             )}
+            <Text style={[styles.sectionTitle, I18nManager.isRTL && styles.sectionTitleRTL]}>
+              {t("opening_and_closing_hours") || "Opening and Closing Hours"}
+            </Text>
           </View>
 
           {Object.entries(openingHours).map(([day, hours]) => {
             const isOpen = hours !== null;
+            const currentlyOpen = isOpen && isCurrentlyOpen(day, hours);
             return (
               <View key={day} style={styles.hoursRow}>
                 <View style={styles.dayRow}>
@@ -1114,7 +1421,16 @@ function getDayName(day: string): string {
                       <View style={styles.dayDot} />
                     </View>
                   )}
+
                   <Text style={styles.dayText}>{getDayName(day)}</Text>
+
+                  {currentlyOpen && (
+                    <View style={[styles.statusBadge, styles.statusOpen]}>
+                      <Text style={styles.statusText}>
+                        {t("open_now") || "Open now"}
+                      </Text>
+                    </View>
+                  )}
                 </View>
                 {editingField === "opening_hours" ? (
                   <View style={styles.hoursPickerContainer}>
@@ -1282,32 +1598,68 @@ function getDayName(day: string): string {
 
           <View style={styles.photoGallery}>
             {/* Display existing photos */}
-            {businessImages.map((imageUri, index) => (
-              <View key={index} style={styles.photoItem}>
-                <TouchableOpacity
-                  onPress={() => setSelectedImageIndex(index)}
-                  activeOpacity={0.9}
-                >
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={styles.photo}
-                  />
-                </TouchableOpacity>
-                {deletingImageIndex === index ? (
-                  <View style={styles.photoLoadingOverlay}>
-                    <ActivityIndicator size="small" color="#fff" />
-                  </View>
-                ) : (
+            {businessImages.map((imageUri, index) => {
+              const hasError = imageErrors[index];
+              const isLoading = imageLoading[index];
+              const formattedUri = formatImageUri(imageUri);
+              
+              // Skip rendering if URI is invalid
+              if (!imageUri || !formattedUri) {
+                return null;
+              }
+              
+              return (
+                <View key={`image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoItem}>
                   <TouchableOpacity
-                    style={styles.photoDeleteButton}
-                    onPress={() => handleDeletePhoto(index)}
-                    disabled={deletingImageIndex !== null || uploadingImage}
+                    onPress={() => setSelectedImageIndex(index)}
+                    activeOpacity={0.9}
                   >
-                    <Ionicons name="close-circle" size={24} color="#ff6b6b" />
+                    {hasError ? (
+                      <View style={styles.photoErrorPlaceholder}>
+                        <Ionicons name="image-outline" size={32} color="#999" />
+                        <Text style={styles.photoErrorText} numberOfLines={2}>
+                          {t("image_failed_to_load") || "Failed to load"}
+                        </Text>
+                        {__DEV__ && (
+                          <Text style={[styles.photoErrorText, { fontSize: 8, marginTop: 4 }]} numberOfLines={1}>
+                            {formattedUri.substring(0, 30)}...
+                          </Text>
+                        )}
+                      </View>
+                    ) : (
+                      <View style={styles.photoContainer}>
+                        <Image
+                          source={{ uri: formattedUri }}
+                          style={styles.photo}
+                          onError={(e) => handleImageError(e, index)}
+                          onLoad={() => handleImageLoad(index)}
+                          onLoadStart={() => handleImageLoadStart(index)}
+                          resizeMode="cover"
+                        />
+                        {isLoading && (
+                          <View style={styles.photoLoadingOverlay}>
+                            <ActivityIndicator size="small" color="#fff" />
+                          </View>
+                        )}
+                      </View>
+                    )}
                   </TouchableOpacity>
-                )}
-              </View>
-            ))}
+                  {deletingImageIndex === index ? (
+                    <View style={styles.photoLoadingOverlay}>
+                      <ActivityIndicator size="small" color="#fff" />
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.photoDeleteButton}
+                      onPress={() => handleDeletePhoto(index)}
+                      disabled={deletingImageIndex !== null || uploadingImage}
+                    >
+                      <Ionicons name="close-circle" size={24} color="#ff6b6b" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
             
             {/* Add photo placeholders for remaining slots (max 20 total) */}
             {businessImages.length < 20 && (
@@ -1345,16 +1697,43 @@ function getDayName(day: string): string {
             >
               <Ionicons name="close" size={32} color="#fff" />
             </TouchableOpacity>
-            {selectedImageIndex !== null && businessImages[selectedImageIndex] && (
-              <Image
-                source={{ uri: businessImages[selectedImageIndex] }}
-                style={styles.fullScreenImage}
-                resizeMode="contain"
-              />
-            )}
+            {selectedImageIndex !== null && businessImages[selectedImageIndex] && (() => {
+              const fullScreenUri = formatImageUri(businessImages[selectedImageIndex]);
+              return (
+                <Image
+                  source={{ uri: fullScreenUri }}
+                  style={styles.fullScreenImage}
+                  resizeMode="contain"
+                  onError={(e) => {
+                    if (__DEV__) {
+                      console.error(`❌ Full-screen image failed:`, {
+                        original: businessImages[selectedImageIndex],
+                        formatted: fullScreenUri,
+                        error: e?.nativeEvent?.error || e
+                      });
+                    }
+                    // Don't show alert - just close the modal silently
+                    setSelectedImageIndex(null);
+                  }}
+                  onLoad={() => {
+                    if (__DEV__) {
+                      console.log(`✅ Full-screen image loaded:`, fullScreenUri);
+                    }
+                  }}
+                />
+              );
+            })()}
           </View>
         </Modal>
 
+        {/* Styled Message Modal */}
+        <MessageModal
+          visible={messageModalVisible}
+          type={messageModalType}
+          title={messageModalTitle}
+          message={messageModalMessage}
+          onClose={closeMessage}
+        />
       </ScrollView>
     </View>
   );
@@ -1388,8 +1767,6 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === "ios" ? 50 : 16,
     paddingBottom: 12,
     backgroundColor: SOFT_HEADER,
-    borderBottomWidth: 1,
-    borderBottomColor: "#E5E7EB",
   },
   backButton: {
     padding: 4,
@@ -1397,7 +1774,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#1A1A1A",
+    color: "#fff",
     flex: 1,
     textAlign: "center",
   },
@@ -1453,7 +1830,7 @@ const styles = StyleSheet.create({
   businessName: {
     fontSize: 20,
     fontWeight: "700",
-    color: DARK_TEAL,
+    color: "#000",
   },
   businessNameEnglish: {
     fontSize: 16,
@@ -1477,6 +1854,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     overflow: "hidden",
     marginLeft: 12,
+    backgroundColor: "#e0e0e0",
+    borderWidth: 1,
+    borderColor: "#d0d0d0",
   },
   mapView: {
     width: "100%",
@@ -1513,7 +1893,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: DARK_TEAL,
-  textAlign: "left",
+    textAlign: "left",
   },
   sectionTitleRTL: {
     textAlign: "right",
@@ -1571,7 +1951,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#d6ebee",
     fontSize: 14,
-    color: DARK_TEAL,
+    color: "#000",
   },
   textArea: {
     minHeight: 60,
@@ -1592,7 +1972,7 @@ const styles = StyleSheet.create({
   },
   addSocialLinkText: {
     fontSize: 14,
-    color: DARK_TEAL,
+    color: "#000",
     fontWeight: "600",
     marginLeft: 12,
   },
@@ -1621,12 +2001,12 @@ const styles = StyleSheet.create({
   },
   dayText: {
     fontSize: 14,
-    color: DARK_TEAL,
+    color: "#000",
     fontWeight: "500",
   },
   hoursText: {
     fontSize: 14,
-  color: "#000",
+    color: "#000",
   },
   hoursPickerContainer: {
     flex: 1,
@@ -1750,6 +2130,11 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     position: "relative",
   },
+  photoContainer: {
+    width: "100%",
+    height: "100%",
+    position: "relative",
+  },
   photo: {
     width: "100%",
     height: "100%",
@@ -1772,6 +2157,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  photoErrorPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#f5f5f5",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 8,
+  },
+  photoErrorText: {
+    fontSize: 10,
+    color: "#999",
+    marginTop: 4,
+    textAlign: "center",
+  },
   addPhotoPlaceholder: {
     width: 100,
     height: 100,
@@ -1790,254 +2191,253 @@ const styles = StyleSheet.create({
   },
   addPhotoText: {
     fontSize: 14,
-  color: "#000",
-  fontWeight: "600",
-},
-socialLinkContainer: {
-  flex: 1,
-  marginLeft: 12,
-},
-socialLinkText: {
-  fontSize: 14,
-  color: "#000",
-  textDecorationLine: "underline",
-},
-editLinkButton: {
-  padding: 4,
-  marginLeft: 8,
-},
-modalOverlay: {
-  flex: 1,
-  backgroundColor: "rgba(0, 0, 0, 0.5)",
-  justifyContent: "center",
-  alignItems: "center",
-},
-modalContent: {
-  backgroundColor: "#fff",
-  borderRadius: 16,
-  padding: 20,
-  width: "85%",
-  maxWidth: 400,
-},
-modalHeader: {
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-  marginBottom: 20,
-},
-modalTitle: {
-  fontSize: 18,
-  fontWeight: "700",
-  color: DARK_TEAL,
-},
-modalCloseButton: {
-  padding: 4,
-},
-modalInput: {
-  backgroundColor: "#f5fdff",
-  borderRadius: 8,
-  paddingHorizontal: 12,
-  paddingVertical: 12,
-  borderWidth: 1,
-  borderColor: "#d6ebee",
-  fontSize: 14,
-  color: "#000",
-  marginBottom: 20,
-},
-modalButtons: {
-  flexDirection: "row",
-  justifyContent: "flex-end",
-  gap: 12,
-},
-modalButton: {
-  paddingHorizontal: 20,
-  paddingVertical: 10,
-  borderRadius: 8,
-},
-modalCancelButton: {
-  backgroundColor: "transparent",
-},
-modalCancelText: {
-  fontSize: 14,
-  color: "#000",
-  fontWeight: "600",
-},
-modalSaveButton: {
-  backgroundColor: DARK_TEAL,
-},
-modalSaveText: {
-  fontSize: 14,
-  color: "#fff",
-  fontWeight: "600",
-},
-modalInputError: {
-  borderColor: "#ff6b6b",
-  borderWidth: 2,
-},
-errorText: {
-  fontSize: 12,
-  color: "#ff6b6b",
-  marginTop: 4,
-  marginBottom: 8,
-},
-pickerModalOverlay: {
-  flex: 1,
-  backgroundColor: "rgba(0, 0, 0, 0.5)",
-  justifyContent: "flex-end",
-},
-pickerModalContent: {
-  backgroundColor: "#fff",
-  borderTopLeftRadius: 20,
-  borderTopRightRadius: 20,
-  maxHeight: "50%",
-  paddingBottom: Platform.OS === "ios" ? 20 : 0,
-},
-pickerModalHeader: {
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-  padding: 16,
-  borderBottomWidth: 1,
-  borderBottomColor: "#f0f0f0",
-},
-pickerModalTitle: {
-  fontSize: 18,
-  fontWeight: "700",
-  color: DARK_TEAL,
-},
-pickerModalCloseButton: {
-  padding: 4,
-},
-pickerModalList: {
-  maxHeight: 300,
-},
-pickerModalItem: {
-  flexDirection: "row",
-  justifyContent: "space-between",
-  alignItems: "center",
-  padding: 16,
-  borderBottomWidth: 1,
-  borderBottomColor: "#f0f0f0",
-},
-pickerModalItemSelected: {
-  backgroundColor: "#f5fdff",
-},
-pickerModalItemText: {
-  fontSize: 16,
-  color: "#000",
-},
-pickerModalItemTextSelected: {
-  color: DARK_TEAL,
-  fontWeight: "600",
-},
-fullScreenImageContainer: {
-  flex: 1,
-  backgroundColor: "rgba(0, 0, 0, 0.95)",
-  justifyContent: "center",
-  alignItems: "center",
-},
-fullScreenImage: {
-  width: "100%",
-  height: "100%",
-},
-fullScreenImageCloseButton: {
-  position: "absolute",
-  top: Platform.OS === "ios" ? 50 : 20,
-  right: 20,
-  zIndex: 1,
-  backgroundColor: "rgba(0, 0, 0, 0.5)",
-  borderRadius: 20,
-  padding: 8,
-},
-announcementBox: {
-  backgroundColor: "#f5fdff",
-  borderRadius: 12,
-  padding: 16,
-  borderWidth: 1,
-  borderColor: "#d6ebee",
-  borderLeftWidth: 4,
-  borderLeftColor: DARK_TEAL,
-  position: "relative",
-},
-announcementText: {
-  fontSize: 14,
-  color: "#000",
-  lineHeight: 20,
-  paddingRight: 30,
-},
-deleteAnnouncementButton: {
-  position: "absolute",
-  top: 12,
-  right: 12,
-  padding: 4,
-},
-addAnnouncementButton: {
-  flexDirection: "row",
-  alignItems: "center",
-  paddingVertical: 12,
-},
-addAnnouncementText: {
-  fontSize: 14,
-  color: "#000",
-  fontWeight: "600",
-  marginLeft: 12,
-},
-announcementTextArea: {
-  minHeight: 100,
-  textAlignVertical: "top",
-  marginBottom: 8,
-},
-characterCount: {
-  fontSize: 12,
-  color: SOFT_TEAL,
-  textAlign: "right",
-  marginBottom: 12,
-},
-descriptionBox: {
-  backgroundColor: "#f5fdff",
-  borderRadius: 12,
-  padding: 16,
-  borderWidth: 1,
-  borderColor: "#d6ebee",
-  borderLeftWidth: 4,
-  borderLeftColor: SOFT_TEAL,
-  position: "relative",
-  marginTop: 8,
-},
-descriptionText: {
-  fontSize: 14,
-  color: "#000",
-  lineHeight: 20,
-  paddingRight: 60,
-},
-deleteDescriptionButton: {
-  position: "absolute",
-  top: 12,
-  right: 12,
-  padding: 4,
-},
-editDescriptionButton: {
-  position: "absolute",
-  top: 12,
-  right: 40,
-  padding: 4,
-},
-addDescriptionButton: {
-  flexDirection: "row",
-  alignItems: "center",
-  paddingVertical: 12,
-  marginTop: 8,
-},
-addDescriptionText: {
-  fontSize: 14,
-  color: "#000",
-  fontWeight: "600",
-  marginLeft: 12,
-},
-descriptionTextArea: {
-  minHeight: 120,
-  textAlignVertical: "top",
-  marginBottom: 8,
-},
+    color: "#000",
+    fontWeight: "600",
+  },
+  socialLinkContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  socialLinkText: {
+    fontSize: 14,
+    color: "#000",
+    textDecorationLine: "underline",
+  },
+  editLinkButton: {
+    padding: 4,
+    marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 20,
+    width: "85%",
+    maxWidth: 400,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: DARK_TEAL,
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  modalInput: {
+    backgroundColor: "#f5fdff",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+    fontSize: 14,
+    color: "#000",
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
+  modalButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  modalCancelButton: {
+    backgroundColor: "transparent",
+  },
+  modalCancelText: {
+    fontSize: 14,
+    color: "#000",
+    fontWeight: "600",
+  },
+  modalSaveButton: {
+    backgroundColor: DARK_TEAL,
+  },
+  modalSaveText: {
+    fontSize: 14,
+    color: "#fff",
+    fontWeight: "600",
+  },
+  modalInputError: {
+    borderColor: "#ff6b6b",
+    borderWidth: 2,
+  },
+  errorText: {
+    fontSize: 12,
+    color: "#ff6b6b",
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  pickerModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end",
+  },
+  pickerModalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "50%",
+    paddingBottom: Platform.OS === "ios" ? 20 : 0,
+  },
+  pickerModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  pickerModalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: DARK_TEAL,
+  },
+  pickerModalCloseButton: {
+    padding: 4,
+  },
+  pickerModalList: {
+    maxHeight: 300,
+  },
+  pickerModalItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f0f0",
+  },
+  pickerModalItemSelected: {
+    backgroundColor: "#f5fdff",
+  },
+  pickerModalItemText: {
+    fontSize: 16,
+    color: "#000",
+  },
+  pickerModalItemTextSelected: {
+    color: DARK_TEAL,
+    fontWeight: "600",
+  },
+  fullScreenImageContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fullScreenImage: {
+    width: "100%",
+    height: "100%",
+  },
+  fullScreenImageCloseButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 50 : 20,
+    right: 20,
+    zIndex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    borderRadius: 20,
+    padding: 8,
+  },
+  announcementBox: {
+    backgroundColor: "#f5fdff",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+    borderLeftWidth: 4,
+    borderLeftColor: DARK_TEAL,
+    position: "relative",
+  },
+  announcementText: {
+    fontSize: 14,
+    color: "#000",
+    lineHeight: 20,
+    paddingRight: 30,
+  },
+  deleteAnnouncementButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    padding: 4,
+  },
+  addAnnouncementButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  addAnnouncementText: {
+    fontSize: 14,
+    color: "#000",
+    fontWeight: "600",
+    marginLeft: 12,
+  },
+  announcementTextArea: {
+    minHeight: 100,
+    textAlignVertical: "top",
+    marginBottom: 8,
+  },
+  characterCount: {
+    fontSize: 12,
+    color: SOFT_TEAL,
+    textAlign: "right",
+    marginBottom: 12,
+  },
+  descriptionBox: {
+    backgroundColor: "#f5fdff",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+    borderLeftWidth: 4,
+    borderLeftColor: SOFT_TEAL,
+    position: "relative",
+    marginTop: 8,
+  },
+  descriptionText: {
+    fontSize: 14,
+    color: "#000",
+    lineHeight: 20,
+    paddingRight: 60,
+  },
+  deleteDescriptionButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    padding: 4,
+  },
+  editDescriptionButton: {
+    position: "absolute",
+    top: 12,
+    right: 40,
+    padding: 4,
+  },
+  addDescriptionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  addDescriptionText: {
+    fontSize: 14,
+    color: "#000",
+    fontWeight: "600",
+    marginLeft: 12,
+  },
+  descriptionTextArea: {
+    minHeight: 120,
+    textAlignVertical: "top",
+    marginBottom: 8,
+  },
 });
-
