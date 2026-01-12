@@ -510,15 +510,6 @@ export default function AdminPlaceFormScreen() {
           </View>
         )}
 
-        <Text style={styles.label}>{t("opening_hours") || "שעות פתיחה"}</Text>
-        <TextInput
-          style={styles.input}
-          value={openingHours}
-          onChangeText={setOpeningHours}
-          placeholder={t("opening_hours_example") || "למשל: 08:00–16:00"}
-          placeholderTextColor="#999"
-        />
-
         <View style={styles.locationRow}>
           <Text style={styles.label}>
             {t("location_on_map") || "מיקום על המפה"} <Text style={styles.required}>*</Text>

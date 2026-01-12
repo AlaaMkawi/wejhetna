@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from sqlalchemy import func
 from schemas import LocationCreate, LocationResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.context import CryptContext
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
@@ -331,6 +331,8 @@ class RegularUserSignup(BaseModel):
 
 
 class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     username: str
@@ -339,11 +341,10 @@ class UserOut(BaseModel):
     role: str
     status: str
 
-    class Config:
-        orm_mode = True
-
 
 class UserListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     username: str
@@ -353,9 +354,6 @@ class UserListOut(BaseModel):
     status: str
     rejection_reason: Optional[str] = None
     created_at: datetime
-
-    class Config:
-        orm_mode = True
 
 
 class DriverSignupRequest(BaseModel):
@@ -385,15 +383,14 @@ from typing import Optional  # make sure this exists near the top
 
 
 class DriverSignupOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserOut
     driver_profile_id: int
     vehicle_id: int
     driver_status: str
     vehicle_status: str
     message: Optional[str] = None  # NEW
-
-    class Config:
-        orm_mode = True
 
 
 class DriverReviewRequest(BaseModel):
@@ -408,13 +405,12 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     role: str
     status: str
-
-    class Config:
-        orm_mode = True
 
 
 class BusinessOwnerSignup(BaseModel):
@@ -426,11 +422,10 @@ class BusinessOwnerSignup(BaseModel):
 
 
 class BusinessOwnerSignupOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserOut
     message: Optional[str] = None
-
-    class Config:
-        orm_mode = True
 
 
 class NearbyPlaceInfo(BaseModel):
@@ -513,8 +508,7 @@ class DriverApplicationOut(BaseModel):
     car_insurance_image_url: str
     car_photos_urls: Optional[List[str]] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 from typing import List  # make sure this import exists at the top
@@ -540,9 +534,8 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
-    # NOTE: These fields are not in DB yet, so not included in response
-    # business_license_image_url: Optional[str] = None
-    # business_images_urls: Optional[List[str]] = None
+    business_license_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None
     social_links: Optional[str] = None
     # social_media_account_name: Optional[str] = None
 
@@ -551,8 +544,7 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
     created_at: datetime
     reviewed_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =========================
@@ -560,6 +552,8 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
 # =========================
 
 class UserProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     username: str
@@ -569,11 +563,10 @@ class UserProfileOut(BaseModel):
     status: str
     created_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
-
 
 class DriverVehicleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     car_type: str
     plate_number: str
@@ -583,22 +576,20 @@ class DriverVehicleOut(BaseModel):
     car_photos_urls: Optional[List[str]] = None
     status: str
 
-    class Config:
-        orm_mode = True
-
 
 class DriverProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserProfileOut
     vehicle: Optional[DriverVehicleOut] = None
     driver_status: str
     driver_license_image_url: Optional[str] = None
     id_card_image_url: Optional[str] = None
 
-    class Config:
-        orm_mode = True
-
 
 class BusinessPlaceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     name: str
     name_ar: Optional[str] = None
@@ -615,17 +606,13 @@ class BusinessPlaceOut(BaseModel):
     lat: Optional[float] = None
     lon: Optional[float] = None
 
-    class Config:
-        orm_mode = True
-
 
 class BusinessOwnerProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserProfileOut
     place: Optional[BusinessPlaceOut] = None
     request_status: Optional[str] = None
-
-    class Config:
-        orm_mode = True
 
 
 @app.get(
@@ -1681,15 +1668,49 @@ def translate_text(request: TranslationRequest):
     """
     import openai
     from dotenv import load_dotenv
+    import logging
     
-    load_dotenv()
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    # Load environment variables
+    env_path = Path(__file__).parent / ".env"
+    print(f"[TRANSLATE] Loading .env from: {env_path}")
+    load_dotenv(dotenv_path=env_path)
+    load_dotenv()  # Also try loading from current directory
     
     openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    
+    # Log for debugging (don't log the actual key)
+    if openai_api_key:
+        masked_key = f"{openai_api_key[:10]}...{openai_api_key[-4:]}" if len(openai_api_key) > 14 else "***"
+        print(f"[TRANSLATE] OpenAI API key found: {masked_key}")
+        logger.info(f"OpenAI API key found: {masked_key}")
+    else:
+        error_msg = "OpenAI API key not found in environment variables"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        # Check if .env file exists
+        if env_path.exists():
+            print(f"[TRANSLATE ERROR] .env file exists at {env_path} but OPENAI_API_KEY not found")
+            logger.error(f".env file exists at {env_path} but OPENAI_API_KEY not found")
+        else:
+            print(f"[TRANSLATE ERROR] .env file not found at {env_path}")
+            logger.error(f".env file not found at {env_path}")
+        raise HTTPException(
+            status_code=500, 
+            detail="OpenAI API key not configured. Please add OPENAI_API_KEY to your .env file in the wejhetna_backend directory and restart the server."
+        )
+    
+    # Validate input
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text to translate cannot be empty")
     
     # Detect source language
     detected_lang = detect_language(request.text)
+    print(f"[TRANSLATE] Detected language: {detected_lang}, Target language: {request.target_language}")
+    logger.info(f"Detected language: {detected_lang}, Target language: {request.target_language}")
     
     # Determine target language
     if request.target_language not in ["ar", "he"]:
@@ -1697,6 +1718,8 @@ def translate_text(request: TranslationRequest):
     
     # If already in target language, return as-is
     if detected_lang == request.target_language:
+        print(f"[TRANSLATE] Text is already in target language, returning as-is")
+        logger.info("Text is already in target language, returning as-is")
         return TranslationResponse(
             translated_text=request.text,
             detected_language=detected_lang
@@ -1709,11 +1732,13 @@ def translate_text(request: TranslationRequest):
         "en": "English"
     }
     
-    # If source is English, we can translate to either Arabic or Hebrew
+    # Get source and target language names
     source_lang_name = lang_map.get(detected_lang, "English")
     target_lang_name = lang_map[request.target_language]
     
     try:
+        print(f"[TRANSLATE] Creating OpenAI client and translating from {source_lang_name} to {target_lang_name}")
+        logger.info(f"Creating OpenAI client and translating from {source_lang_name} to {target_lang_name}")
         client = openai.OpenAI(api_key=openai_api_key)
         
         response = client.chat.completions.create(
@@ -1732,24 +1757,62 @@ def translate_text(request: TranslationRequest):
             max_tokens=1000
         )
         
+        if not response.choices or not response.choices[0].message:
+            raise Exception("OpenAI API returned empty response")
+        
         translated_text = response.choices[0].message.content.strip()
+        
+        if not translated_text:
+            raise Exception("OpenAI API returned empty translation")
+        
+        print(f"[TRANSLATE] Translation successful: {len(translated_text)} characters")
+        logger.info(f"Translation successful: {len(translated_text)} characters")
         
         return TranslationResponse(
             translated_text=translated_text,
             detected_language=detected_lang
         )
         
-    except openai.AuthenticationError:
-        raise HTTPException(status_code=500, detail="OpenAI API key is invalid. Please check your API key in .env file.")
-    except openai.RateLimitError:
-        raise HTTPException(status_code=429, detail="OpenAI API rate limit exceeded. Please try again later.")
+    except openai.AuthenticationError as e:
+        error_msg = f"OpenAI Authentication Error: {str(e)}"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=500, 
+            detail="OpenAI API key is invalid. Please check your API key in .env file. Make sure it starts with 'sk-' and is the correct key. Restart the server after updating .env file."
+        )
+    except openai.RateLimitError as e:
+        error_msg = f"OpenAI Rate Limit Error: {str(e)}"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=429, 
+            detail="OpenAI API rate limit exceeded. Please try again later."
+        )
     except openai.APIError as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
+        error_msg = f"OpenAI API Error: {str(e)}"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"OpenAI API error: {str(e)}"
+        )
     except Exception as e:
         error_msg = str(e)
-        if "API key" in error_msg or "authentication" in error_msg.lower():
-            raise HTTPException(status_code=500, detail="OpenAI API key is invalid or missing. Please check your .env file.")
-        raise HTTPException(status_code=500, detail=f"Translation failed: {error_msg}")
+        print(f"[TRANSLATE ERROR] Translation error: {error_msg}")
+        print(f"[TRANSLATE ERROR] Error type: {type(e).__name__}")
+        import traceback
+        print(f"[TRANSLATE ERROR] Traceback: {traceback.format_exc()}")
+        logger.error(f"Translation error: {error_msg}", exc_info=True)
+        if "API key" in error_msg or "authentication" in error_msg.lower() or "401" in error_msg:
+            raise HTTPException(
+                status_code=500, 
+                detail="OpenAI API key is invalid or missing. Please check your .env file in the wejhetna_backend directory and restart the server."
+            )
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Translation failed: {error_msg}. Please check the server console/logs for more details."
+        )
 
 
 @app.post("/files/upload")
@@ -3348,6 +3411,8 @@ def create_business_owner_place_request(
         phone=data.business_phone,  # Business phone (mapped from business_phone field)
         opening_hours=data.opening_hours,
         main_image_url=data.main_image_url,
+        business_license_image_url=data.business_license_image_url,
+        business_images_urls=data.business_images_urls,
         social_links=data.social_links,
         status=OwnerPlaceRequestStatus.PENDING,
     )

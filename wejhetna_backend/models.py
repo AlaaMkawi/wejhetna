@@ -336,9 +336,8 @@ class BusinessOwnerPlaceRequest(Base):
     phone = Column(String, nullable=True)
     opening_hours = Column(String, nullable=True)
     main_image_url = Column(Text, nullable=True)
-    # NOTE: These fields are commented out until database migration is done
-    # business_license_image_url = Column(Text, nullable=True)  # רישיון עסק
-    # business_images_urls = Column(ARRAY(Text), nullable=True)  # תמונות העסק (מערך)
+    business_license_image_url = Column(Text, nullable=True)  # רישיון עסק
+    business_images_urls = Column(ARRAY(Text), nullable=True)  # תמונות העסק (מערך)
     social_links = Column(Text, nullable=True)
     # social_media_account_name = Column(String, nullable=True)  # שם חשבון רשתות חברתיות
 

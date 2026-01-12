@@ -66,6 +66,8 @@ export interface BusinessOwnerPlaceRequestPayload {
   business_phone?: string | null; // Business phone (different from user's personal phone)
   opening_hours?: string | null;
   main_image_url?: string | null;
+  business_license_image_url?: string | null;
+  business_images_urls?: string[] | null;
   social_links?: string | null;
 }
 

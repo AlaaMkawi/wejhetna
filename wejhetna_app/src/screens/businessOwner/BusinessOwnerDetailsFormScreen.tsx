@@ -65,7 +65,7 @@ export default function BusinessOwnerDetailsFormScreen() {
 
   const [description, setDescription] = useState("");
   const [phone, setPhone] = useState("");
-  const [openingHours, setOpeningHours] = useState("");
+  const [openingHours, _setOpeningHours] = useState(""); // Kept for payload compatibility, UI field removed
   const [socialMediaAccountName, setSocialMediaAccountName] = useState("");
 
   // Image uploads (UI only - not sent to backend)
@@ -393,6 +393,8 @@ export default function BusinessOwnerDetailsFormScreen() {
         business_phone: hasPhone ? phone : null, // Business phone (optional)
         opening_hours: openingHours.trim() || null,
         main_image_url: null,
+        business_license_image_url: businessLicenseUrl || null,
+        business_images_urls: businessImagesUrls.length > 0 ? businessImagesUrls : null,
         social_links: null,
       };
 
@@ -669,17 +671,6 @@ export default function BusinessOwnerDetailsFormScreen() {
                 textAlign="right"
                 placeholderTextColor="#9ab8bd"
                 autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{t("opening_hours") || "Opening Hours"} ({t("optional") || "Optional"})</Text>
-              <TextInput
-                style={styles.input}
-                value={openingHours}
-                onChangeText={setOpeningHours}
-                placeholder={t("example_opening_hours") || "Example: Sun-Thu: 9:00-18:00"}
-                placeholderTextColor="#9ab8bd"
               />
             </View>
           </View>

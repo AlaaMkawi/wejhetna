@@ -180,14 +180,21 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
 
       <Text style={styles.sectionTitleSpaced}>{t("id_license")}</Text>
       {driver.id_card_image_url && (
-        <View style={styles.imageRow}>
-          <Text style={styles.imageLabel}>{t("id_card")}</Text>
-          <Image
-            source={{ uri: driver.id_card_image_url }}
-            style={styles.documentImage}
-            resizeMode="contain"
-            onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
-          />
+        <View style={styles.infoCard}>
+          <Text style={styles.infoLabel}>{t("id_number") || t("id_card") || "ID Number"}</Text>
+          {/* Check if it's a URL (image) or just a number string */}
+          {driver.id_card_image_url.startsWith("http://") || driver.id_card_image_url.startsWith("https://") ? (
+            <View style={styles.imageRow}>
+              <Image
+                source={{ uri: driver.id_card_image_url }}
+                style={styles.documentImage}
+                resizeMode="contain"
+                onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
+              />
+            </View>
+          ) : (
+            <Text style={styles.infoValue}>{driver.id_card_image_url}</Text>
+          )}
         </View>
       )}
       {driver.driver_license_image_url && (

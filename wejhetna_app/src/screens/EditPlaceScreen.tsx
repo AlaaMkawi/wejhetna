@@ -510,16 +510,7 @@ export default function EditPlaceScreen() {
               />
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{t("opening_hours") || "Opening Hours"} ({t("optional") || "Optional"})</Text>
-              <TextInput
-                style={styles.input}
-                value={openingHours}
-                onChangeText={setOpeningHours}
-                placeholder={t("example_opening_hours") || "Example: Sun-Thu: 9:00-18:00"}
-                placeholderTextColor="#9ab8bd"
-              />
-            </View>
+            
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("social_links") || "Social Links"} ({t("optional") || "Optional"})</Text>
