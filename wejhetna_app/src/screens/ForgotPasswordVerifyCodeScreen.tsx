@@ -18,13 +18,11 @@ import {
 import Ionicons from "react-native-vector-icons/Ionicons";
 import SuccessModal from "../components/SuccessModal";
 import MessageModal from "./MessageModal";
+import { API_BASE_URL } from "../../config";
 
 const { width, height } = Dimensions.get("window");
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
-
-const API_BASE_URL = "http://10.0.2.2:8000";
-
 export default function ForgotPasswordVerifyCodeScreen({ route, navigation }: any) {
   const { t } = useTranslation();
   const emailFromRoute = route?.params?.email || "";

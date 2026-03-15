@@ -1,4 +1,4 @@
-// MessageModal.tsx
+// LocationPermissionModal.tsx
 import React from "react";
 import {
   Modal,
@@ -10,24 +10,20 @@ import {
 import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
-
 type Props = {
   visible: boolean;
-  type: "error" | "success";
   title: string;
   message: string;
   onClose: () => void;
 };
 
-export default function MessageModal({
+export default function LocationPermissionModal({
   visible,
-  type,
   title,
   message,
   onClose,
 }: Props) {
   const { t } = useTranslation();
-  const isError = type === "error";
 
   return (
     <Modal
@@ -36,20 +32,12 @@ export default function MessageModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <TouchableOpacity
-        style={styles.backdrop}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <TouchableOpacity
-          style={[styles.card, isError ? styles.errorCard : styles.successCard]}
-          activeOpacity={1}
-          onPress={(e) => e.stopPropagation()}
-        >
+      <View style={styles.backdrop}>
+        <View style={styles.card}>
           <View style={styles.iconRow}>
-            <View style={[styles.iconCircle, isError ? styles.errorCircle : styles.successCircle]}>
+            <View style={styles.iconCircle}>
               <Ionicons
-                name={isError ? "alert" : "checkmark"}
+                name="location"
                 size={22}
                 color="#fff"
               />
@@ -60,17 +48,17 @@ export default function MessageModal({
           <Text style={styles.message}>{message}</Text>
 
           <TouchableOpacity
-            style={[styles.button, isError ? styles.errorButton : styles.successButton]}
+            style={styles.button}
             onPress={onClose}
-            activeOpacity={0.8}
           >
-            <Text style={styles.buttonText}>{t("ok") || t("close") || "OK"}</Text>
+            <Text style={styles.buttonText}>{t("ok") || "OK"}</Text>
           </TouchableOpacity>
-        </TouchableOpacity>
-      </TouchableOpacity>
+        </View>
+      </View>
     </Modal>
   );
 }
+
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
@@ -90,12 +78,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 8,
   },
-
-  // ❌ remove the colored top border
-  // just keep empty style objects so the code that uses them still works
-  errorCard: {},
-  successCard: {},
-
   iconRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -108,33 +90,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginRight: 10,
-  },
-  errorCircle: {
-    backgroundColor: "#ff6b6b",
-  },
-  successCircle: {
     backgroundColor: "#0f5b63",
   },
   title: {
     fontSize: 16,
     fontWeight: "700",
     color: "#0f5b63",
+    flex: 1,
   },
   message: {
     fontSize: 13,
     color: "#4c666b",
     marginBottom: 14,
+    lineHeight: 20,
   },
   button: {
     alignSelf: "flex-end",
     paddingHorizontal: 18,
     paddingVertical: 8,
     borderRadius: 999,
-  },
-  errorButton: {
-    backgroundColor: "#ff6b6b",
-  },
-  successButton: {
     backgroundColor: "#0f5b63",
   },
   buttonText: {
@@ -143,3 +117,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 });
+

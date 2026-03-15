@@ -14,23 +14,21 @@ import {
   Image,
   StatusBar,
   Platform,
-  Dimensions,
 } from "react-native";
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
+import MessageModal from "../MessageModal";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { fetchCategories, Category } from "../../api/places";
 import i18n from "../../i18n";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminBusinessOwnerRequestDetails">;
 
@@ -44,17 +42,84 @@ type UserInfo = {
   status: string;
   created_at: string;
 };
-
 export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { adminUserId, request } = route.params;
+  
+  // Debug: Log request data to see what fields are available
+  useEffect(() => {
+    console.log("=== Business Owner Request Data ===");
+    console.log("Request object:", JSON.stringify(request, null, 2));
+    console.log("business_images_urls:", request.business_images_urls);
+    console.log("business_license_image_url:", request.business_license_image_url);
+    console.log("Type of business_images_urls:", typeof request.business_images_urls);
+    console.log("Is array?", Array.isArray(request.business_images_urls));
+    console.log("================================");
+  }, [request]);
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [processing, setProcessing] = useState(false);
+  const [successModalVisible, setSuccessModalVisible] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorModal, setErrorModal] = useState<{ visible: boolean; title: string; message: string }>({
+    visible: false,
+    title: "",
+    message: "",
+  });
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [loadingUser, setLoadingUser] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const cameraRef = useRef<any>(null);
+
+  // Helper function to format image URI - ensure it's a valid URL
+  const formatImageUri = (uri: string): string => {
+    if (!uri || !uri.trim()) {
+      return "";
+    }
+    
+    const trimmedUri = uri.trim();
+    
+    try {
+      // If it's already a full URL with the correct base, return as is
+      if (trimmedUri.startsWith(API_BASE_URL)) {
+        return trimmedUri;
+      }
+      
+      // If it's already a full URL (http:// or https://), extract just the path
+      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
+        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
+        if (urlMatch && urlMatch[1]) {
+          const path = urlMatch[1];
+          return `${API_BASE_URL}${path}`;
+        }
+        const uploadsIndex = trimmedUri.indexOf("/uploads/");
+        if (uploadsIndex !== -1) {
+          const path = trimmedUri.substring(uploadsIndex);
+          return `${API_BASE_URL}${path}`;
+        }
+        return trimmedUri;
+      }
+      
+      // If it's a relative path starting with /, prepend API_BASE_URL
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      
+      // If it doesn't start with /, assume it's a filename and add /uploads/
+      if (!trimmedUri.includes("/")) {
+        return `${API_BASE_URL}/uploads/${trimmedUri}`;
+      }
+      
+      // Otherwise, try to prepend API_BASE_URL
+      return `${API_BASE_URL}/${trimmedUri}`;
+    } catch (error) {
+      console.warn("Error formatting image URI:", trimmedUri, error);
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      return `${API_BASE_URL}/uploads/${trimmedUri}`;
+    }
+  };
 
   // Fetch user information
   useEffect(() => {
@@ -139,7 +204,6 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     ? categories.find(cat => cat.id === request.category_id)
     : null;
 
-
   const handleApprove = async () => {
     Alert.alert(
       t("accept"),
@@ -165,14 +229,21 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
               );
               const json = await res.json();
               if (!res.ok) {
-                Alert.alert(t("error"), json.detail || t("approve_failed"));
+                setErrorModal({
+                  visible: true,
+                  title: t("error") || "Error",
+                  message: json.detail || t("approve_failed") || "Failed to approve business owner request",
+                });
               } else {
-                Alert.alert(t("success"), t("business_request_approved") || "Business owner request approved.", [
-                  { text: t("ok"), onPress: () => navigation.goBack() },
-                ]);
+                setSuccessMessage(t("business_request_approved") || "Business owner request approved");
+                setSuccessModalVisible(true);
               }
             } catch (e: any) {
-              Alert.alert(t("network_error"), e.message);
+              setErrorModal({
+                visible: true,
+                title: t("error") || "Error",
+                message: e.message || t("network_error_message") || t("network_error") || "Network error occurred",
+              });
             } finally {
               setProcessing(false);
             }
@@ -207,16 +278,23 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
       );
       const json = await res.json();
       if (!res.ok) {
-        Alert.alert(t("error"), json.detail || t("reject_failed"));
+        setErrorModal({
+          visible: true,
+          title: t("error") || "Error",
+          message: json.detail || t("reject_failed") || "Failed to reject business owner request",
+        });
       } else {
         setRejectModalVisible(false);
         setRejectReason("");
-        Alert.alert(t("done") || t("success"), t("business_request_rejected") || "Request rejected.", [
-          { text: t("ok"), onPress: () => navigation.goBack() },
-        ]);
+        setSuccessMessage(t("business_request_rejected") || "Business owner request rejected");
+        setSuccessModalVisible(true);
       }
     } catch (e: any) {
-      Alert.alert(t("network_error"), e.message);
+      setErrorModal({
+        visible: true,
+        title: t("error") || "Error",
+        message: e.message || t("network_error_message") || t("network_error") || "Network error occurred",
+      });
     } finally {
       setProcessing(false);
     }
@@ -326,14 +404,6 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
             </Text>
           </View>
 
-          {/* Opening Hours - Always show */}
-          <View style={styles.infoCard}>
-            <Text style={styles.infoLabel}>{t("opening_hours")}</Text>
-            <Text style={[styles.infoValue, !request.opening_hours && styles.noDataText]}>
-              {request.opening_hours || (t("no_data") || "No data")}
-            </Text>
-          </View>
-
           {/* Social Media Account - Always show */}
           <View style={styles.infoCard}>
             <Text style={styles.infoLabel}>{t("social_media_account")}</Text>
@@ -347,8 +417,11 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
             <Text style={styles.imageLabel}>{t("main_image") || "Main Image"}</Text>
             {request.main_image_url ? (
               <Image
-                source={{ uri: request.main_image_url }}
+                source={{ uri: formatImageUri(request.main_image_url) }}
                 style={styles.documentImage}
+                resizeMode="contain"
+                onError={(e) => console.log("Main image error:", e.nativeEvent.error, "URL:", request.main_image_url)}
+                onLoad={() => console.log("Main image loaded:", formatImageUri(request.main_image_url))}
               />
             ) : (
               <View style={styles.noImageContainer}>
@@ -363,8 +436,11 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
             <Text style={styles.imageLabel}>{t("business_license")}</Text>
             {request.business_license_image_url ? (
               <Image
-                source={{ uri: request.business_license_image_url }}
+                source={{ uri: formatImageUri(request.business_license_image_url) }}
                 style={styles.documentImage}
+                resizeMode="contain"
+                onError={(e) => console.log("Business license image error:", e.nativeEvent.error, "URL:", request.business_license_image_url)}
+                onLoad={() => console.log("Business license image loaded:", formatImageUri(request.business_license_image_url))}
               />
             ) : (
               <View style={styles.noImageContainer}>
@@ -377,18 +453,40 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
           {/* Business Images - Always show */}
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>
-              {t("business_pictures")} {request.business_images_urls && request.business_images_urls.length > 0 ? `(${request.business_images_urls.length})` : ""}
+              {t("business_pictures")} {request.business_images_urls && Array.isArray(request.business_images_urls) && request.business_images_urls.length > 0 ? `(${request.business_images_urls.length})` : ""}
             </Text>
-            {request.business_images_urls && request.business_images_urls.length > 0 ? (
+            {request.business_images_urls && Array.isArray(request.business_images_urls) && request.business_images_urls.length > 0 ? (
               <View style={styles.imagesGrid}>
-                {request.business_images_urls.map((url, index) => (
-                  <View key={index} style={styles.imageWrapper}>
-                    <Image
-                      source={{ uri: url }}
-                      style={styles.carPhotoImage}
-                    />
-                  </View>
-                ))}
+                {request.business_images_urls.map((url: string, index: number) => {
+                  if (!url || typeof url !== 'string' || !url.trim()) {
+                    console.warn(`Business image ${index} is invalid:`, url);
+                    return null;
+                  }
+                  const formattedUrl = formatImageUri(url.trim());
+                  if (!formattedUrl) {
+                    console.warn(`Business image ${index} could not be formatted:`, url);
+                    return null;
+                  }
+                  return (
+                    <View key={`business-img-${index}-${url.substring(0, 20)}`} style={styles.imageWrapper}>
+                      <Image
+                        source={{ uri: formattedUrl }}
+                        style={styles.carPhotoImage}
+                        resizeMode="cover"
+                        onError={(e) => {
+                          console.error(`Business image ${index} failed to load:`, {
+                            original: url,
+                            formatted: formattedUrl,
+                            error: e?.nativeEvent?.error || e
+                          });
+                        }}
+                        onLoad={() => {
+                          console.log(`✅ Business image ${index} loaded successfully:`, formattedUrl);
+                        }}
+                      />
+                    </View>
+                  );
+                }).filter(Boolean)}
               </View>
             ) : (
               <View style={styles.noImageContainer}>
@@ -548,6 +646,27 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
           </View>
         </View>
       </Modal>
+
+      {/* Success Modal */}
+      <MessageModal
+        visible={successModalVisible}
+        type="success"
+        title={t("done") || t("success") || "Done"}
+        message={successMessage}
+        onClose={() => {
+          setSuccessModalVisible(false);
+          navigation.goBack();
+        }}
+      />
+
+      {/* Error Modal */}
+      <MessageModal
+        visible={errorModal.visible}
+        type="error"
+        title={errorModal.title}
+        message={errorModal.message}
+        onClose={() => setErrorModal({ ...errorModal, visible: false })}
+      />
     </View>
   );
 }
@@ -645,6 +764,7 @@ const styles = StyleSheet.create({
     color: "#F44336",
     fontStyle: "italic",
   },
+
   noDataText: {
     color: "#999",
     fontStyle: "italic",
@@ -811,6 +931,7 @@ const styles = StyleSheet.create({
     height: "100%",
     resizeMode: "cover",
   },
+
   mapContainer: {
     width: "100%",
     height: 200,
@@ -848,6 +969,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
-  },
+  }
 });
 

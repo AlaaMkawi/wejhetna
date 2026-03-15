@@ -12,6 +12,7 @@ import {
   PanResponder,
   StatusBar,
   Dimensions,
+  TextInput,
   Linking,
   Modal,
   ActivityIndicator,
@@ -23,13 +24,17 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
-import { useRoute, RouteProp, useFocusEffect } from "@react-navigation/native";
-import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, Category, translateText } from "../../api/places";
+import { useRoute, RouteProp, useFocusEffect, useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { RootStackParamList } from "../../navigation/types";
+import Geolocation from "@react-native-community/geolocation";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, checkLocationInServiceCities, Category, translateText } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { API_BASE_URL } from "../../../config";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -301,15 +306,27 @@ const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boole
   
   return false;
 };
-
 type Props = {
   navigation: any;
   route?: RouteProp<any, any>;
 };
 
+type RouteCoordinates = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    geometry: {
+      type: "LineString";
+      coordinates: [number, number][];
+    };
+    properties: Record<string, any>;
+  }>;
+};
+
 export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   const { t } = useTranslation();
   const routeParams = useRoute();
+  const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
   const cameraRef = useRef<any>(null);
 
@@ -326,6 +343,23 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
 
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
+
+  // GPS Location
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(true);
+  const [hasShownLocationPermissionMessage, setHasShownLocationPermissionMessage] = useState(false);
+
+  // Destination
+  const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
+  const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
+
+  // Route
+  const [routeLoading, setRouteLoading] = useState(false);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+  const [showSearchModal, setShowSearchModal] = useState(false);
 
   // Opening hours expand state
   const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
@@ -350,7 +384,8 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
   const photoScrollViewRef = useRef<ScrollView>(null);
 
-  // Helper function to detect language
+  // Helper function to detect language (currently unused but kept for future use)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const detectLanguage = (text: string): "ar" | "he" | "en" => {
     const arabicChars = (text.match(/[\u0600-\u06FF]/g) || []).length;
     const hebrewChars = (text.match(/[\u0590-\u05FF]/g) || []).length;
@@ -375,6 +410,118 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
     }
     loadUserId();
   }, []);
+
+  // Get user's GPS location
+  useEffect(() => {
+    setLocationLoading(true);
+    
+    Geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setUserLocation({ lat: latitude, lon: longitude });
+        setLocationLoading(false);
+      },
+      (error) => {
+        console.log("GPS error", error);
+        const currentLanguage = i18n.language || "ar";
+        let title = "";
+        let message = "";
+        
+        // Handle different error codes
+        if (error.code === 1) {
+          // PERMISSION_DENIED - Show initial permission message only once
+          if (!hasShownLocationPermissionMessage) {
+            title = currentLanguage === "ar"
+              ? "السماح بالموقع"
+              : currentLanguage === "he"
+              ? "אפשר גישת מיקום"
+              : "Allow Location Access";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
+              : currentLanguage === "he"
+              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
+              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
+            setHasShownLocationPermissionMessage(true);
+          } else {
+            title = currentLanguage === "ar" 
+              ? "السماح بالموقع مطلوب" 
+              : currentLanguage === "he"
+              ? "נדרש אישור מיקום"
+              : "Location Permission Required";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
+              : currentLanguage === "he"
+              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
+              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
+          }
+        } else if (error.code === 2) {
+          // POSITION_UNAVAILABLE
+          title = currentLanguage === "ar"
+            ? "الموقع غير متاح"
+            : currentLanguage === "he"
+            ? "מיקום לא זמין"
+            : "Location Unavailable";
+          message = currentLanguage === "ar"
+            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
+            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
+        } else if (error.code === 3) {
+          // TIMEOUT
+          title = currentLanguage === "ar"
+            ? "انتهت مهلة انتظار الموقع"
+            : currentLanguage === "he"
+            ? "זמן המיקום פג"
+            : "Location Timeout";
+          message = currentLanguage === "ar"
+            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+            : currentLanguage === "he"
+            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
+            : "Getting your location took too long. Please try again.";
+        } else {
+          // Generic error
+          title = currentLanguage === "ar"
+            ? "خطأ في الموقع"
+            : currentLanguage === "he"
+            ? "שגיאת מיקום"
+            : "Location Error";
+          message = currentLanguage === "ar"
+            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
+            : "Could not get your location. Using default location.";
+        }
+        
+        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
+        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
+        
+        Alert.alert(
+          title,
+          message,
+          [
+            {
+              text: cancelText,
+              style: "cancel"
+            },
+            {
+              text: allowText,
+              onPress: () => {
+                if (error.code === 1) {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
+        );
+        setLocationLoading(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 10000,
+      }
+    );
+  }, [t, hasShownLocationPermissionMessage]);
 
   // Fetch all places on mount and when screen is focused
   useFocusEffect(
@@ -502,7 +649,6 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           style: "destructive",
           onPress: async () => {
             try {
-              const API_BASE_URL = "http://10.0.2.2:8000";
               const res = await fetch(
                 `${API_BASE_URL}/admin/places/${selectedPlace.id}`,
                 {
@@ -549,6 +695,272 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   // Check if the selected place belongs to the current business owner
   const isOwnPlace = selectedPlace && userId && selectedPlace.owner_user_id === userId;
 
+  // Handle map long press (drop custom pin for destination)
+  const handleMapLongPress = async (e: any) => {
+    try {
+      const coords = e?.geometry?.coordinates;
+      if (Array.isArray(coords) && coords.length >= 2) {
+        const [lon, lat] = coords;
+        
+        // Check boundary - destination must be within service cities
+        try {
+          const boundaryCheck = await checkLocationInServiceCities(lat, lon);
+          if (!boundaryCheck.is_within) {
+            Alert.alert(
+              t("location_outside_service_area") || "Location Outside Service Area",
+              t("destination_must_be_in_service_cities") || "Destination must be within one of the 3 service cities: רהט (Rahat), לקיה (Lakiya), or תל שבע (Tel Sheva).\n\nPlease choose a location within these boundaries.",
+              [{ text: t("ok") || "OK" }]
+            );
+            return;
+          }
+        } catch (error: any) {
+          console.error("Error checking boundary:", error);
+          Alert.alert(
+            t("boundary_check_error") || "Boundary Check Error",
+            t("boundary_check_error_message") || "Failed to check location boundary. Please try again."
+          );
+          return;
+        }
+        
+        setCustomPin({ lat, lon });
+        setDestination({ lat, lon, name: `📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}` });
+        setSelectedPlace(null); // Clear selected place
+        setSearchResults([]);
+        setShowSearchModal(false);
+      }
+    } catch (error) {
+      console.error("Error handling long press:", error);
+    }
+  };
+
+  // Handle place marker tap - set as destination
+  const handlePlaceTap = async (place: PlaceForMap) => {
+    if (!place.location) return;
+    
+    selectedPlaceIdRef.current = place.id;
+    setSelectedPlace(place);
+    setDestination({
+      lat: place.location.lat,
+      lon: place.location.lon,
+      name: getPlaceName(place),
+    });
+    setCustomPin(null);
+    setSearchResults([]);
+    setShowSearchModal(false);
+  };
+
+  // Search places - comprehensive search across all fields
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    
+    // If query is empty, clear results
+    if (!query || query.trim().length === 0) {
+      setSearchResults([]);
+      return;
+    }
+
+    // Make sure places are loaded
+    if (!places || places.length === 0) {
+      console.log("No places loaded yet");
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const queryLower = query.toLowerCase().trim();
+      
+      // Filter places based on search query
+      const filtered = places.filter((place) => {
+        try {
+          // Search in name fields (English, Arabic, Hebrew)
+          const nameMatch = 
+            (place.name && typeof place.name === 'string' && place.name.toLowerCase().includes(queryLower)) ||
+            (place.name_ar && typeof place.name_ar === 'string' && place.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.name_he && typeof place.name_he === 'string' && place.name_he.toLowerCase().includes(queryLower));
+          
+          // Search in description
+          const descriptionMatch = 
+            place.description && typeof place.description === 'string' && 
+            place.description.toLowerCase().includes(queryLower);
+          
+          // Search in city name
+          const cityMatch = 
+            (place.city?.name_ar && typeof place.city.name_ar === 'string' && place.city.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_he && typeof place.city.name_he === 'string' && place.city.name_he.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_en && typeof place.city.name_en === 'string' && place.city.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in category name
+          const categoryMatch = 
+            (place.category?.name_ar && typeof place.category.name_ar === 'string' && place.category.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_he && typeof place.category.name_he === 'string' && place.category.name_he.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_en && typeof place.category.name_en === 'string' && place.category.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in phone number (remove spaces/dashes for better matching)
+          const phoneMatch = 
+            place.phone && typeof place.phone === 'string' && 
+            place.phone.replace(/[\s-]/g, '').includes(queryLower.replace(/[\s-]/g, ''));
+          
+          // Return true if any field matches
+          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
+        } catch (err) {
+          console.error("Error filtering place:", err, place);
+          return false;
+        }
+      });
+      
+      console.log(`Search for "${query}" found ${filtered.length} results out of ${places.length} places`);
+      setSearchResults(filtered);
+    } catch (error) {
+      console.error("Search error:", error);
+      setSearchResults([]);
+    }
+  };
+
+  // Get route from user location to destination using OSRM
+  const getRoute = async () => {
+    const currentLanguage = i18n.language || "ar";
+    
+      // Check if destination is selected
+    if (!destination) {
+      const title = currentLanguage === "ar"
+        ? "خطأ"
+        : currentLanguage === "he"
+        ? "שגיאה"
+        : "Error";
+      const message = currentLanguage === "ar"
+        ? "يرجى اختيار وجهة أولاً"
+        : currentLanguage === "he"
+        ? "אנא בחר יעד תחילה"
+        : "Please select a destination first";
+      Alert.alert(title, message);
+      return;
+    }
+    
+    // Check if user location is available
+    if (!userLocation) {
+      const title = currentLanguage === "ar"
+        ? "تفعيل الموقع مطلوب"
+        : currentLanguage === "he"
+        ? "נדרש הפעלת מיקום"
+        : "Location Required";
+      const message = currentLanguage === "ar"
+        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
+        : currentLanguage === "he"
+        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
+        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
+      Alert.alert(title, message);
+      
+      // Try to get location again
+      setLocationLoading(true);
+      Geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lon: longitude });
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.log("GPS error when retrying:", error);
+          setLocationLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000,
+        }
+      );
+      return;
+    }
+
+    setRouteLoading(true);
+    
+    try {
+      // Using OSRM (Open Source Routing Machine) - free, no API key needed
+      const profile = "driving"; // driving, walking, or cycling
+      const coordinates = `${userLocation.lon},${userLocation.lat};${destination.lon},${destination.lat}`;
+      
+      // Using OSRM public server (free, no API key required)
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=false&steps=false`;
+      
+      console.log("Requesting route from OSRM:", url);
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("OSRM API error:", response.status, errorText);
+        throw new Error(`Routing service error: ${response.status} - ${errorText}`);
+      }
+      
+      const routeData = await response.json();
+      
+      // OSRM response format: { code: "Ok", routes: [{ distance, duration, geometry }] }
+      if (routeData.code === "Ok" && routeData.routes && routeData.routes.length > 0) {
+        const route = routeData.routes[0];
+        
+        // Extract route information
+        const distance = route.distance || 0; // in meters
+        const duration = route.duration || 0; // in seconds
+        
+        // OSRM geometry format is already GeoJSON LineString
+        const routeGeometry = route.geometry || {
+          type: "LineString",
+          coordinates: [
+            [userLocation.lon, userLocation.lat],
+            [destination.lon, destination.lat],
+          ],
+        };
+        
+        // Store route info (distance, duration)
+        const routeInfoData = {
+          distance,
+          duration,
+          startAddress: t("your_location") || "Your Location",
+          endAddress: destination.name || t("destination") || "Destination",
+        };
+
+        // Store route coordinates
+        const routeCoords: RouteCoordinates = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: routeGeometry,
+              properties: {},
+            },
+          ],
+        };
+
+        // Navigate directly to RouteDetailsScreen
+        nav.navigate("RouteDetails", {
+          routeInfo: routeInfoData,
+          destination,
+          userLocation,
+          routeCoordinates: routeCoords,
+        });
+      } else {
+        const errorMsg = routeData.code === "NoRoute" 
+          ? t("no_route_found") || "No route found between these points"
+          : routeData.message || t("no_route_found") || "No route found in response";
+        throw new Error(errorMsg);
+      }
+      } catch (error: any) {
+      console.error("Route error:", error?.message || String(error));
+      const title = currentLanguage === "ar"
+        ? "خطأ في المسار"
+        : currentLanguage === "he"
+        ? "שגיאת מסלול"
+        : "Route Error";
+      const message = error?.message || (currentLanguage === "ar"
+        ? "لا يمكن الحصول على اتجاهات القيادة. يرجى المحاولة مرة أخرى."
+        : currentLanguage === "he"
+        ? "לא ניתן לקבל הוראות נסיעה. אנא נסה שוב."
+        : "Could not get driving directions. Please try again.");
+      Alert.alert(title, message);
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
   // Reset opening hours expanded state and translation states when place changes
   useEffect(() => {
     setOpeningHoursExpanded(false);
@@ -564,77 +976,163 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
 
   // Open language selector for announcement
   const handleTranslateAnnouncementClick = () => {
-    if (announcementIsTranslated) {
-      setAnnouncementIsTranslated(false);
-      return;
+    try {
+      if (announcementIsTranslated) {
+        setAnnouncementIsTranslated(false);
+        return;
+      }
+      if (!selectedPlace?.announcement) {
+        const currentLanguage = i18n.language || "ar";
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد إعلان للترجمة"
+            : currentLanguage === "he"
+            ? "אין הודעה לתרגום"
+            : "No announcement to translate"
+        );
+        return;
+      }
+      setLanguageSelectorType("announcement");
+      setShowLanguageSelector(true);
+    } catch (error) {
+      console.error("Error opening language selector for announcement:", error);
     }
-    setLanguageSelectorType("announcement");
-    setShowLanguageSelector(true);
   };
 
   // Open language selector for description
   const handleTranslateDescriptionClick = () => {
-    if (descriptionIsTranslated) {
-      setDescriptionIsTranslated(false);
-      return;
+    try {
+      if (descriptionIsTranslated) {
+        setDescriptionIsTranslated(false);
+        return;
+      }
+      if (!selectedPlace?.description) {
+        const currentLanguage = i18n.language || "ar";
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد وصف للترجمة"
+            : currentLanguage === "he"
+            ? "אין תיאור לתרגום"
+            : "No description to translate"
+        );
+        return;
+      }
+      setLanguageSelectorType("description");
+      setShowLanguageSelector(true);
+    } catch (error) {
+      console.error("Error opening language selector for description:", error);
     }
-    setLanguageSelectorType("description");
-    setShowLanguageSelector(true);
   };
 
   // Handle language selection and translation
   const handleLanguageSelection = async (targetLang: "ar" | "he") => {
-    if (!languageSelectorType) return;
+    if (!languageSelectorType) {
+      setShowLanguageSelector(false);
+      setLanguageSelectorType(null);
+      return;
+    }
     
     setShowLanguageSelector(false);
     
+    const currentLanguage = i18n.language || "ar";
+    
     if (languageSelectorType === "announcement") {
-      if (!selectedPlace?.announcement) return;
+      if (!selectedPlace?.announcement) {
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد إعلان للترجمة"
+            : currentLanguage === "he"
+            ? "אין הודעה לתרגום"
+            : "No announcement to translate"
+        );
+        setLanguageSelectorType(null);
+        return;
+      }
       
       if (announcementTranslated && announcementTargetLang === targetLang) {
         setAnnouncementIsTranslated(true);
+        setLanguageSelectorType(null);
         return;
       }
 
       setAnnouncementTranslating(true);
       try {
         const result = await translateText(selectedPlace.announcement, targetLang);
-        setAnnouncementTranslated(result.translated_text);
-        setAnnouncementTargetLang(targetLang);
-        setAnnouncementIsTranslated(true);
+        if (result && result.translated_text) {
+          setAnnouncementTranslated(result.translated_text);
+          setAnnouncementTargetLang(targetLang);
+          setAnnouncementIsTranslated(true);
+        } else {
+          throw new Error("Translation returned no result");
+        }
       } catch (error: any) {
-        Alert.alert(
-          t("error") || "שגיאה",
-          error.message || t("translation_failed") || "נכשל בתרגום"
-        );
+        console.error("Translation error:", error);
+        const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+        const errorMessage = error?.message || (currentLanguage === "ar"
+          ? "فشل الترجمة. يرجى التأكد من أن الخادم يعمل والمحاولة مرة أخرى."
+          : currentLanguage === "he"
+          ? "התרגום נכשל. אנא ודא שהשרת רץ ונסה שוב."
+          : "Translation failed. Please make sure the server is running and try again.");
+        Alert.alert(errorTitle, errorMessage);
+        setAnnouncementIsTranslated(false);
+        setAnnouncementTranslated(null);
+        setAnnouncementTargetLang(null);
       } finally {
         setAnnouncementTranslating(false);
+        setLanguageSelectorType(null);
       }
     } else if (languageSelectorType === "description") {
-      if (!selectedPlace?.description) return;
+      if (!selectedPlace?.description) {
+        Alert.alert(
+          currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error",
+          currentLanguage === "ar" 
+            ? "لا يوجد وصف للترجمة"
+            : currentLanguage === "he"
+            ? "אין תיאור לתרגום"
+            : "No description to translate"
+        );
+        setLanguageSelectorType(null);
+        return;
+      }
       
       if (descriptionTranslated && descriptionTargetLang === targetLang) {
         setDescriptionIsTranslated(true);
+        setLanguageSelectorType(null);
         return;
       }
 
       setDescriptionTranslating(true);
       try {
         const result = await translateText(selectedPlace.description, targetLang);
-        setDescriptionTranslated(result.translated_text);
-        setDescriptionTargetLang(targetLang);
-        setDescriptionIsTranslated(true);
+        if (result && result.translated_text) {
+          setDescriptionTranslated(result.translated_text);
+          setDescriptionTargetLang(targetLang);
+          setDescriptionIsTranslated(true);
+        } else {
+          throw new Error("Translation returned no result");
+        }
       } catch (error: any) {
-        Alert.alert(
-          t("error") || "שגיאה",
-          error.message || t("translation_failed") || "נכשל בתרגום"
-        );
+        console.error("Translation error:", error);
+        const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+        const errorMessage = error?.message || (currentLanguage === "ar"
+          ? "فشل الترجمة. يرجى التأكد من أن الخادم يعمل والمحاولة مرة أخرى."
+          : currentLanguage === "he"
+          ? "התרגום נכשל. אנא ודא שהשרת רץ ונסה שוב."
+          : "Translation failed. Please make sure the server is running and try again.");
+        Alert.alert(errorTitle, errorMessage);
+        setDescriptionIsTranslated(false);
+        setDescriptionTranslated(null);
+        setDescriptionTargetLang(null);
       } finally {
         setDescriptionTranslating(false);
+        setLanguageSelectorType(null);
       }
+    } else {
+      setLanguageSelectorType(null);
     }
-    
-    setLanguageSelectorType(null);
   };
 
   // Bottom sheet animation values
@@ -749,10 +1247,122 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <TouchableOpacity
+          style={styles.searchInputTouchable}
+          onPress={() => setShowSearchModal(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="search-outline" size={20} color="#666" style={styles.searchIcon} />
+          <Text style={styles.searchInputPlaceholder}>
+            {searchQuery || (t("search_places") || "Search places...")}
+          </Text>
+        </TouchableOpacity>
+        {locationLoading && (
+          <ActivityIndicator size="small" color="#0f5b63" style={styles.loader} />
+        )}
+      </View>
+
+      {/* Search Results Modal */}
+      <Modal
+        visible={showSearchModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSearchModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t("search_places") || "Search Places"}</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSearchModal(false);
+                setSearchQuery("");
+              }}>
+                <Text style={styles.modalCloseButton}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Search Input Inside Modal */}
+            <View style={styles.modalSearchContainer}>
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder={t("search_places") || "Search places..."}
+                placeholderTextColor="#666"
+                value={searchQuery}
+                onChangeText={handleSearch}
+                autoFocus={true}
+              />
+              <Ionicons name="search-outline" size={20} color="#666" style={styles.modalSearchIcon} />
+            </View>
+            <ScrollView style={styles.searchResultsList} keyboardShouldPersistTaps="handled">
+              {searchQuery.trim().length === 0 && (
+                <Text style={styles.noResults}>{t("start_typing_to_search") || "Start typing to search places..."}</Text>
+              )}
+              {searchResults.length === 0 && searchQuery.trim().length > 0 && (
+                <Text style={styles.noResults}>{t("no_places_found") || "No places found"}</Text>
+              )}
+              {searchResults.map((place) => (
+                <TouchableOpacity
+                  key={place.id}
+                  style={styles.searchResultItem}
+                  onPress={() => {
+                    handlePlaceTap(place);
+                    setSearchQuery("");
+                    setShowSearchModal(false);
+                  }}
+                >
+                  <Text style={styles.searchResultName}>{getPlaceName(place)}</Text>
+                  <View style={styles.searchResultDetails}>
+                    {getCityName(place.city) && (
+                      <Text style={styles.searchResultCity}>{getCityName(place.city)}</Text>
+                    )}
+                    {place.category && (
+                      <>
+                        {getCityName(place.city) && <Text style={styles.searchResultSeparator}> • </Text>}
+                        <Text style={styles.searchResultCategory}>
+                          {i18n.language === "he" && place.category.name_he
+                            ? place.category.name_he
+                            : i18n.language === "ar" && place.category.name_ar
+                            ? place.category.name_ar
+                            : place.category.name_ar || place.category.name_he || ""}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
+        onLongPress={handleMapLongPress}
+        onPress={(e: any) => {
+          // Handle regular tap - check if tapping near a place
+          try {
+            const coords = e?.geometry?.coordinates;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              const [lon, lat] = coords;
+              // Find nearest place within reasonable distance
+              const nearestPlace = places.find((place) => {
+                if (!place.location) return false;
+                const distance = Math.sqrt(
+                  Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
+                );
+                return distance < 0.001; // ~100 meters
+              });
+              if (nearestPlace) {
+                handlePlaceTap(nearestPlace);
+              }
+            }
+          } catch {
+            // Ignore tap errors
+          }
+        }}
         scrollEnabled={true}
         rotateEnabled={false}
         pitchEnabled={false}
@@ -777,6 +1387,33 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           maxZoomLevel={18}
           animationMode="flyTo"
         />
+
+        {/* User Location Marker */}
+        {userLocation && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Custom Pin Marker (destination from map tap) */}
+        {customPin && (
+          <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
+            <View style={styles.customPinMarker}>
+              <View style={styles.customPinDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Destination Marker (from place selection) */}
+        {destination && !customPin && (
+          <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
+            <View style={styles.destinationMarker}>
+              <Text style={styles.destinationMarkerText}>📍</Text>
+            </View>
+          </PointAnnotation>
+        )}
 
         {places.map((place) => {
           if (!place.location) return null;
@@ -805,8 +1442,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
-                selectedPlaceIdRef.current = place.id;
-                setSelectedPlace(place);
+                handlePlaceTap(place);
               }}
             >
               <View style={styles.nativeMarkerContainer}>
@@ -920,7 +1556,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
         })}
       </MapView>
 
-      {!selectedPlace && (
+      {!selectedPlace && !destination && (
         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
           <Text style={styles.recenterButtonText}>🎯</Text>
         </TouchableOpacity>
@@ -1097,19 +1733,43 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                   {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="navigate-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("start") || "התחלה"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonPrimary}>
-                <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                <Text style={styles.actionButtonPrimaryText}>
-                  {t("route") || "מסלול"}
-                </Text>
-            </TouchableOpacity>
-          </View>
+              
+              {/* Get Directions Button - Navigates directly to RouteDetailsScreen */}
+              {destination && (
+                <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={getRoute}
+                  disabled={routeLoading || !userLocation}
+                >
+                  {routeLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
+                      <Text style={styles.actionButtonPrimaryText}>
+                        {t("get_directions") || "Get Directions"}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {!destination && (
+                <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={() => {
+                    if (selectedPlace && selectedPlace.location) {
+                      handlePlaceTap(selectedPlace);
+                    }
+                  }}
+                >
+                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.actionButtonPrimaryText}>
+                    {t("set_destination") || "Set Destination"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
             {/* Announcement Banner */}
             {selectedPlace.announcement && (
@@ -1317,7 +1977,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                     const url = selectedPlace.social_links!.startsWith('http') 
                       ? selectedPlace.social_links! 
                       : `https://${selectedPlace.social_links}`;
-                    Linking.openURL(url).catch(err => {
+                    Linking.openURL(url).catch(_err => {
                       Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
                     });
                   }}
@@ -1377,39 +2037,66 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
         visible={showLanguageSelector}
         transparent={true}
         animationType="fade"
-        onRequestClose={() => setShowLanguageSelector(false)}
+        onRequestClose={() => {
+          setShowLanguageSelector(false);
+          setLanguageSelectorType(null);
+        }}
       >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowLanguageSelector(false)}
-        >
+        <View style={styles.languageSelectorModalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => {
+              setShowLanguageSelector(false);
+              setLanguageSelectorType(null);
+            }}
+          />
           <View style={styles.languageSelectorModal}>
             <Text style={styles.languageSelectorTitle}>
-              {i18n.language === "ar" ? "اختر اللغة" : "בחר שפה"}
+              {i18n.language === "ar" ? "اختر اللغة" : i18n.language === "he" ? "בחר שפה" : "Select Language"}
+            </Text>
+            <Text style={styles.languageSelectorSubtitle}>
+              {i18n.language === "ar" 
+                ? "اختر اللغة التي تريد الترجمة إليها"
+                : i18n.language === "he"
+                ? "בחר את השפה שאליה תרצה לתרגם"
+                : "Select the language you want to translate to"}
             </Text>
             <TouchableOpacity
               style={styles.languageOption}
-              onPress={() => handleLanguageSelection("he")}
+              onPress={() => {
+                if (languageSelectorType) {
+                  handleLanguageSelection("he");
+                }
+              }}
+              disabled={!languageSelectorType}
             >
               <Text style={styles.languageOptionText}>עברית</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.languageOption}
-              onPress={() => handleLanguageSelection("ar")}
+              onPress={() => {
+                if (languageSelectorType) {
+                  handleLanguageSelection("ar");
+                }
+              }}
+              disabled={!languageSelectorType}
             >
               <Text style={styles.languageOptionText}>العربية</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.languageSelectorCancel}
-              onPress={() => setShowLanguageSelector(false)}
+              onPress={() => {
+                setShowLanguageSelector(false);
+                setLanguageSelectorType(null);
+              }}
             >
               <Text style={styles.languageSelectorCancelText}>
-                {i18n.language === "ar" ? "إلغاء" : "ביטול"}
+                {i18n.language === "ar" ? "إلغاء" : i18n.language === "he" ? "ביטול" : "Cancel"}
               </Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* Photo Gallery Full Screen Modal */}
@@ -1468,6 +2155,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           </Modal>
         );
       })()}
+
     </View>
   );
 }
@@ -1746,6 +2434,31 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#FFFFFF",
   },
+  imageGalleryContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000",
+    marginBottom: 12,
+  },
+  imageGalleryScrollContent: {
+    paddingRight: 16,
+  },
+  galleryImage: {
+    width: 280,
+    height: 200,
+    borderRadius: 12,
+    backgroundColor: "#F2F2F7",
+    marginRight: 12,
+  },
+  noImagePlaceholder: {
+    width: "100%",
+    height: 200,
+    borderRadius: 12,
+  },
   statusRow: {
     marginTop: 8,
   },
@@ -1806,7 +2519,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#0f5b63",
+    borderColor: "#E5E5EA",
+    borderStyle: "dashed",
   },
   showOriginalButton: {
     paddingHorizontal: 10,
@@ -1826,9 +2540,6 @@ const styles = StyleSheet.create({
     color: "#000",
     lineHeight: 22,
     fontWeight: "400",
-  },
-  imageGalleryContainer: {
-    paddingBottom: 16,
   },
   imageScrollView: {
     flexGrow: 0,
@@ -2057,7 +2768,184 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#FFFFFF",
   },
+  // Search Styles
+  searchContainer: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    right: 16,
+    zIndex: 1000,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInputTouchable: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInputPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: "#666",
+  },
+  loader: {
+    marginLeft: 8,
+  },
   modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "70%",
+    padding: 16,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+  },
+  modalCloseButton: {
+    fontSize: 24,
+    color: "#666",
+    fontWeight: "300",
+  },
+  modalSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8F9FA",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  modalSearchInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: "#333",
+  },
+  modalSearchIcon: {
+    marginLeft: 8,
+  },
+  searchResultsList: {
+    maxHeight: 400,
+  },
+  searchResultItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  searchResultName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 4,
+  },
+  searchResultDetails: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  searchResultCity: {
+    fontSize: 14,
+    color: "#666",
+  },
+  searchResultSeparator: {
+    fontSize: 14,
+    color: "#999",
+    marginHorizontal: 4,
+  },
+  searchResultCategory: {
+    fontSize: 14,
+    color: "#666",
+  },
+  noResults: {
+    padding: 16,
+    textAlign: "center",
+    color: "#999",
+    fontSize: 14,
+  },
+  // User Location Marker
+  userLocationMarker: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#0f5b63",
+    borderWidth: 3,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  userLocationDot: {
+    flex: 1,
+    borderRadius: 7,
+    backgroundColor: "#0f5b63",
+  },
+  // Custom Pin Marker
+  customPinMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#ff6b6b",
+    borderWidth: 3,
+    borderColor: "#fff",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  customPinDot: {
+    flex: 1,
+    borderRadius: 9,
+    backgroundColor: "#ff6b6b",
+  },
+  // Destination Marker
+  destinationMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#fff",
+    borderWidth: 3,
+    borderColor: "#28a745",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  destinationMarkerText: {
+    fontSize: 24,
+  },
+  languageSelectorModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "center",
@@ -2079,6 +2967,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#000",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  languageSelectorSubtitle: {
+    fontSize: 14,
+    color: "#666",
     marginBottom: 20,
     textAlign: "center",
   },

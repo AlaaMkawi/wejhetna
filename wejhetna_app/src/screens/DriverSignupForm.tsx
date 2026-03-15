@@ -14,8 +14,7 @@ import { useNavigation } from "@react-navigation/native";
 import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "./MessageModal"; // 👈 pretty popup
 import Ionicons from "react-native-vector-icons/Ionicons";
-
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../config";
 
 const MINT = "#9bd3d8";
 const DARK_TEAL = "#0f5b63";
@@ -121,6 +120,7 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
   const passwordMeetsNumber = (pwd: string): boolean => /[0-9]/.test(pwd);
   const passwordMeetsSymbol = (pwd: string): boolean => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(pwd);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const isStrongPassword = (value: string) => {
     // Same as regular user: 8+ chars, uppercase, lowercase, number, symbol
     return passwordMeetsLength(value) && 
@@ -140,6 +140,7 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
     return null;
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const isValidUsername = (value: string) => {
     // 3–20 chars, letters/numbers/underscore only
     return /^[A-Za-z0-9_]{3,20}$/.test(value);
@@ -196,11 +197,30 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
           headers: { "Content-Type": "multipart/form-data" },
           body: formData,
         });
+
+        // Check if response is OK
+        if (!uploadRes.ok) {
+          const errorText = await uploadRes.text();
+          console.log("Upload failed:", uploadRes.status, errorText);
+          showModal("error", t("error") || "Error", t("upload_failed") || `Failed to upload image: ${uploadRes.status}`);
+          return;
+        }
+
         const json = await uploadRes.json();
-        if (json.file_url) {
-          setUrl(json.file_url);
+        
+        // Validate response has file_url
+        if (json && json.file_url) {
+          // Ensure the URL uses the correct base URL (in case backend returns wrong one)
+          let finalUrl = json.file_url;
+          // If backend returned emulator URL but we're on physical device, fix it
+          if (finalUrl.includes("10.0.2.2") && !API_BASE_URL.includes("10.0.2.2")) {
+            finalUrl = finalUrl.replace("http://10.0.2.2:8000", API_BASE_URL);
+          }
+          setUrl(finalUrl);
+          console.log("Upload successful:", finalUrl);
         } else {
-          showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image");
+          console.log("Invalid upload response:", json);
+          showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: Invalid response");
         }
       } catch (e: any) {
         console.log("Upload error", e?.message || e);
@@ -590,9 +610,22 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
         t("driver_application_sent") || "Your driver application has been sent for approval."
       );
     } catch (e: any) {
-      const msg = (t("network_error") || "Network error: ") + e.message;
-      setError(msg);
-      showModal("error", t("network_error_message") || "Network error", msg);
+      console.error("Driver signup error:", e);
+      let errorMsg = t("network_error") || "Network error";
+      
+      // Provide more helpful error messages
+      if (e.message) {
+        if (e.message.includes("Network request failed") || e.message.includes("Failed to fetch")) {
+          errorMsg = t("network_error_message") || "Cannot connect to server. Please check:\n\n1. Backend server is running\n2. Phone and computer are on same WiFi\n3. Firewall allows port 8000\n\nCurrent server: " + API_BASE_URL;
+        } else if (e.message.includes("timeout")) {
+          errorMsg = t("network_timeout") || "Request timed out. Please check your connection and try again.";
+        } else {
+          errorMsg = errorMsg + ": " + e.message;
+        }
+      }
+      
+      setError(errorMsg);
+      showModal("error", t("network_error_message") || "Network Error", errorMsg);
     }
   };
 

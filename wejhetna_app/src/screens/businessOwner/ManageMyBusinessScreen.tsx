@@ -1,6 +1,6 @@
 // src/screens/businessOwner/ManageMyBusinessScreen.tsx
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -17,7 +17,6 @@ import {
   Modal,
   I18nManager,
 } from "react-native";
-import { Picker } from "@react-native-picker/picker";
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from "react-i18next";
@@ -34,8 +33,9 @@ import {
 import { updatePlace } from "../../api/places";
 import i18n from "../../i18n";
 import { launchImageLibrary } from "react-native-image-picker";
+import MessageModal from "../MessageModal";
+import { API_BASE_URL } from "../../../config";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
 const MINT = "#9bd3d8";
@@ -96,7 +96,28 @@ export default function ManageMyBusinessScreen() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [deletingImageIndex, setDeletingImageIndex] = useState<number | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
+  const [imageErrors, setImageErrors] = useState<{ [key: number]: boolean }>({});
+  const [imageLoading, setImageLoading] = useState<{ [key: number]: boolean }>({});
   const scrollViewRef = useRef<any>(null);
+  
+  // Message modal state
+  const [messageModalVisible, setMessageModalVisible] = useState(false);
+  const [messageModalType, setMessageModalType] = useState<"error" | "success">("success");
+  const [messageModalTitle, setMessageModalTitle] = useState("");
+  const [messageModalMessage, setMessageModalMessage] = useState("");
+  
+  // Helper function to show styled message
+  const showMessage = (type: "error" | "success", title: string, message: string) => {
+    setMessageModalType(type);
+    setMessageModalTitle(title);
+    setMessageModalMessage(message);
+    setMessageModalVisible(true);
+  };
+  
+  // Helper function to close message modal
+  const closeMessage = () => {
+    setMessageModalVisible(false);
+  };
   
   // Picker modal state
   const [pickerModalVisible, setPickerModalVisible] = useState(false);
@@ -154,7 +175,8 @@ export default function ManageMyBusinessScreen() {
   };
   
   // Parse opening hours string from database
-  const parseOpeningHours = (hoursString: string | null | undefined): { [key: string]: HourData } => {
+const parseOpeningHours = React.useCallback(
+  (hoursString: string | null | undefined): { [key: string]: HourData } => {
     const defaultHours: { [key: string]: HourData } = {
       Sunday: null,
       Monday: null,
@@ -164,12 +186,11 @@ export default function ManageMyBusinessScreen() {
       Friday: null,
       Saturday: null,
     };
-    
+
     if (!hoursString) return defaultHours;
-    
-    // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
+
     const dayEntries = hoursString.split(",").map(s => s.trim());
-    
+
     dayEntries.forEach(entry => {
       const match = entry.match(/(\w+):\s*(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
       if (match) {
@@ -187,7 +208,8 @@ export default function ManageMyBusinessScreen() {
     });
     
     return defaultHours;
-  };
+  },[]
+);
   
   // Format hours for display
   const formatHours = (hours: HourData): string => {
@@ -240,7 +262,14 @@ export default function ManageMyBusinessScreen() {
       setLoading(true);
       const userId = await AsyncStorage.getItem("userId");
       if (!userId) {
-        Alert.alert(t("error") || "שגיאה", t("user_id_not_found") || "User ID not found");
+        const currentLanguage = i18n.language || "ar";
+        const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+        const message = currentLanguage === "ar" 
+          ? "لم يتم العثور على معرف المستخدم"
+          : currentLanguage === "he"
+          ? "מזהה משתמש לא נמצא"
+          : "User ID not found";
+        showMessage("error", title, message);
         navigation.goBack();
         return;
       }
@@ -263,13 +292,74 @@ export default function ManageMyBusinessScreen() {
         // Load business images if available
         // Use business_images_urls if available, otherwise fallback to main_image_url
         const images: string[] = [];
-        if (profileData.place.business_images_urls && Array.isArray(profileData.place.business_images_urls) && profileData.place.business_images_urls.length > 0) {
-          images.push(...profileData.place.business_images_urls);
+        
+        // Handle business_images_urls - check if it's an array, if not, try to parse it
+        let parsedBusinessImages: string[] = [];
+        if (profileData.place.business_images_urls) {
+          if (Array.isArray(profileData.place.business_images_urls)) {
+            parsedBusinessImages = profileData.place.business_images_urls;
+          } else if (typeof profileData.place.business_images_urls === 'string') {
+            // If it's a string, try to parse it as JSON (defensive)
+            try {
+              const parsed = JSON.parse(profileData.place.business_images_urls);
+              if (Array.isArray(parsed)) {
+                parsedBusinessImages = parsed;
+              } else {
+                console.warn("business_images_urls is a string but not a valid JSON array:", profileData.place.business_images_urls);
+              }
+            } catch (e) {
+              console.warn("Failed to parse business_images_urls as JSON:", profileData.place.business_images_urls, e);
+            }
+          } else {
+            console.warn("business_images_urls is not an array or string:", typeof profileData.place.business_images_urls, profileData.place.business_images_urls);
+          }
+        }
+        
+        if (parsedBusinessImages.length > 0) {
+          images.push(...parsedBusinessImages);
         } else if (profileData.place.main_image_url) {
           // Fallback to main_image_url for backward compatibility
           images.push(profileData.place.main_image_url);
         }
-        setBusinessImages(images);
+        // Filter out duplicates, empty strings, null, and undefined
+        const uniqueImages = Array.from(new Set(
+          images
+            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+            .map(img => img.trim())
+        ));
+        
+        // Debug logging
+        if (__DEV__) {
+          console.log("=== LOADING BUSINESS IMAGES ===");
+          console.log("Raw business_images_urls:", profileData.place.business_images_urls);
+          console.log("Raw main_image_url:", profileData.place.main_image_url);
+          console.log("Filtered unique images:", uniqueImages);
+          console.log("API_BASE_URL:", API_BASE_URL);
+          uniqueImages.forEach((img, idx) => {
+            const formatted = formatImageUri(img);
+            console.log(`Image ${idx}:`, {
+              original: img,
+              formatted: formatted,
+              isValid: formatted && formatted.startsWith('http')
+            });
+            // Test if URL is accessible (only in dev mode)
+            if (formatted && formatted.startsWith('http')) {
+              fetch(formatted, { method: 'HEAD' })
+                .then(res => {
+                  console.log(`✅ Image ${idx} URL accessible:`, formatted, "Status:", res.status);
+                })
+                .catch(err => {
+                  console.error(`❌ Image ${idx} URL NOT accessible:`, formatted, "Error:", err.message);
+                });
+            }
+          });
+          console.log("=============================");
+        }
+        
+        setBusinessImages(uniqueImages);
+        // Reset image errors and loading states when loading new images
+        setImageErrors({});
+        setImageLoading({});
         // Parse and load opening hours
         if (profileData.place.opening_hours) {
           const parsedHours = parseOpeningHours(profileData.place.opening_hours);
@@ -277,14 +367,18 @@ export default function ManageMyBusinessScreen() {
         }
       }
     } catch (error: any) {
-      Alert.alert(
-        t("error") || "שגיאה",
-        error.message || t("failed_to_load_business_data") || "Failed to load business data"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const message = error.message || (currentLanguage === "ar"
+        ? "فشل تحميل بيانات العمل"
+        : currentLanguage === "he"
+        ? "נכשל בטעינת נתוני העסק"
+        : "Failed to load business data");
+      showMessage("error", title, message);
     } finally {
       setLoading(false);
     }
-  }, [navigation, t, lastLoadTime]);
+  }, [navigation, lastLoadTime, parseOpeningHours]);
   useFocusEffect(
     React.useCallback(() => {
       // Only reload if data is older than 30 seconds when screen comes into focus
@@ -295,7 +389,7 @@ export default function ManageMyBusinessScreen() {
     }, [loadBusinessData, lastLoadTime])
   );
 
-  async function handleSaveField(field: string): Promise<boolean> {
+  async function handleSaveField(field: string, fieldValue?: string): Promise<boolean> {
     if (!place) return false;
 
     try {
@@ -330,7 +424,10 @@ export default function ManageMyBusinessScreen() {
           updateData.social_links = socialLink.trim() || null;
           break;
         case "announcement":
-          updateData.announcement = announcement.trim() || null;
+          // Use fieldValue if provided (for deletion), otherwise use current state
+          const announcementValue = fieldValue !== undefined ? fieldValue : announcement;
+          const trimmedAnnouncement = announcementValue.trim();
+          updateData.announcement = trimmedAnnouncement.length > 0 ? trimmedAnnouncement : null;
           break;
         case "opening_hours":
           // Format opening hours string
@@ -353,11 +450,16 @@ export default function ManageMyBusinessScreen() {
         const savedValue = updateData[field];
         // Ensure state is set to the value that was saved to backend
         if (field === "announcement") {
+          // If savedValue is null (deleted), set to empty string to clear the UI
           const savedAnnouncement = savedValue || "";
+          // Force state update to ensure UI reflects the deletion
           setAnnouncement(savedAnnouncement);
+          // Update place object to reflect deletion
           if (place) {
-            setPlace({ ...place, announcement: savedAnnouncement || null });
+            setPlace({ ...place, announcement: savedValue }); // Use savedValue directly (null if deleted)
           }
+          // Force a re-render by updating a dummy state if needed
+          // The announcement state should already be updated above
         } else if (field === "description") {
           // Use the trimmed description that was saved (or empty string if deleted)
           const trimmedDesc = description.trim();
@@ -378,10 +480,14 @@ export default function ManageMyBusinessScreen() {
           }
         }
         setEditingField(null);
-        Alert.alert(
-          t("success") || "הצלחה",
-          t("updated_successfully") || "Updated successfully"
-        );
+        const currentLanguage = i18n.language || "ar";
+        const successTitle = currentLanguage === "ar" ? "نجح" : currentLanguage === "he" ? "הצלחה" : "Success";
+        const successMessage = currentLanguage === "ar"
+          ? "تم التحديث بنجاح"
+          : currentLanguage === "he"
+          ? "עודכן בהצלחה"
+          : "Updated successfully";
+        showMessage("success", successTitle, successMessage);
         return true;
       }
 
@@ -390,17 +496,25 @@ export default function ManageMyBusinessScreen() {
 
       setEditingField(null);
 
-      Alert.alert(
-        t("success") || "הצלחה",
-        t("updated_successfully") || "Updated successfully"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const successTitle = currentLanguage === "ar" ? "نجح" : currentLanguage === "he" ? "הצלחה" : "Success";
+      const successMessage = currentLanguage === "ar"
+        ? "تم التحديث بنجاح"
+        : currentLanguage === "he"
+        ? "עודכן בהצלחה"
+        : "Updated successfully";
+      showMessage("success", successTitle, successMessage);
       return true;
     } catch (error: any) {
       console.error("Error updating field:", error);
-      Alert.alert(
-        t("error") || "שגיאה",
-        error.message || t("failed_to_update") || "Failed to update"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const errorMessage = error.message || (currentLanguage === "ar"
+        ? "فشل التحديث"
+        : currentLanguage === "he"
+        ? "העדכון נכשל"
+        : "Failed to update");
+      showMessage("error", errorTitle, errorMessage);
       return false;
     } finally {
       setUpdating(false);
@@ -410,10 +524,14 @@ export default function ManageMyBusinessScreen() {
   // Handle image upload
   async function handleAddPhoto() {
     if (businessImages.length >= 20) {
-      Alert.alert(
-        t("error") || "שגיאה",
-        t("max_photos_reached") || "Maximum 20 photos allowed"
-      );
+      const currentLanguage = i18n.language || "ar";
+      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const message = currentLanguage === "ar"
+        ? "الحد الأقصى 20 صورة مسموح"
+        : currentLanguage === "he"
+        ? "מקסימום 20 תמונות מותר"
+        : "Maximum 20 photos allowed";
+      showMessage("error", title, message);
       return;
     }
 
@@ -465,27 +583,39 @@ export default function ManageMyBusinessScreen() {
               // Save to backend in background
               saveBusinessImages(finalImages).catch((error) => {
                 console.error("Background save error:", error);
-                Alert.alert(
-                  t("warning") || "אזהרה",
-                  t("image_added_but_save_failed") || "Image added but failed to save. Please try again."
-                );
+                const currentLanguage = i18n.language || "ar";
+                const title = currentLanguage === "ar" ? "تحذير" : currentLanguage === "he" ? "אזהרה" : "Warning";
+                const message = currentLanguage === "ar"
+                  ? "تمت إضافة الصورة لكن فشل الحفظ. يرجى المحاولة مرة أخرى."
+                  : currentLanguage === "he"
+                  ? "התמונה נוספה אבל השמירה נכשלה. אנא נסה שוב."
+                  : "Image added but failed to save. Please try again.";
+                showMessage("error", title, message);
               });
             } else {
               // Remove the local image if upload failed
               setBusinessImages(businessImages);
-              Alert.alert(
-                t("error") || "שגיאה",
-                t("failed_to_upload_image") || "Failed to upload image"
-              );
+              const currentLanguage = i18n.language || "ar";
+              const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+              const message = currentLanguage === "ar"
+                ? "فشل تحميل الصورة"
+                : currentLanguage === "he"
+                ? "העלאת התמונה נכשלה"
+                : "Failed to upload image";
+              showMessage("error", title, message);
             }
           } catch (e: any) {
             console.log("Upload error", e?.message || e);
             // Remove the local image if upload failed
             setBusinessImages(businessImages);
-            Alert.alert(
-              t("error") || "שגיאה",
-              t("failed_to_upload_image") || "Failed to upload image: " + (e?.message || "Unknown error")
-            );
+            const currentLanguage = i18n.language || "ar";
+            const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+            const message = currentLanguage === "ar"
+              ? `فشل تحميل الصورة: ${e?.message || "خطأ غير معروف"}`
+              : currentLanguage === "he"
+              ? `העלאת התמונה נכשלה: ${e?.message || "שגיאה לא ידועה"}`
+              : `Failed to upload image: ${e?.message || "Unknown error"}`;
+            showMessage("error", title, message);
           } finally {
             setUploadingImage(false);
           }
@@ -495,7 +625,7 @@ export default function ManageMyBusinessScreen() {
   }
 
   // Save business images to backend (no reload to prevent scroll reset)
-  async function saveBusinessImages(images: string[], skipReload: boolean = true) {
+  async function saveBusinessImages(images: string[]) {
     if (!place) return;
 
     try {
@@ -541,14 +671,18 @@ export default function ManageMyBusinessScreen() {
               // Update UI immediately
               setBusinessImages(newImages);
               // Save to backend (no reload to prevent scroll reset)
-              await saveBusinessImages(newImages, true);
+              await saveBusinessImages(newImages);
             } catch (error: any) {
               // Revert on error - restore original images
               await loadBusinessData(true);
-              Alert.alert(
-                t("error") || "שגיאה",
-                error.message || t("failed_to_delete_image") || "Failed to delete image"
-              );
+              const currentLanguage = i18n.language || "ar";
+              const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+              const message = error.message || (currentLanguage === "ar"
+                ? "فشل حذف الصورة"
+                : currentLanguage === "he"
+                ? "מחיקת התמונה נכשלה"
+                : "Failed to delete image");
+              showMessage("error", title, message);
             } finally {
               setDeletingImageIndex(null);
             }
@@ -570,6 +704,126 @@ export default function ManageMyBusinessScreen() {
     const dayKey = `day_${day.toLowerCase()}`;
     return t(dayKey) || day;
   }
+
+  // Helper function to format image URI - ensure it's a valid URL
+  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
+  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
+  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
+  function formatImageUri(uri: string): string {
+    if (!uri || !uri.trim()) {
+      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
+      return "";
+    }
+    
+    const trimmedUri = uri.trim();
+    
+    try {
+      // If it's already a full URL with the correct base, return as is
+      if (trimmedUri.startsWith(API_BASE_URL)) {
+        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's already a full URL (http:// or https://), extract just the path
+      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
+        // Manually extract the path from the URL
+        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
+        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
+        if (urlMatch && urlMatch[1]) {
+          const path = urlMatch[1];
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If regex fails, try to find /uploads/ in the string
+        const uploadsIndex = trimmedUri.indexOf("/uploads/");
+        if (uploadsIndex !== -1) {
+          const path = trimmedUri.substring(uploadsIndex);
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If we can't extract path, try the original URL (might work if same network)
+        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's a relative path starting with /, prepend API_BASE_URL
+      if (trimmedUri.startsWith("/")) {
+        const formatted = `${API_BASE_URL}${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // If it doesn't start with /, assume it's a filename and add /uploads/
+      // This handles cases where backend might return just "filename.jpg"
+      if (!trimmedUri.includes("/")) {
+        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // Otherwise, try to prepend API_BASE_URL
+      const formatted = `${API_BASE_URL}/${trimmedUri}`;
+      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
+      return formatted;
+    } catch (error) {
+      // If URL parsing fails, try to construct a valid URL
+      console.warn("Error formatting image URI:", trimmedUri, error);
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      return `${API_BASE_URL}/uploads/${trimmedUri}`;
+    }
+  }
+
+  // Handle image load error
+  const handleImageError = (error: any, index: number) => {
+    const originalUri = businessImages[index];
+    const formattedUri = formatImageUri(originalUri);
+    console.warn(`❌ Image ${index} failed to load:`, {
+      original: originalUri,
+      formatted: formattedUri,
+      error: error?.nativeEvent?.error || error,
+      errorCode: error?.nativeEvent?.error?.code,
+      errorMessage: error?.nativeEvent?.error?.message
+    });
+    
+    // Test URL accessibility in dev mode
+    if (__DEV__ && formattedUri) {
+      fetch(formattedUri, { method: 'HEAD' })
+        .then(res => {
+          console.log(`🔍 Fetch test for image ${index}:`, formattedUri, "Status:", res.status, res.statusText);
+        })
+        .catch(err => {
+          console.error(`🔍 Fetch test failed for image ${index}:`, formattedUri, "Error:", err.message);
+        });
+    }
+    
+    setImageErrors((prev) => ({ ...prev, [index]: true }));
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+  };
+
+  // Handle image load success
+  const handleImageLoad = (index: number) => {
+    if (__DEV__) {
+      console.log(`✅ Image ${index} loaded successfully:`, formatImageUri(businessImages[index]));
+    }
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+    setImageErrors((prev) => {
+      const newErrors = { ...prev };
+      delete newErrors[index];
+      return newErrors;
+    });
+  };
+
+  // Handle image load start
+  const handleImageLoadStart = (index: number) => {
+    if (__DEV__) {
+      console.log(`🔄 Image ${index} loading:`, formatImageUri(businessImages[index]));
+    }
+    setImageLoading((prev) => ({ ...prev, [index]: true }));
+  };
 
   if (loading) {
     return (
@@ -731,7 +985,15 @@ export default function ManageMyBusinessScreen() {
                 onPress={() => {
                   const url = socialLink.startsWith('http') ? socialLink : `https://${socialLink}`;
                   Linking.openURL(url).catch(err => {
-                    Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                      console.error(err);
+                      const currentLanguage = i18n.language || "ar";
+                      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+                      const message = currentLanguage === "ar"
+                        ? "لا يمكن فتح الرابط"
+                        : currentLanguage === "he"
+                        ? "לא ניתן לפתוח את הקישור"
+                        : "Could not open link";
+                      showMessage("error", title, message);
                   });
                 }}
               >
@@ -1013,8 +1275,19 @@ export default function ManageMyBusinessScreen() {
                         text: t("delete") || "Delete",
                         style: "destructive",
                         onPress: async () => {
-                          setAnnouncement("");
-                          await handleSaveField("announcement");
+                          // Clear state immediately using functional update to ensure it works
+                          setAnnouncement(() => "");
+                          // Update place object immediately to reflect deletion in UI
+                          if (place) {
+                            setPlace((prevPlace) => ({ ...prevPlace, announcement: null }));
+                          }
+                          // Pass empty string directly to handleSaveField to ensure it uses the deleted value
+                          await handleSaveField("announcement", "");
+                          // Force a final state update after save to ensure UI reflects deletion
+                          setAnnouncement(() => "");
+                          if (place) {
+                            setPlace((prevPlace) => ({ ...prevPlace, announcement: null }));
+                          }
                         }
                       }
                     ]
@@ -1148,7 +1421,16 @@ export default function ManageMyBusinessScreen() {
                       <View style={styles.dayDot} />
                     </View>
                   )}
+
                   <Text style={styles.dayText}>{getDayName(day)}</Text>
+
+                  {currentlyOpen && (
+                    <View style={[styles.statusBadge, styles.statusOpen]}>
+                      <Text style={styles.statusText}>
+                        {t("open_now") || "Open now"}
+                      </Text>
+                    </View>
+                  )}
                 </View>
                 {editingField === "opening_hours" ? (
                   <View style={styles.hoursPickerContainer}>
@@ -1316,32 +1598,68 @@ export default function ManageMyBusinessScreen() {
 
           <View style={styles.photoGallery}>
             {/* Display existing photos */}
-            {businessImages.map((imageUri, index) => (
-              <View key={index} style={styles.photoItem}>
-                <TouchableOpacity
-                  onPress={() => setSelectedImageIndex(index)}
-                  activeOpacity={0.9}
-                >
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={styles.photo}
-                  />
-                </TouchableOpacity>
-                {deletingImageIndex === index ? (
-                  <View style={styles.photoLoadingOverlay}>
-                    <ActivityIndicator size="small" color="#fff" />
-                  </View>
-                ) : (
+            {businessImages.map((imageUri, index) => {
+              const hasError = imageErrors[index];
+              const isLoading = imageLoading[index];
+              const formattedUri = formatImageUri(imageUri);
+              
+              // Skip rendering if URI is invalid
+              if (!imageUri || !formattedUri) {
+                return null;
+              }
+              
+              return (
+                <View key={`image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoItem}>
                   <TouchableOpacity
-                    style={styles.photoDeleteButton}
-                    onPress={() => handleDeletePhoto(index)}
-                    disabled={deletingImageIndex !== null || uploadingImage}
+                    onPress={() => setSelectedImageIndex(index)}
+                    activeOpacity={0.9}
                   >
-                    <Ionicons name="close-circle" size={24} color="#ff6b6b" />
+                    {hasError ? (
+                      <View style={styles.photoErrorPlaceholder}>
+                        <Ionicons name="image-outline" size={32} color="#999" />
+                        <Text style={styles.photoErrorText} numberOfLines={2}>
+                          {t("image_failed_to_load") || "Failed to load"}
+                        </Text>
+                        {__DEV__ && (
+                          <Text style={[styles.photoErrorText, { fontSize: 8, marginTop: 4 }]} numberOfLines={1}>
+                            {formattedUri.substring(0, 30)}...
+                          </Text>
+                        )}
+                      </View>
+                    ) : (
+                      <View style={styles.photoContainer}>
+                        <Image
+                          source={{ uri: formattedUri }}
+                          style={styles.photo}
+                          onError={(e) => handleImageError(e, index)}
+                          onLoad={() => handleImageLoad(index)}
+                          onLoadStart={() => handleImageLoadStart(index)}
+                          resizeMode="cover"
+                        />
+                        {isLoading && (
+                          <View style={styles.photoLoadingOverlay}>
+                            <ActivityIndicator size="small" color="#fff" />
+                          </View>
+                        )}
+                      </View>
+                    )}
                   </TouchableOpacity>
-                )}
-              </View>
-            ))}
+                  {deletingImageIndex === index ? (
+                    <View style={styles.photoLoadingOverlay}>
+                      <ActivityIndicator size="small" color="#fff" />
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.photoDeleteButton}
+                      onPress={() => handleDeletePhoto(index)}
+                      disabled={deletingImageIndex !== null || uploadingImage}
+                    >
+                      <Ionicons name="close-circle" size={24} color="#ff6b6b" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
             
             {/* Add photo placeholders for remaining slots (max 20 total) */}
             {businessImages.length < 20 && (
@@ -1379,16 +1697,43 @@ export default function ManageMyBusinessScreen() {
             >
               <Ionicons name="close" size={32} color="#fff" />
             </TouchableOpacity>
-            {selectedImageIndex !== null && businessImages[selectedImageIndex] && (
-              <Image
-                source={{ uri: businessImages[selectedImageIndex] }}
-                style={styles.fullScreenImage}
-                resizeMode="contain"
-              />
-            )}
+            {selectedImageIndex !== null && businessImages[selectedImageIndex] && (() => {
+              const fullScreenUri = formatImageUri(businessImages[selectedImageIndex]);
+              return (
+                <Image
+                  source={{ uri: fullScreenUri }}
+                  style={styles.fullScreenImage}
+                  resizeMode="contain"
+                  onError={(e) => {
+                    if (__DEV__) {
+                      console.error(`❌ Full-screen image failed:`, {
+                        original: businessImages[selectedImageIndex],
+                        formatted: fullScreenUri,
+                        error: e?.nativeEvent?.error || e
+                      });
+                    }
+                    // Don't show alert - just close the modal silently
+                    setSelectedImageIndex(null);
+                  }}
+                  onLoad={() => {
+                    if (__DEV__) {
+                      console.log(`✅ Full-screen image loaded:`, fullScreenUri);
+                    }
+                  }}
+                />
+              );
+            })()}
           </View>
         </Modal>
 
+        {/* Styled Message Modal */}
+        <MessageModal
+          visible={messageModalVisible}
+          type={messageModalType}
+          title={messageModalTitle}
+          message={messageModalMessage}
+          onClose={closeMessage}
+        />
       </ScrollView>
     </View>
   );
@@ -1785,6 +2130,11 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     position: "relative",
   },
+  photoContainer: {
+    width: "100%",
+    height: "100%",
+    position: "relative",
+  },
   photo: {
     width: "100%",
     height: "100%",
@@ -1806,6 +2156,22 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "center",
     alignItems: "center",
+  },
+  photoErrorPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#f5f5f5",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 8,
+  },
+  photoErrorText: {
+    fontSize: 10,
+    color: "#999",
+    marginTop: 4,
+    textAlign: "center",
   },
   addPhotoPlaceholder: {
     width: 100,
@@ -2075,4 +2441,3 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 });
-

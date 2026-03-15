@@ -1,11 +1,6 @@
 // src/api/businessOwnerApi.ts
 import axios from "axios";
-
-// ⚠️ OPTION A: If you ALREADY have API_BASE_URL defined somewhere (like config.ts),
-// then DELETE the line below and import it instead, for example:
-// import { API_BASE_URL } from "../config";
-
-const API_BASE_URL = "http://10.0.2.2:8000"; // backend base URL for emulator
+import { API_BASE_URL } from "../../config";
 
 // ---------- Types ----------
 export type LoginRole = "REGULAR" | "DRIVER" | "BUSINESS_OWNER" | "ADMIN";
@@ -71,6 +66,8 @@ export interface BusinessOwnerPlaceRequestPayload {
   business_phone?: string | null; // Business phone (different from user's personal phone)
   opening_hours?: string | null;
   main_image_url?: string | null;
+  business_license_image_url?: string | null;
+  business_images_urls?: string[] | null;
   social_links?: string | null;
 }
 

@@ -16,8 +16,8 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "react-native-vector-icons/Ionicons";
+import { API_BASE_URL } from "../../config";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
 const { width, height } = Dimensions.get("window");
 
 type Props = {

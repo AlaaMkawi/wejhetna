@@ -1,5 +1,7 @@
 # schemas.py
 from datetime import datetime
+from typing import Optional
+
 from typing import Optional, List
 
 from pydantic import BaseModel, Field,  EmailStr
@@ -147,6 +149,9 @@ class PlaceUpdate(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
+
+    social_links: Optional[str] = None
+
     business_images_urls: Optional[List[str]] = None
     social_links: Optional[str] = None
     announcement: Optional[str] = None

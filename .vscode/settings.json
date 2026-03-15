@@ -1,3 +1,7 @@
 {
+    "java.compile.nullAnalysis.mode": "disabled",
+    "java.configuration.updateBuildConfiguration": "interactive"
+=======
     "java.compile.nullAnalysis.mode": "disabled"
+>>>>>>> origin/lena
 }
