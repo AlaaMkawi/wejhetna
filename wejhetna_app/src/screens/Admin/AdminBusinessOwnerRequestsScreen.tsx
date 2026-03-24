@@ -1,5 +1,5 @@
 // src/screens/Admin/AdminBusinessOwnerRequestsScreen.tsx
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -13,10 +13,11 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { useFocusEffect } from "@react-navigation/native";
 import { RootStackParamList } from "../../navigation/types";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
-const API_BASE_URL = "http://10.0.2.2:8000";
+import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
 
 export type BusinessOwnerRequest = {
@@ -55,6 +56,7 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
   const [requests, setRequests] = useState<BusinessOwnerRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [userNamesMap, setUserNamesMap] = useState<{ [key: number]: string }>({});
 
   const [search, setSearch] = useState("");
   const [sortOrder, setSortOrder] = useState<"oldest" | "newest">("newest");
@@ -63,12 +65,33 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
     setLoading(true);
     setError(null);
     try {
+      // Load requests
       const res = await fetch(`${API_BASE_URL}/admin/business-owner/requests`);
       const json = await res.json();
       if (!res.ok) {
         setError(json.detail || "Failed to load business owner requests");
       } else {
         setRequests(json);
+        
+        // Load user information for all unique user IDs
+        const userIds = [...new Set(json.map((req: BusinessOwnerRequest) => req.user_id))];
+        if (userIds.length > 0) {
+          try {
+            const usersRes = await fetch(`${API_BASE_URL}/admin/users`);
+            const users = await usersRes.json();
+            if (usersRes.ok && Array.isArray(users)) {
+              const namesMap: { [key: number]: string } = {};
+              users.forEach((user: { id: number; full_name: string }) => {
+                if (userIds.includes(user.id)) {
+                  namesMap[user.id] = user.full_name;
+                }
+              });
+              setUserNamesMap(namesMap);
+            }
+          } catch (userError) {
+            console.error("Error loading user names:", userError);
+          }
+        }
       }
     } catch (e: any) {
       setError("Network error: " + e.message);
@@ -77,9 +100,12 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
     }
   };
 
-  useEffect(() => {
-    loadRequests();
-  }, []);
+  // Refresh data when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      loadRequests();
+    }, [])
+  );
 
   const getVisibleRequests = () => {
     // Filter to only show PENDING requests
@@ -88,7 +114,9 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
     // Apply search filter
     list = list.filter((req) => {
       const searchLower = search.toLowerCase();
+      const userName = userNamesMap[req.user_id] || "";
       return (
+        userName.toLowerCase().includes(searchLower) ||
         req.name.toLowerCase().includes(searchLower) ||
         req.name_ar.toLowerCase().includes(searchLower) ||
         req.name_he.toLowerCase().includes(searchLower)
@@ -134,7 +162,14 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
       >
         <View style={styles.cardContent}>
           <View style={styles.nameRow}>
-            <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+            <View style={styles.titleContainer}>
+              <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+              {userNamesMap[item.user_id] && (
+                <Text style={styles.userName} numberOfLines={1}>
+                  {t("by") || "By"}: {userNamesMap[item.user_id]}
+                </Text>
+              )}
+            </View>
             <View style={[
               styles.statusBadge,
               item.status === "PENDING" && styles.statusBadgePending,
@@ -365,14 +400,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 8,
   },
+  titleContainer: {
+    flex: 1,
+    marginRight: 10,
+  },
   cardTitle: {
     fontSize: 17,
     fontWeight: "600",
     color: "#1A1A1A",
     letterSpacing: -0.2,
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
-    flex: 1,
-    marginRight: 10,
+  },
+  userName: {
+    fontSize: 13,
+    fontWeight: "400",
+    color: "#6B7280",
+    marginTop: 4,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   statusBadge: {
     paddingHorizontal: 10,

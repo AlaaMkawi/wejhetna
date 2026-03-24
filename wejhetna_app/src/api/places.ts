@@ -1,4 +1,5 @@
 // src/api/places.ts
+import { API_BASE_URL as BASE_URL } from "../../config";
 
 export type City = {
   id: number;
@@ -38,7 +39,9 @@ export type PlaceForMap = {
   phone?: string | null;
   opening_hours?: string | null;
   main_image_url?: string | null;
+  business_images_urls?: string[] | null; // Array of business image URLs
   social_links?: string | null;
+  announcement?: string | null; // Business announcements/important news
   owner_user_id?: number | null; // ID of the business owner who owns this place
 
   city: City;
@@ -51,8 +54,6 @@ export type GpsOsmCheckResult = {
   match_found: boolean;
   osm_id?: string | null;
 };
-
-const BASE_URL = "http://10.0.2.2:8000"; // אנדרואיד אמולטור → FastAPI
 
 // =======================
 // FETCH CITIES
@@ -384,4 +385,55 @@ export async function updatePlace(placeId: number, updateData: any): Promise<any
   }
 
   return res.json();
+}
+
+// =======================
+// AI TRANSLATION
+// =======================
+export async function translateText(text: string, targetLanguage: "ar" | "he"): Promise<{ translated_text: string; detected_language: string }> {
+  try {
+    const res = await fetch(`${BASE_URL}/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        target_language: targetLanguage,
+      }),
+    });
+
+    if (!res.ok) {
+      let errorMessage = `HTTP ${res.status}: Failed to translate text`;
+      try {
+        const error = await res.json();
+        errorMessage = error.detail || error.message || errorMessage;
+        console.error("Translation API error:", {
+          status: res.status,
+          statusText: res.statusText,
+          error: error
+        });
+      } catch {
+        const textError = await res.text().catch(() => "");
+        console.error("Translation API error (could not parse JSON):", {
+          status: res.status,
+          statusText: res.statusText,
+          body: textError
+        });
+        errorMessage = textError || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result = await res.json();
+    if (!result || !result.translated_text) {
+      throw new Error("Translation API returned invalid response");
+    }
+    return result;
+  } catch (error: any) {
+    // Handle network errors
+    if (error.message.includes("fetch") || error.message.includes("Network") || error.message.includes("Failed to fetch")) {
+      throw new Error("Cannot connect to server. Please check if the backend is running.");
+    }
+    // Re-throw other errors with their original message
+    throw error;
+  }
 }

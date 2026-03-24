@@ -1,10 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from sqlalchemy import func
 from schemas import LocationCreate, LocationResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.context import CryptContext
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
@@ -331,6 +331,8 @@ class RegularUserSignup(BaseModel):
 
 
 class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     username: str
@@ -339,11 +341,10 @@ class UserOut(BaseModel):
     role: str
     status: str
 
-    class Config:
-        orm_mode = True
-
 
 class UserListOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     username: str
@@ -353,9 +354,6 @@ class UserListOut(BaseModel):
     status: str
     rejection_reason: Optional[str] = None
     created_at: datetime
-
-    class Config:
-        orm_mode = True
 
 
 class DriverSignupRequest(BaseModel):
@@ -385,6 +383,8 @@ from typing import Optional  # make sure this exists near the top
 
 
 class DriverSignupOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserOut
     driver_profile_id: int
     vehicle_id: int
@@ -392,13 +392,11 @@ class DriverSignupOut(BaseModel):
     vehicle_status: str
     message: Optional[str] = None  # NEW
 
-    class Config:
-        orm_mode = True
-
 
 class DriverReviewRequest(BaseModel):
     admin_user_id: int
     reason: Optional[str] = None
+    driver_language: Optional[str] = "ar"  # Language for driver email: "ar", "he", or "en"
 
 
 class LoginRequest(BaseModel):
@@ -407,13 +405,12 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     role: str
     status: str
-
-    class Config:
-        orm_mode = True
 
 
 class BusinessOwnerSignup(BaseModel):
@@ -425,11 +422,10 @@ class BusinessOwnerSignup(BaseModel):
 
 
 class BusinessOwnerSignupOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserOut
     message: Optional[str] = None
-
-    class Config:
-        orm_mode = True
 
 
 class NearbyPlaceInfo(BaseModel):
@@ -512,8 +508,7 @@ class DriverApplicationOut(BaseModel):
     car_insurance_image_url: str
     car_photos_urls: Optional[List[str]] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 from typing import List  # make sure this import exists at the top
@@ -539,9 +534,8 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
-    # NOTE: These fields are not in DB yet, so not included in response
-    # business_license_image_url: Optional[str] = None
-    # business_images_urls: Optional[List[str]] = None
+    business_license_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None
     social_links: Optional[str] = None
     # social_media_account_name: Optional[str] = None
 
@@ -550,8 +544,7 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
     created_at: datetime
     reviewed_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =========================
@@ -559,6 +552,8 @@ class BusinessOwnerPlaceRequestOut(BaseModel):
 # =========================
 
 class UserProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     full_name: str
     username: str
@@ -568,11 +563,10 @@ class UserProfileOut(BaseModel):
     status: str
     created_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
-
 
 class DriverVehicleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     car_type: str
     plate_number: str
@@ -582,22 +576,20 @@ class DriverVehicleOut(BaseModel):
     car_photos_urls: Optional[List[str]] = None
     status: str
 
-    class Config:
-        orm_mode = True
-
 
 class DriverProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserProfileOut
     vehicle: Optional[DriverVehicleOut] = None
     driver_status: str
     driver_license_image_url: Optional[str] = None
     id_card_image_url: Optional[str] = None
 
-    class Config:
-        orm_mode = True
-
 
 class BusinessPlaceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     id: int
     name: str
     name_ar: Optional[str] = None
@@ -608,20 +600,19 @@ class BusinessPlaceOut(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None
+    social_links: Optional[str] = None
+    announcement: Optional[str] = None
     lat: Optional[float] = None
     lon: Optional[float] = None
 
-    class Config:
-        orm_mode = True
-
 
 class BusinessOwnerProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
     user: UserProfileOut
     place: Optional[BusinessPlaceOut] = None
     request_status: Optional[str] = None
-
-    class Config:
-        orm_mode = True
 
 
 @app.get(
@@ -741,11 +732,37 @@ def approve_business_owner_request(
 
     db.commit()
 
-    # מייל (אופציונלי)
+    # Send professional bilingual email (Arabic and Hebrew)
+    email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نحن سعداء بإبلاغك بأن طلب صاحب العمل الخاص بك لوجهتنا تمت الموافقة عليه!
+
+يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في إدارة مكان عملك.
+
+نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {user.full_name},
+
+אנו שמחים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא אושרה!
+
+אתה יכול כעת להתחבר לאפליקציה ולהתחיל לנהל את מקום העסק שלך.
+
+תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    subject = "وجهتنا / ווג'הטנא – الموافقة على طلب صاحب العمل / אישור בקשת בעל עסק"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Business owner request approved",
-        body="Your business owner request has been approved. You can now log in and manage your business place.",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Business owner request approved"}
@@ -792,10 +809,59 @@ def reject_business_owner_request(
 
     db.commit()
 
+    # Send professional bilingual email (Arabic and Hebrew) with reason and re-signup instructions
+    email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نأسف لإبلاغك بأن طلب صاحب العمل الخاص بك لوجهتنا تمت مراجعته ولسوء الحظ، لا يمكننا الموافقة عليه في هذا الوقت.
+
+سبب الرفض:
+{reason}
+
+نفهم أن هذا قد يكون محبطاً، لكننا نريد أن نمنحك الفرصة لمعالجة المشاكل وإعادة التقديم.
+
+يمكنك تقديم طلب جديد باستخدام نفس بيانات الاعتماد:
+• البريد الإلكتروني: {user.email}
+• اسم المستخدم: {user.username}
+
+ببساطة قم بزيارة تطبيق وجهتنا وأكمل نموذج تسجيل صاحب العمل مرة أخرى بنفس البريد الإلكتروني واسم المستخدم. سنراجع طلبك الجديد بعد تقديمه.
+
+إذا كان لديك أي أسئلة أو تحتاج إلى توضيح حول سبب الرفض، يرجى عدم التردد في الاتصال بنا.
+
+شكراً لاهتمامك بالانضمام إلى وجهتنا.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {user.full_name},
+
+אנו מצטערים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא נבדקה ולמרבה הצער, איננו יכולים לאשר אותה בשלב זה.
+
+סיבת הדחייה:
+{reason}
+
+אנו מבינים שזה עשוי להיות מאכזב, אך אנו רוצים לתת לך הזדמנות לטפל בבעיות ולהגיש בקשה מחדש.
+
+תוכל להגיש בקשה חדשה באמצעות אותם פרטי התחברות:
+• אימייל: {user.email}
+• שם משתמש: {user.username}
+
+פשוט בקר באפליקציית ווג'הטנא והשלם את טופס הרשמת בעל העסק שוב עם אותו אימייל ושם משתמש. נבדוק את הבקשה החדשה שלך לאחר הגשתה.
+
+אם יש לך שאלות או צריך הבהרה לגבי סיבת הדחייה, אנא אל תהסס ליצור איתנו קשר.
+
+תודה על העניין שלך להצטרף לוג'הטנא.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    subject = "وجهتنا / ווג'הטנא – تحديث حالة طلب صاحب العمل / עדכון סטטוס בקשת בעל עסק"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Business owner request rejected",
-        body=f"Your business owner request was rejected.\n\nReason: {reason}\n\nYou can try to sign up again with the same email and username if you wish to submit a new request.",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Business owner request rejected"}
@@ -1334,10 +1400,11 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Check if already verified (but allow rejected business owners to re-verify)
+    # Check if already verified (but allow rejected business owners and drivers to re-verify)
     if user.email_verified:
-        # Allow rejected business owners to request new verification code
-        if user.role == UserRole.BUSINESS_OWNER and user.status == UserStatus.REJECTED:
+        # Allow rejected business owners and drivers to request new verification code
+        if (user.role == UserRole.BUSINESS_OWNER and user.status == UserStatus.REJECTED) or \
+           (user.role == UserRole.DRIVER and user.status == UserStatus.REJECTED):
             # Reset email_verified to False so they can verify again
             user.email_verified = False
             db.commit()
@@ -1508,9 +1575,10 @@ def request_email_verification(data: SendVerificationCodeRequest, db: Session = 
     existing_user = db.query(User).filter(User.email == data.email).first()
     
     if existing_user:
-        # Allow rejected business owners to always request new verification code
-        if existing_user.role == UserRole.BUSINESS_OWNER and existing_user.status == UserStatus.REJECTED:
-            # Rejected business owner can re-verify email - reset email_verified
+        # Allow rejected business owners and drivers to always request new verification code
+        if (existing_user.role == UserRole.BUSINESS_OWNER and existing_user.status == UserStatus.REJECTED) or \
+           (existing_user.role == UserRole.DRIVER and existing_user.status == UserStatus.REJECTED):
+            # Rejected business owner or driver can re-verify email - reset email_verified
             existing_user.email_verified = False
             db.commit()
         elif existing_user.email_verified:
@@ -1566,8 +1634,189 @@ def ping():
     return {"status": "ok"}
 
 
+# --- AI Translation Endpoint ---
+class TranslationRequest(BaseModel):
+    text: str
+    target_language: str  # "ar" or "he"
+
+class TranslationResponse(BaseModel):
+    translated_text: str
+    detected_language: str
+
+def detect_language(text: str) -> str:
+    """Simple language detection based on character ranges."""
+    # Count Arabic, Hebrew, and English characters
+    arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF')
+    hebrew_chars = sum(1 for c in text if '\u0590' <= c <= '\u05FF')
+    english_chars = sum(1 for c in text if c.isalpha() and ord(c) < 128 and c.isascii())
+    
+    if arabic_chars > hebrew_chars and arabic_chars > english_chars:
+        return "ar"
+    elif hebrew_chars > arabic_chars and hebrew_chars > english_chars:
+        return "he"
+    elif english_chars > arabic_chars and english_chars > hebrew_chars:
+        return "en"
+    else:
+        # Default to English if unclear (most common case for business descriptions)
+        return "en"
+
+@app.post("/translate", response_model=TranslationResponse)
+def translate_text(request: TranslationRequest):
+    """
+    Translate text using OpenAI API.
+    Supports Arabic <-> Hebrew translation.
+    """
+    import openai
+    from dotenv import load_dotenv
+    import logging
+    
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    # Load environment variables
+    env_path = Path(__file__).parent / ".env"
+    print(f"[TRANSLATE] Loading .env from: {env_path}")
+    load_dotenv(dotenv_path=env_path)
+    load_dotenv()  # Also try loading from current directory
+    
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    
+    # Log for debugging (don't log the actual key)
+    if openai_api_key:
+        masked_key = f"{openai_api_key[:10]}...{openai_api_key[-4:]}" if len(openai_api_key) > 14 else "***"
+        print(f"[TRANSLATE] OpenAI API key found: {masked_key}")
+        logger.info(f"OpenAI API key found: {masked_key}")
+    else:
+        error_msg = "OpenAI API key not found in environment variables"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        # Check if .env file exists
+        if env_path.exists():
+            print(f"[TRANSLATE ERROR] .env file exists at {env_path} but OPENAI_API_KEY not found")
+            logger.error(f".env file exists at {env_path} but OPENAI_API_KEY not found")
+        else:
+            print(f"[TRANSLATE ERROR] .env file not found at {env_path}")
+            logger.error(f".env file not found at {env_path}")
+        raise HTTPException(
+            status_code=500, 
+            detail="OpenAI API key not configured. Please add OPENAI_API_KEY to your .env file in the wejhetna_backend directory and restart the server."
+        )
+    
+    # Validate input
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text to translate cannot be empty")
+    
+    # Detect source language
+    detected_lang = detect_language(request.text)
+    print(f"[TRANSLATE] Detected language: {detected_lang}, Target language: {request.target_language}")
+    logger.info(f"Detected language: {detected_lang}, Target language: {request.target_language}")
+    
+    # Determine target language
+    if request.target_language not in ["ar", "he"]:
+        raise HTTPException(status_code=400, detail="Target language must be 'ar' or 'he'")
+    
+    # If already in target language, return as-is
+    if detected_lang == request.target_language:
+        print(f"[TRANSLATE] Text is already in target language, returning as-is")
+        logger.info("Text is already in target language, returning as-is")
+        return TranslationResponse(
+            translated_text=request.text,
+            detected_language=detected_lang
+        )
+    
+    # Map language codes to full names for OpenAI
+    lang_map = {
+        "ar": "Arabic",
+        "he": "Hebrew",
+        "en": "English"
+    }
+    
+    # Get source and target language names
+    source_lang_name = lang_map.get(detected_lang, "English")
+    target_lang_name = lang_map[request.target_language]
+    
+    try:
+        print(f"[TRANSLATE] Creating OpenAI client and translating from {source_lang_name} to {target_lang_name}")
+        logger.info(f"Creating OpenAI client and translating from {source_lang_name} to {target_lang_name}")
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"You are a professional translator. Translate the following text from {source_lang_name} to {target_lang_name}. Preserve the meaning, tone, and context. Return only the translated text without any explanations or additional text."
+                },
+                {
+                    "role": "user",
+                    "content": request.text
+                }
+            ],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        
+        if not response.choices or not response.choices[0].message:
+            raise Exception("OpenAI API returned empty response")
+        
+        translated_text = response.choices[0].message.content.strip()
+        
+        if not translated_text:
+            raise Exception("OpenAI API returned empty translation")
+        
+        print(f"[TRANSLATE] Translation successful: {len(translated_text)} characters")
+        logger.info(f"Translation successful: {len(translated_text)} characters")
+        
+        return TranslationResponse(
+            translated_text=translated_text,
+            detected_language=detected_lang
+        )
+        
+    except openai.AuthenticationError as e:
+        error_msg = f"OpenAI Authentication Error: {str(e)}"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=500, 
+            detail="OpenAI API key is invalid. Please check your API key in .env file. Make sure it starts with 'sk-' and is the correct key. Restart the server after updating .env file."
+        )
+    except openai.RateLimitError as e:
+        error_msg = f"OpenAI Rate Limit Error: {str(e)}"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=429, 
+            detail="OpenAI API rate limit exceeded. Please try again later."
+        )
+    except openai.APIError as e:
+        error_msg = f"OpenAI API Error: {str(e)}"
+        print(f"[TRANSLATE ERROR] {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"OpenAI API error: {str(e)}"
+        )
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[TRANSLATE ERROR] Translation error: {error_msg}")
+        print(f"[TRANSLATE ERROR] Error type: {type(e).__name__}")
+        import traceback
+        print(f"[TRANSLATE ERROR] Traceback: {traceback.format_exc()}")
+        logger.error(f"Translation error: {error_msg}", exc_info=True)
+        if "API key" in error_msg or "authentication" in error_msg.lower() or "401" in error_msg:
+            raise HTTPException(
+                status_code=500, 
+                detail="OpenAI API key is invalid or missing. Please check your .env file in the wejhetna_backend directory and restart the server."
+            )
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Translation failed: {error_msg}. Please check the server console/logs for more details."
+        )
+
+
 @app.post("/files/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), request: Request = None):
     """
     Accept one file, save it to 'uploads' folder, and return a URL.
     Later we can switch this to AWS S3 with the same response format.
@@ -1580,8 +1829,27 @@ async def upload_file(file: UploadFile = File(...)):
     with dest.open("wb") as out_file:
         shutil.copyfileobj(file.file, out_file)
 
+    # Get the base URL from the request
+    # Try to get from Host header first, then fallback to base_url, then environment variable
+    import os
+    base_url = os.getenv("API_BASE_URL", "http://192.168.0.192:8000")
+    
+    if request:
+        try:
+            # Try to get from Host header (more reliable for physical devices)
+            host = request.headers.get("host")
+            if host:
+                scheme = "https" if request.url.scheme == "https" else "http"
+                base_url = f"{scheme}://{host}"
+            else:
+                # Fallback to base_url
+                base_url = str(request.base_url).rstrip('/')
+        except Exception:
+            # If anything fails, use environment variable or default
+            pass
+    
     # URL that the app can store in DB / display
-    file_url = f"http://10.0.2.2:8000/uploads/{new_name}"  # for Android emulator
+    file_url = f"{base_url}/uploads/{new_name}"
     return {"file_url": file_url}
 
 
@@ -1627,11 +1895,51 @@ def approve_driver(
 
     db.commit()
 
-    # send email
+    # Send professional bilingual email (Arabic and Hebrew)
+    # Get driver language from request if provided, otherwise use admin's language or default to Arabic
+    driver_language = data.driver_language if hasattr(data, 'driver_language') and data.driver_language else "ar"
+    
+    if driver_language == "he":
+        email_body = f"""שלום {user.full_name},
+
+אנו שמחים להודיע לך כי בקשת הנהג שלך לוג'הטנא אושרה!
+
+אתה יכול כעת להתחבר לאפליקציה ולהתחיל להשתמש בה כנהג.
+
+תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
+
+בברכה,
+צוות ווג'הטנא"""
+        subject = "ווג'הטנא – אישור בקשת נהג"
+    elif driver_language == "en":
+        email_body = f"""Dear {user.full_name},
+
+We are pleased to inform you that your driver application to Wejhetna has been approved!
+
+You can now log in to the app and start using it as a driver.
+
+Thank you for your interest in joining Wejhetna and we wish you a pleasant experience.
+
+Best regards,
+Wejhetna Team"""
+        subject = "Wejhetna – Driver application approved"
+    else:  # Arabic (default)
+        email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نحن سعداء بإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت الموافقة عليه!
+
+يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في استخدامه كسائق.
+
+نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
+
+مع أطيب التحيات،
+فريق وجهتنا"""
+        subject = "وجهتنا – الموافقة على طلب السائق"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Driver application approved",
-        body="Your driver account has been approved. You can now use the app as a driver.",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Driver approved"}
@@ -1677,11 +1985,84 @@ def reject_driver(
 
     db.commit()
 
-    # send email with reason
+    # Send professional bilingual email (Arabic and Hebrew) with reason and re-signup instructions
+    # Get driver language from request if provided, otherwise use admin's language or default to Arabic
+    driver_language = data.driver_language if hasattr(data, 'driver_language') and data.driver_language else "ar"
+    
+    if driver_language == "he":
+        email_body = f"""שלום {user.full_name},
+
+אנו מצטערים להודיע לך כי בקשת הנהג שלך לוג'הטנא נבדקה ולמרבה הצער, איננו יכולים לאשר אותה בשלב זה.
+
+סיבת הדחייה:
+{reason}
+
+אנו מבינים שזה עשוי להיות מאכזב, אך אנו רוצים לתת לך הזדמנות לטפל בבעיות ולהגיש בקשה מחדש.
+
+תוכל להגיש בקשה חדשה באמצעות אותם פרטי התחברות:
+• אימייל: {user.email}
+• שם משתמש: {user.username}
+
+פשוט בקר באפליקציית ווג'הטנא והשלם את טופס הרשמת הנהג שוב עם אותו אימייל ושם משתמש. נבדוק את הבקשה החדשה שלך לאחר הגשתה.
+
+אם יש לך שאלות או צריך הבהרה לגבי סיבת הדחייה, אנא אל תהסס ליצור איתנו קשר.
+
+תודה על העניין שלך להצטרף לוג'הטנא.
+
+בברכה,
+צוות ווג'הטנא"""
+        subject = "ווג'הטנא – עדכון סטטוס בקשת נהג"
+    elif driver_language == "en":
+        email_body = f"""Dear {user.full_name},
+
+We regret to inform you that your driver application to Wejhetna has been reviewed and unfortunately, we cannot approve it at this time.
+
+Rejection reason:
+{reason}
+
+We understand this may be disappointing, but we want to give you the opportunity to address the issues and resubmit.
+
+You can submit a new application using the same credentials:
+• Email: {user.email}
+• Username: {user.username}
+
+Simply visit the Wejhetna app and complete the driver registration form again with the same email and username. We will review your new application after submission.
+
+If you have any questions or need clarification about the rejection reason, please do not hesitate to contact us.
+
+Thank you for your interest in joining Wejhetna.
+
+Best regards,
+Wejhetna Team"""
+        subject = "Wejhetna – Driver application status update"
+    else:  # Arabic (default)
+        email_body = f"""عزيزي/عزيزتي {user.full_name},
+
+نأسف لإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت مراجعته ولسوء الحظ، لا يمكننا الموافقة عليه في هذا الوقت.
+
+سبب الرفض:
+{reason}
+
+نفهم أن هذا قد يكون محبطاً، لكننا نريد أن نمنحك الفرصة لمعالجة المشاكل وإعادة التقديم.
+
+يمكنك تقديم طلب جديد باستخدام نفس بيانات الاعتماد:
+• البريد الإلكتروني: {user.email}
+• اسم المستخدم: {user.username}
+
+ببساطة قم بزيارة تطبيق وجهتنا وأكمل نموذج تسجيل السائق مرة أخرى بنفس البريد الإلكتروني واسم المستخدم. سنراجع طلبك الجديد بعد تقديمه.
+
+إذا كان لديك أي أسئلة أو تحتاج إلى توضيح حول سبب الرفض، يرجى عدم التردد في الاتصال بنا.
+
+شكراً لاهتمامك بالانضمام إلى وجهتنا.
+
+مع أطيب التحيات،
+فريق وجهتنا"""
+        subject = "وجهتنا – تحديث حالة طلب السائق"
+
     send_email(
         to_email=user.email,
-        subject="Wejhetna – Driver application rejected",
-        body=f"Your driver application was rejected. Reason: {reason}",
+        subject=subject,
+        body=email_body,
     )
 
     return {"detail": "Driver rejected"}
@@ -2503,8 +2884,18 @@ def admin_list_places(db: Session = Depends(get_db)):
     מחזיר את כל המקומות (כולל city + category + location).
     ישמש לרשימה בטבלת האדמין.
     """
-    places = db.query(Place).order_by(Place.id).all()
-    return places
+    try:
+        places = db.query(Place).order_by(Place.id).all()
+        return places
+    except Exception as e:
+        # If error is due to missing business_images_urls column, try to handle it
+        error_msg = str(e).lower()
+        if "business_images_urls" in error_msg or "column" in error_msg:
+            raise HTTPException(
+                status_code=500,
+                detail="Database migration needed: Please run 'python add_business_images_column.py' to add the business_images_urls column."
+            )
+        raise
 
 
 import httpx
@@ -2709,9 +3100,15 @@ def admin_update_place(
     if data.main_image_url is not None:
         # Allow setting to None/empty string to clear the field
         place.main_image_url = data.main_image_url.strip() if data.main_image_url and data.main_image_url.strip() else None
+    if data.business_images_urls is not None:
+        # Allow setting to None/empty list to clear the field
+        place.business_images_urls = data.business_images_urls if data.business_images_urls else None
     if data.social_links is not None:
         # Allow setting to None/empty string to clear the field
         place.social_links = data.social_links.strip() if data.social_links and data.social_links.strip() else None
+    if data.announcement is not None:
+        # Allow setting to None/empty string to clear the field
+        place.announcement = data.announcement.strip() if data.announcement and data.announcement.strip() else None
 
     # סנכרון התרגום לקבצי התרגום אם השמות השתנו
     try:
@@ -3014,6 +3411,8 @@ def create_business_owner_place_request(
         phone=data.business_phone,  # Business phone (mapped from business_phone field)
         opening_hours=data.opening_hours,
         main_image_url=data.main_image_url,
+        business_license_image_url=data.business_license_image_url,
+        business_images_urls=data.business_images_urls,
         social_links=data.social_links,
         status=OwnerPlaceRequestStatus.PENDING,
     )
@@ -3287,6 +3686,9 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                     phone=place.phone,
                     opening_hours=place.opening_hours,
                     main_image_url=place.main_image_url,
+                    business_images_urls=place.business_images_urls,
+                    social_links=place.social_links,
+                    announcement=place.announcement,
                     lat=lat,
                     lon=lon,
                 )
@@ -3325,6 +3727,9 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                     phone=place.phone,
                     opening_hours=place.opening_hours,
                     main_image_url=place.main_image_url,
+                    business_images_urls=place.business_images_urls,
+                    social_links=place.social_links,
+                    announcement=place.announcement,
                     lat=lat,
                     lon=lon,
                 )
@@ -3346,6 +3751,8 @@ def get_business_owner_profile(user_id: int, db: Session = Depends(get_db)):
                 phone=place_request.phone,
                 opening_hours=place_request.opening_hours,
                 main_image_url=place_request.main_image_url,
+                business_images_urls=None,  # Place requests don't have business_images_urls yet
+                social_links=place_request.social_links,
                 lat=place_request.lat,
                 lon=place_request.lon,
             )

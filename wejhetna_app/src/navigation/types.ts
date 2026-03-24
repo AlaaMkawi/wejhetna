@@ -91,7 +91,28 @@ export type RootStackParamList = {
     userRole: "ADMIN" | "BUSINESS_OWNER";
     userId: number;
   };
-  ManageMyBusiness: undefined;
+  ManageMyBusiness: { fromMap?: boolean } | undefined;
+  RouteDetails: {
+    routeInfo: {
+      distance: number;
+      duration: number;
+      startAddress?: string;
+      endAddress?: string;
+    };
+    destination: { lat: number; lon: number; name?: string };
+    userLocation: { lat: number; lon: number };
+    routeCoordinates: {
+      type: "FeatureCollection";
+      features: Array<{
+        type: "Feature";
+        geometry: {
+          type: "LineString";
+          coordinates: [number, number][];
+        };
+        properties: Record<string, any>;
+      }>;
+    } | null;
+  };
 };
 export type AuthStackParamList = {
   Login: undefined;

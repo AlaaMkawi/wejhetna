@@ -31,12 +31,11 @@ import {
   fetchAllPlaces,
 } from "../api/places";
 
+import { API_BASE_URL } from "../../config";
+
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
 const MINT = "#9bd3d8";
-
-const API_BASE_URL = "http://10.0.2.2:8000";
-
 type EditPlaceRoute = RouteProp<RootStackParamList, "EditPlace">;
 
 export default function EditPlaceScreen() {
@@ -511,16 +510,7 @@ export default function EditPlaceScreen() {
               />
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{t("opening_hours") || "Opening Hours"} ({t("optional") || "Optional"})</Text>
-              <TextInput
-                style={styles.input}
-                value={openingHours}
-                onChangeText={setOpeningHours}
-                placeholder={t("example_opening_hours") || "Example: Sun-Thu: 9:00-18:00"}
-                placeholderTextColor="#9ab8bd"
-              />
-            </View>
+            
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>{t("social_links") || "Social Links"} ({t("optional") || "Optional"})</Text>

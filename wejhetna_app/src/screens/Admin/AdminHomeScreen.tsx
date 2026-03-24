@@ -13,6 +13,10 @@ import {
   ScrollView,
   Image,
   PanResponder,
+  Modal,
+  ActivityIndicator,
+  Linking,
+  TextInput,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -23,12 +27,14 @@ import Animated, {
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved } from "../../api/places";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, checkLocationInServiceCities, translateText, Category } from "../../api/places";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { API_BASE_URL } from "../../../config";
+import Geolocation from "@react-native-community/geolocation";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -128,6 +134,73 @@ const getPlaceIcon = (place: PlaceForMap) => {
   return { type: 'default', color: '#4285F4' };
 };
 
+// Helper function to get category name based on current language
+const getCategoryName = (category: Category): string => {
+  const currentLanguage = i18n.language || "ar";
+  
+  if (currentLanguage === "he" && category.name_he) {
+    return category.name_he;
+  } else if (currentLanguage === "ar" && category.name_ar) {
+    return category.name_ar;
+  } else if (category.name_en) {
+    return category.name_en;
+  }
+
+  return category.name_ar || category.name_he || category.name_en || "";
+};
+
+// Helper function to check if business is currently open
+const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boolean => {
+  if (!openingHours) return false;
+
+  const now = new Date();
+  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const currentDayName = dayNames[currentDay];
+
+  // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
+  const dayEntries = openingHours.split(",").map(s => s.trim());
+  
+  for (const entry of dayEntries) {
+    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
+    if (match) {
+      const [, startH, startM, startP, endH, endM, endP] = match;
+      
+      const startHour = parseInt(startH, 10);
+      const startMin = parseInt(startM, 10);
+      const endHour = parseInt(endH, 10);
+      const endMin = parseInt(endM, 10);
+      
+      // Convert to 24-hour format
+      let startMinutes = startHour * 60 + startMin;
+      let endMinutes = endHour * 60 + endMin;
+      
+      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
+      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
+      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
+      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
+      
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+  }
+  
+  return false;
+};
+
+type RouteCoordinates = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    geometry: {
+      type: "LineString";
+      coordinates: [number, number][];
+    };
+    properties: Record<string, any>;
+  }>;
+};
+
 export default function AdminHomeScreen() {
   const { t } = useTranslation();
   const route = useRoute();
@@ -148,8 +221,152 @@ export default function AdminHomeScreen() {
 
   const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
   
+  // Photo gallery modal
+  const [photoModalVisible, setPhotoModalVisible] = useState(false);
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
+  const photoScrollViewRef = useRef<ScrollView>(null);
+
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
+
+  // Translation states
+  const [announcementTranslated, setAnnouncementTranslated] = useState<string | null>(null);
+  const [announcementIsTranslated, setAnnouncementIsTranslated] = useState(false);
+  const [announcementTranslating, setAnnouncementTranslating] = useState(false);
+  const [announcementTargetLang, setAnnouncementTargetLang] = useState<"ar" | "he" | null>(null);
+  
+  const [descriptionTranslated, setDescriptionTranslated] = useState<string | null>(null);
+  const [descriptionIsTranslated, setDescriptionIsTranslated] = useState(false);
+  const [descriptionTranslating, setDescriptionTranslating] = useState(false);
+  const [descriptionTargetLang, setDescriptionTargetLang] = useState<"ar" | "he" | null>(null);
+
+  // Language selector modal state
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+  const [languageSelectorType, setLanguageSelectorType] = useState<"announcement" | "description" | null>(null);
+
+  // Image error handling states
+  const [imageErrors, setImageErrors] = useState<{ [key: number]: boolean }>({});
+  const [imageLoading, setImageLoading] = useState<{ [key: number]: boolean }>({});
+
+  // GPS Location
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
+  const [locationLoading, setLocationLoading] = useState(true);
+  const [hasShownLocationPermissionMessage, setHasShownLocationPermissionMessage] = useState(false);
+  
+
+  // Destination
+  const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
+  const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
+
+  // Route
+  const [routeLoading, setRouteLoading] = useState(false);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+
+  // Helper function to format image URI - ensure it's a valid URL
+  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
+  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
+  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
+  const formatImageUri = (uri: string): string => {
+    if (!uri || !uri.trim()) {
+      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
+      return "";
+    }
+    
+    const trimmedUri = uri.trim();
+    
+    try {
+      // If it's already a full URL with the correct base, return as is
+      if (trimmedUri.startsWith(API_BASE_URL)) {
+        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's already a full URL (http:// or https://), extract just the path
+      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
+        // Manually extract the path from the URL
+        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
+        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
+        if (urlMatch && urlMatch[1]) {
+          const path = urlMatch[1];
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If regex fails, try to find /uploads/ in the string
+        const uploadsIndex = trimmedUri.indexOf("/uploads/");
+        if (uploadsIndex !== -1) {
+          const path = trimmedUri.substring(uploadsIndex);
+          const formatted = `${API_BASE_URL}${path}`;
+          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
+          return formatted;
+        }
+        // If we can't extract path, try the original URL (might work if same network)
+        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
+        return trimmedUri;
+      }
+      
+      // If it's a relative path starting with /, prepend API_BASE_URL
+      if (trimmedUri.startsWith("/")) {
+        const formatted = `${API_BASE_URL}${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // If it doesn't start with /, assume it's a filename and add /uploads/
+      // This handles cases where backend might return just "filename.jpg"
+      if (!trimmedUri.includes("/")) {
+        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
+        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
+        return formatted;
+      }
+      
+      // Otherwise, try to prepend API_BASE_URL
+      const formatted = `${API_BASE_URL}/${trimmedUri}`;
+      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
+      return formatted;
+    } catch (error) {
+      // If URL parsing fails, try to construct a valid URL
+      console.warn("Error formatting image URI:", trimmedUri, error);
+      if (trimmedUri.startsWith("/")) {
+        return `${API_BASE_URL}${trimmedUri}`;
+      }
+      return `${API_BASE_URL}/uploads/${trimmedUri}`;
+    }
+  };
+
+  // Handle image load error
+  const handleImageError = (error: any, index: number, allImages: string[]) => {
+    const originalUri = allImages[index];
+    const formattedUri = formatImageUri(originalUri);
+    console.warn(`Image ${index} failed to load:`, {
+      original: originalUri,
+      formatted: formattedUri,
+      error: error?.nativeEvent?.error || error,
+      errorMessage: error?.nativeEvent?.error?.message || "Unknown error"
+    });
+    setImageErrors((prev) => ({ ...prev, [index]: true }));
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+  };
+
+  // Handle image load success
+  const handleImageLoad = (index: number) => {
+    setImageLoading((prev) => ({ ...prev, [index]: false }));
+    setImageErrors((prev) => {
+      const newErrors = { ...prev };
+      delete newErrors[index];
+      return newErrors;
+    });
+  };
+
+  // Handle image load start
+  const handleImageLoadStart = (index: number) => {
+    setImageLoading((prev) => ({ ...prev, [index]: true }));
+  };
+
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -165,6 +382,118 @@ export default function AdminHomeScreen() {
     }
     loadUserId();
   }, []);
+
+  // Get user's GPS location
+  useEffect(() => {
+    setLocationLoading(true);
+    
+    Geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        setUserLocation({ lat: latitude, lon: longitude });
+        setLocationLoading(false);
+      },
+      (error) => {
+        console.log("GPS error", error);
+        const currentLanguage = i18n.language || "ar";
+        let title = "";
+        let message = "";
+        
+        // Handle different error codes
+        if (error.code === 1) {
+          // PERMISSION_DENIED - Show initial permission message only once
+          if (!hasShownLocationPermissionMessage) {
+            title = currentLanguage === "ar"
+              ? "السماح بالموقع"
+              : currentLanguage === "he"
+              ? "אפשר גישת מיקום"
+              : "Allow Location Access";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
+              : currentLanguage === "he"
+              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
+              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
+            setHasShownLocationPermissionMessage(true);
+          } else {
+            title = currentLanguage === "ar" 
+              ? "السماح بالموقع مطلوب" 
+              : currentLanguage === "he"
+              ? "נדרש אישור מיקום"
+              : "Location Permission Required";
+            message = currentLanguage === "ar"
+              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
+              : currentLanguage === "he"
+              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
+              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
+          }
+        } else if (error.code === 2) {
+          // POSITION_UNAVAILABLE
+          title = currentLanguage === "ar"
+            ? "الموقع غير متاح"
+            : currentLanguage === "he"
+            ? "מיקום לא זמין"
+            : "Location Unavailable";
+          message = currentLanguage === "ar"
+            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
+            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
+        } else if (error.code === 3) {
+          // TIMEOUT
+          title = currentLanguage === "ar"
+            ? "انتهت مهلة انتظار الموقع"
+            : currentLanguage === "he"
+            ? "זמן המיקום פג"
+            : "Location Timeout";
+          message = currentLanguage === "ar"
+            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
+            : currentLanguage === "he"
+            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
+            : "Getting your location took too long. Please try again.";
+        } else {
+          // Generic error
+          title = currentLanguage === "ar"
+            ? "خطأ في الموقع"
+            : currentLanguage === "he"
+            ? "שגיאת מיקום"
+            : "Location Error";
+          message = currentLanguage === "ar"
+            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
+            : currentLanguage === "he"
+            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
+            : "Could not get your location. Using default location.";
+        }
+        
+        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
+        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
+        
+        Alert.alert(
+          title,
+          message,
+          [
+            {
+              text: cancelText,
+              style: "cancel"
+            },
+            {
+              text: allowText,
+              onPress: () => {
+                if (error.code === 1) {
+                  Linking.openSettings();
+                }
+              }
+            }
+          ]
+        );
+        setLocationLoading(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 10000,
+      }
+    );
+  }, [t, hasShownLocationPermissionMessage]);
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -183,6 +512,117 @@ export default function AdminHomeScreen() {
     }
     checkSaved();
   }, [selectedPlace, userId]);
+
+  // Reset translation states when place changes
+  useEffect(() => {
+    // Reset translation states
+    setAnnouncementTranslated(null);
+    setAnnouncementIsTranslated(false);
+    setAnnouncementTargetLang(null);
+    setDescriptionTranslated(null);
+    setDescriptionIsTranslated(false);
+    setDescriptionTargetLang(null);
+    setShowLanguageSelector(false);
+    setLanguageSelectorType(null);
+    // Reset image errors and loading states when place changes
+    setImageErrors({});
+    setImageLoading({});
+  }, [selectedPlace]);
+
+  // Open language selector for announcement
+  const handleTranslateAnnouncementClick = () => {
+    if (announcementIsTranslated) {
+      // Toggle back to original
+      setAnnouncementIsTranslated(false);
+      return;
+    }
+    setLanguageSelectorType("announcement");
+    setShowLanguageSelector(true);
+  };
+
+  // Open language selector for description
+  const handleTranslateDescriptionClick = () => {
+    if (descriptionIsTranslated) {
+      // Toggle back to original
+      setDescriptionIsTranslated(false);
+      return;
+    }
+    setLanguageSelectorType("description");
+    setShowLanguageSelector(true);
+  };
+
+  // Handle language selection and translation
+  const handleLanguageSelection = async (targetLang: "ar" | "he") => {
+    if (!languageSelectorType) return;
+    
+    setShowLanguageSelector(false);
+    
+    if (languageSelectorType === "announcement") {
+      if (!selectedPlace?.announcement) return;
+      
+      // If already translated to this language, just show it
+      if (announcementTranslated && announcementTargetLang === targetLang) {
+        setAnnouncementIsTranslated(true);
+        return;
+      }
+
+      setAnnouncementTranslating(true);
+      try {
+        const result = await translateText(selectedPlace.announcement, targetLang);
+        if (result && result.translated_text) {
+          setAnnouncementTranslated(result.translated_text);
+          setAnnouncementTargetLang(targetLang);
+          setAnnouncementIsTranslated(true);
+        } else {
+          throw new Error(t("translation_failed") || "Translation failed: No result received");
+        }
+      } catch (error: any) {
+        console.error("Translation error:", error);
+        Alert.alert(
+          t("error") || "שגיאה",
+          error?.message || t("translation_failed") || "נכשל בתרגום. אנא ודא שהשרת רץ ונסה שוב."
+        );
+        setAnnouncementIsTranslated(false);
+        setAnnouncementTranslated(null);
+        setAnnouncementTargetLang(null);
+      } finally {
+        setAnnouncementTranslating(false);
+      }
+    } else if (languageSelectorType === "description") {
+      if (!selectedPlace?.description) return;
+      
+      // If already translated to this language, just show it
+      if (descriptionTranslated && descriptionTargetLang === targetLang) {
+        setDescriptionIsTranslated(true);
+        return;
+      }
+
+      setDescriptionTranslating(true);
+      try {
+        const result = await translateText(selectedPlace.description, targetLang);
+        if (result && result.translated_text) {
+          setDescriptionTranslated(result.translated_text);
+          setDescriptionTargetLang(targetLang);
+          setDescriptionIsTranslated(true);
+        } else {
+          throw new Error(t("translation_failed") || "Translation failed: No result received");
+        }
+      } catch (error: any) {
+        console.error("Translation error:", error);
+        Alert.alert(
+          t("error") || "שגיאה",
+          error?.message || t("translation_failed") || "נכשל בתרגום. אנא ודא שהשרת רץ ונסה שוב."
+        );
+        setDescriptionIsTranslated(false);
+        setDescriptionTranslated(null);
+        setDescriptionTargetLang(null);
+      } finally {
+        setDescriptionTranslating(false);
+      }
+    }
+    
+    setLanguageSelectorType(null);
+  };
 
   // Handle save/unsave place
   const handleToggleSave = async () => {
@@ -214,6 +654,266 @@ export default function AdminHomeScreen() {
       setSavingPlace(false);
     }
   };
+
+  // Handle map long press - set custom destination
+  const handleMapLongPress = async (e: any) => {
+    try {
+      const coords = e?.geometry?.coordinates;
+      if (Array.isArray(coords) && coords.length >= 2) {
+        const [lon, lat] = coords;
+        
+        // Check boundary - destination must be within service cities
+        try {
+          const boundaryCheck = await checkLocationInServiceCities(lat, lon);
+          if (!boundaryCheck.is_within) {
+            Alert.alert(
+              t("location_outside_service_area") || "Location Outside Service Area",
+              t("destination_must_be_in_service_cities") || "Destination must be within one of the 3 service cities: רהט (Rahat), לקיה (Lakiya), or תל שבע (Tel Sheva).\n\nPlease choose a location within these boundaries.",
+              [{ text: t("ok") || "OK" }]
+            );
+            return;
+          }
+        } catch (error: any) {
+          console.error("Error checking boundary:", error);
+          Alert.alert(
+            t("boundary_check_error") || "Boundary Check Error",
+            t("boundary_check_error_message") || "Failed to check location boundary. Please try again."
+          );
+          return;
+        }
+        
+        setCustomPin({ lat, lon });
+        setDestination({ lat, lon, name: `📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}` });
+        setSelectedPlace(null); // Clear selected place
+        setSearchResults([]);
+        setShowSearchModal(false);
+      }
+    } catch (error) {
+      console.error("Error handling long press:", error);
+    }
+  };
+
+  // Handle place marker tap - set as destination
+  const handlePlaceTap = async (place: PlaceForMap) => {
+    if (!place.location) return;
+    
+    // Places from database are already validated, so we can use them directly
+    // Only check boundary for custom pins (long press on map)
+    setSelectedPlace(place);
+    setDestination({
+      lat: place.location.lat,
+      lon: place.location.lon,
+      name: getPlaceName(place),
+    });
+    setCustomPin(null);
+    setSearchResults([]);
+    setShowSearchModal(false);
+  };
+
+  // Search places - comprehensive search across all fields
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    
+    // If query is empty, clear results
+    if (!query || query.trim().length === 0) {
+      setSearchResults([]);
+      return;
+    }
+
+    // Make sure places are loaded
+    if (!places || places.length === 0) {
+      console.log("No places loaded yet");
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const queryLower = query.toLowerCase().trim();
+      
+      // Filter places based on search query
+      const filtered = places.filter((place) => {
+        try {
+          // Search in name fields (English, Arabic, Hebrew)
+          const nameMatch = 
+            (place.name && typeof place.name === 'string' && place.name.toLowerCase().includes(queryLower)) ||
+            (place.name_ar && typeof place.name_ar === 'string' && place.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.name_he && typeof place.name_he === 'string' && place.name_he.toLowerCase().includes(queryLower));
+          
+          // Search in description
+          const descriptionMatch = 
+            place.description && typeof place.description === 'string' && 
+            place.description.toLowerCase().includes(queryLower);
+          
+          // Search in city name
+          const cityMatch = 
+            (place.city?.name_ar && typeof place.city.name_ar === 'string' && place.city.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_he && typeof place.city.name_he === 'string' && place.city.name_he.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_en && typeof place.city.name_en === 'string' && place.city.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in category name
+          const categoryMatch = 
+            (place.category?.name_ar && typeof place.category.name_ar === 'string' && place.category.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_he && typeof place.category.name_he === 'string' && place.category.name_he.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_en && typeof place.category.name_en === 'string' && place.category.name_en.toLowerCase().includes(queryLower));
+          
+          // Search in phone number (remove spaces/dashes for better matching)
+          const phoneMatch = 
+            place.phone && typeof place.phone === 'string' && 
+            place.phone.replace(/[\s-]/g, '').includes(queryLower.replace(/[\s-]/g, ''));
+          
+          // Return true if any field matches
+          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
+        } catch (err) {
+          console.error("Error filtering place:", err, place);
+          return false;
+        }
+      });
+      
+      console.log(`Search for "${query}" found ${filtered.length} results out of ${places.length} places`);
+      setSearchResults(filtered);
+    } catch (error) {
+      console.error("Search error:", error);
+      setSearchResults([]);
+    }
+  };
+
+  // Get route from user location to destination using OSRM
+  const getRoute = async () => {
+    const currentLanguage = i18n.language || "ar";
+    
+    // Check if destination is selected
+    if (!destination) {
+      const title = currentLanguage === "ar"
+        ? "خطأ"
+        : currentLanguage === "he"
+        ? "שגיאה"
+        : "Error";
+      const message = currentLanguage === "ar"
+        ? "يرجى اختيار وجهة أولاً"
+        : currentLanguage === "he"
+        ? "אנא בחר יעד תחילה"
+        : "Please select a destination first";
+      Alert.alert(title, message);
+      return;
+    }
+    
+    // Check if user location is available
+    if (!userLocation) {
+      const title = currentLanguage === "ar"
+        ? "تفعيل الموقع مطلوب"
+        : currentLanguage === "he"
+        ? "נדרש הפעלת מיקום"
+        : "Location Required";
+      const message = currentLanguage === "ar"
+        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
+        : currentLanguage === "he"
+        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
+        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
+      Alert.alert(title, message);
+      
+      // Try to get location again
+      setLocationLoading(true);
+      Geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setUserLocation({ lat: latitude, lon: longitude });
+          setLocationLoading(false);
+        },
+        (error) => {
+          console.log("GPS error when retrying:", error);
+          setLocationLoading(false);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000,
+        }
+      );
+      return;
+    }
+
+    setRouteLoading(true);
+    
+    try {
+      // Using OSRM (Open Source Routing Machine) - free, no API key needed
+      const profile = "driving"; // driving, walking, or cycling
+      const coordinates = `${userLocation.lon},${userLocation.lat};${destination.lon},${destination.lat}`;
+      
+      // Using OSRM public server (free, no API key required)
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=false&steps=false`;
+      
+      console.log("Requesting route from OSRM:", url);
+      
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("OSRM API error:", response.status, errorText);
+        throw new Error(`Routing service error: ${response.status} - ${errorText}`);
+      }
+      
+      const routeData = await response.json();
+      
+      // OSRM response format: { code: "Ok", routes: [{ distance, duration, geometry }] }
+      if (routeData.code === "Ok" && routeData.routes && routeData.routes.length > 0) {
+        const routeInfo = routeData.routes[0];
+        
+        // Extract route information
+        const distance = routeInfo.distance || 0; // in meters
+        const duration = routeInfo.duration || 0; // in seconds
+        
+        // OSRM geometry format is already GeoJSON LineString
+        const routeGeometry = routeInfo.geometry || {
+          type: "LineString",
+          coordinates: [
+            [userLocation.lon, userLocation.lat],
+            [destination.lon, destination.lat],
+          ],
+        };
+        
+        // Store route info (distance, duration)
+        const routeInfoData = {
+          distance,
+          duration,
+          startAddress: t("your_location") || "Your Location",
+          endAddress: destination.name || t("destination") || "Destination",
+        };
+
+        // Store route coordinates
+        const routeCoords: RouteCoordinates = {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              geometry: routeGeometry,
+              properties: {},
+            },
+          ],
+        };
+
+        // Navigate directly to RouteDetailsScreen
+        navigation.navigate("RouteDetails", {
+          routeInfo: routeInfoData,
+          destination,
+          userLocation,
+          routeCoordinates: routeCoords,
+        });
+      } else {
+        const errorMsg = routeData.code === "NoRoute" 
+          ? t("no_route_found") || "No route found between these points"
+          : routeData.message || t("no_route_found") || "No route found in response";
+        throw new Error(errorMsg);
+      }
+      } catch (error: any) {
+      console.error("Route error:", error?.message || String(error));
+      Alert.alert(
+        t("route_error") || "Route Error",
+        error?.message || t("could_not_get_route") || "Could not get driving directions. Please try again."
+      );
+      } finally {
+        setRouteLoading(false);
+      }
+    };
 
   // Bottom sheet animation values
   const translateY = useSharedValue(SCREEN_HEIGHT);
@@ -386,7 +1086,6 @@ export default function AdminHomeScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              const API_BASE_URL = "http://10.0.2.2:8000";
               const res = await fetch(
                 `${API_BASE_URL}/admin/places/${selectedPlace.id}`,
                 {
@@ -421,10 +1120,122 @@ export default function AdminHomeScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <TouchableOpacity
+          style={styles.searchInputTouchable}
+          onPress={() => setShowSearchModal(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="search-outline" size={20} color="#666" style={styles.searchIcon} />
+          <Text style={styles.searchInputPlaceholder}>
+            {searchQuery || (t("search_places") || "Search places...")}
+          </Text>
+        </TouchableOpacity>
+        {locationLoading && (
+          <ActivityIndicator size="small" color="#0f5b63" style={styles.loader} />
+        )}
+      </View>
+
+      {/* Search Results Modal */}
+      <Modal
+        visible={showSearchModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSearchModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t("search_places") || "Search Places"}</Text>
+              <TouchableOpacity onPress={() => {
+                setShowSearchModal(false);
+                setSearchQuery("");
+              }}>
+                <Text style={styles.modalCloseButton}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            {/* Search Input Inside Modal */}
+            <View style={styles.modalSearchContainer}>
+              <TextInput
+                style={styles.modalSearchInput}
+                placeholder={t("search_places") || "Search places..."}
+                placeholderTextColor="#666"
+                value={searchQuery}
+                onChangeText={handleSearch}
+                autoFocus={true}
+              />
+              <Ionicons name="search-outline" size={20} color="#666" style={styles.modalSearchIcon} />
+            </View>
+            <ScrollView style={styles.searchResultsList} keyboardShouldPersistTaps="handled">
+              {searchQuery.trim().length === 0 && (
+                <Text style={styles.noResults}>{t("start_typing_to_search") || "Start typing to search places..."}</Text>
+              )}
+              {searchResults.length === 0 && searchQuery.trim().length > 0 && (
+                <Text style={styles.noResults}>{t("no_places_found") || "No places found"}</Text>
+              )}
+              {searchResults.map((place) => (
+                <TouchableOpacity
+                  key={place.id}
+                  style={styles.searchResultItem}
+                  onPress={() => {
+                    handlePlaceTap(place);
+                    setSearchQuery("");
+                    setShowSearchModal(false);
+                  }}
+                >
+                  <Text style={styles.searchResultName}>{getPlaceName(place)}</Text>
+                  <View style={styles.searchResultDetails}>
+                    {getCityName(place.city) && (
+                      <Text style={styles.searchResultCity}>{getCityName(place.city)}</Text>
+                    )}
+                    {place.category && (
+                      <>
+                        {getCityName(place.city) && <Text style={styles.searchResultSeparator}> • </Text>}
+                        <Text style={styles.searchResultCategory}>
+                          {i18n.language === "he" && place.category.name_he
+                            ? place.category.name_he
+                            : i18n.language === "ar" && place.category.name_ar
+                            ? place.category.name_ar
+                            : place.category.name_ar || place.category.name_he || ""}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
+        onLongPress={handleMapLongPress}
+        onPress={(e: any) => {
+          // Handle regular tap - check if tapping near a place
+          try {
+            const coords = e?.geometry?.coordinates;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              const [lon, lat] = coords;
+              // Find nearest place within reasonable distance
+              const nearestPlace = places.find((place) => {
+                if (!place.location) return false;
+                const distance = Math.sqrt(
+                  Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
+                );
+                return distance < 0.001; // ~100 meters
+              });
+              if (nearestPlace) {
+                handlePlaceTap(nearestPlace);
+              }
+            }
+          } catch {
+            // Ignore tap errors
+          }
+        }}
         scrollEnabled={true}
         rotateEnabled={false}
         pitchEnabled={false}
@@ -449,6 +1260,33 @@ export default function AdminHomeScreen() {
           maxZoomLevel={18}
           animationMode="flyTo"
         />
+
+        {/* User Location Marker */}
+        {userLocation && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Custom Pin Marker (destination from map tap) */}
+        {customPin && (
+          <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
+            <View style={styles.customPinMarker}>
+              <View style={styles.customPinDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Destination Marker (from place selection) */}
+        {destination && !customPin && (
+          <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
+            <View style={styles.destinationMarker}>
+              <Text style={styles.destinationMarkerText}>📍</Text>
+            </View>
+          </PointAnnotation>
+        )}
 
         {places.map((place) => {
           if (!place.location) return null;
@@ -477,8 +1315,7 @@ export default function AdminHomeScreen() {
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
-                selectedPlaceIdRef.current = place.id;
-                setSelectedPlace(place);
+                handlePlaceTap(place);
               }}
             >
               <View style={styles.nativeMarkerContainer}>
@@ -601,7 +1438,7 @@ export default function AdminHomeScreen() {
         </View>
       </View>
 
-      {!selectedPlace && (
+      {!selectedPlace && !destination && (
         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
           <Text style={styles.recenterButtonText}>🎯</Text>
         </TouchableOpacity>
@@ -664,11 +1501,16 @@ export default function AdminHomeScreen() {
                 {getPlaceName(selectedPlace)}
               </Text>
               <View style={styles.bottomSheetSubtitleRow}>
-                <Text style={styles.bottomSheetSubtitle}>
-                  {selectedPlace.place_type === "BUSINESS" 
-                    ? t("business_type") || (i18n.language === "ar" ? "عمل" : "עסק")
-                    : t("public") || (i18n.language === "ar" ? "عام" : "ציבורי")}
-                </Text>
+                {/* Category (for businesses) or Public Service type */}
+                {selectedPlace.place_type === "BUSINESS" && selectedPlace.category ? (
+                  <Text style={styles.bottomSheetSubtitle}>
+                    {getCategoryName(selectedPlace.category)}
+                  </Text>
+                ) : (
+                  <Text style={styles.bottomSheetSubtitle}>
+                    {t("public") || (i18n.language === "ar" ? "عام" : "ציבורי")}
+                  </Text>
+                )}
                 {getCityName(selectedPlace.city) && (
                   <>
                     <Text style={styles.subtitleSeparator}> • </Text>
@@ -678,6 +1520,76 @@ export default function AdminHomeScreen() {
                   </>
                 )}
               </View>
+              
+              {/* Description */}
+              {selectedPlace.description && (
+                <View style={styles.descriptionSectionInline}>
+                  <View style={styles.descriptionHeader}>
+                    <Text style={styles.descriptionTitleInline}>
+                      {t("description") || "תיאור"}
+                    </Text>
+                    <View style={styles.translateButtonContainer}>
+                      {descriptionIsTranslated && (
+                        <TouchableOpacity
+                          onPress={() => setDescriptionIsTranslated(false)}
+                          style={styles.showOriginalButton}
+                        >
+                          <Text style={styles.showOriginalButtonText}>
+                            {i18n.language === "ar" ? "عرض الأصل" : "הצג מקור"}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity
+                        onPress={handleTranslateDescriptionClick}
+                        disabled={descriptionTranslating}
+                        style={styles.translateIconButton}
+                      >
+                        {descriptionTranslating ? (
+                          <ActivityIndicator size="small" color="#0f5b63" />
+                        ) : (
+                          <Ionicons name="language-outline" size={20} color="#0f5b63" />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                  <Text style={styles.descriptionTextInline}>
+                    {descriptionIsTranslated && descriptionTranslated
+                      ? descriptionTranslated
+                      : selectedPlace.description}
+                  </Text>
+                </View>
+              )}
+
+              {/* Open/Closed Status (for all businesses) */}
+              {selectedPlace.place_type === "BUSINESS" && (
+                <View style={styles.statusRow}>
+                  {selectedPlace.opening_hours ? (
+                    <View style={[
+                      styles.statusBadge,
+                      isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                        ? styles.statusBadgeOpen 
+                        : styles.statusBadgeClosed
+                    ]}>
+                      <Text style={[
+                        styles.statusText,
+                        isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                          ? styles.statusTextOpen 
+                          : styles.statusTextClosed
+                      ]}>
+                        {isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                          ? (t("open") || (i18n.language === "ar" ? "مفتوح" : "פתוח"))
+                          : (t("closed") || (i18n.language === "ar" ? "مغلق" : "סגור"))}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.statusBadge, styles.statusBadgeClosed]}>
+                      <Text style={[styles.statusText, styles.statusTextClosed]}>
+                        {t("closed") || (i18n.language === "ar" ? "مغلق" : "סגור")}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
 
             {/* Action Buttons Row */}
@@ -702,115 +1614,351 @@ export default function AdminHomeScreen() {
                   {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="navigate-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("start") || "התחלה"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonPrimary}>
-                <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                <Text style={styles.actionButtonPrimaryText}>
-                  {t("route") || "מסלול"}
-                </Text>
-            </TouchableOpacity>
-          </View>
-
-            {/* Image Gallery */}
-            <View style={styles.imageGalleryContainer}>
-              <Text style={styles.sectionTitle}>
-                {t("photos") || "תמונות"}
-              </Text>
-              {selectedPlace.main_image_url ? (
-                <ScrollView 
-                  horizontal 
-                  showsHorizontalScrollIndicator={true}
-                  contentContainerStyle={styles.imageGalleryScrollContent}
+              
+              {/* Get Directions Button - Navigates directly to RouteDetailsScreen */}
+              {destination && (
+                <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={getRoute}
+                  disabled={routeLoading || !userLocation}
                 >
-                  <Image 
-                    source={{ uri: selectedPlace.main_image_url }}
-                    style={styles.galleryImage}
-                    resizeMode="cover"
-                  />
-                  {/* אם יש עוד תמונות, אפשר להוסיף כאן */}
-                </ScrollView>
-              ) : (
-                <View style={styles.noImagePlaceholder}>
-                  <Ionicons name="image-outline" size={40} color="#999" />
-                  <Text style={styles.noDataText}>
-                    {t("no_photos") || "אין תמונות"}
+                  {routeLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
+                      <Text style={styles.actionButtonPrimaryText}>
+                        {t("get_directions") || "Get Directions"}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {!destination && (
+                <TouchableOpacity
+                  style={styles.actionButtonPrimary}
+                  onPress={() => {
+                    if (selectedPlace && selectedPlace.location) {
+                      handlePlaceTap(selectedPlace);
+                    }
+                  }}
+                >
+                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
+                  <Text style={styles.actionButtonPrimaryText}>
+                    {t("set_destination") || "Set Destination"}
                   </Text>
-                </View>
+                </TouchableOpacity>
               )}
             </View>
 
-            {/* Details Section */}
-            <View style={styles.detailsSection}>
-              {/* Location */}
-              <View style={styles.detailRow}>
-                <Ionicons name="location-outline" size={20} color="#0f5b63" />
-                <Text style={styles.detailText}>
-                  {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
+            {/* Announcement Banner */}
+            {selectedPlace.announcement && (
+              <View style={styles.announcementBanner}>
+                <View style={styles.announcementHeader}>
+                  <Ionicons name="megaphone-outline" size={20} color="#0f5b63" />
+                  <Text style={styles.announcementTitle}>
+                    {i18n.language === "ar" 
+                      ? "أخبار مهمة من المالك" 
+                      : i18n.language === "he"
+                      ? "חדשות חשובות מהבעלים"
+                      : "Important News from Owner"}
+                  </Text>
+                  <View style={styles.translateButtonContainer}>
+                    {announcementIsTranslated && (
+                      <TouchableOpacity
+                        onPress={() => setAnnouncementIsTranslated(false)}
+                        style={styles.showOriginalButton}
+                      >
+                        <Text style={styles.showOriginalButtonText}>
+                          {i18n.language === "ar" ? "عرض الأصل" : "הצג מקור"}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      onPress={handleTranslateAnnouncementClick}
+                      disabled={announcementTranslating}
+                      style={styles.translateIconButton}
+                    >
+                      {announcementTranslating ? (
+                        <ActivityIndicator size="small" color="#0f5b63" />
+                      ) : (
+                        <Ionicons name="language-outline" size={20} color="#0f5b63" />
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <Text style={styles.announcementText}>
+                  {announcementIsTranslated && announcementTranslated
+                    ? announcementTranslated
+                    : selectedPlace.announcement}
                 </Text>
               </View>
-
-              {/* Category */}
-              <View style={styles.detailRow}>
-                <MaterialCommunityIcons 
-                  name={selectedPlace.category?.icon_name as any || "tag"} 
-                  size={20} 
-                  color="#0f5b63" 
-                />
-                <Text style={styles.detailText}>
-                  {selectedPlace.category
-                    ? (i18n.language === "he" && selectedPlace.category.name_he
-                        ? selectedPlace.category.name_he
-                        : i18n.language === "ar" && selectedPlace.category.name_ar
-                        ? selectedPlace.category.name_ar
-                        : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
-                    : (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Phone */}
-              <View style={styles.detailRow}>
-                <Ionicons name="call-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.phone && styles.noDataText]}>
-                  {selectedPlace.phone || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Opening Hours */}
-              <View style={styles.detailRow}>
-                <Ionicons name="time-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.opening_hours && styles.noDataText]}>
-                  {selectedPlace.opening_hours || (t("no_data") || "אין נתונים")}
-                </Text>
-              </View>
-
-              {/* Description */}
-              <View style={styles.descriptionSection}>
-                <Text style={styles.descriptionTitle}>
-                  {t("description") || "תיאור"}
-                </Text>
-                {selectedPlace.description ? (
-                  <Text style={styles.descriptionText}>
-                {selectedPlace.description}
-              </Text>
-                ) : (
-                  <Text style={styles.noDataText}>
-                    {t("no_data") || "אין נתונים"}
-              </Text>
             )}
-          </View>
 
-              {/* Social Links */}
-              <View style={styles.detailRow}>
-                <Ionicons name="link-outline" size={20} color="#0f5b63" />
-                <Text style={[styles.detailText, !selectedPlace.social_links && styles.noDataText]} numberOfLines={1}>
-                  {selectedPlace.social_links || (t("no_data") || "אין נתונים")}
-                </Text>
+            {/* Image Gallery - Horizontal Scroll */}
+            {(() => {
+              // Get all images: business_images_urls first, then main_image_url as fallback
+              const allImages: string[] = [];
+              
+              // Handle business_images_urls - check if it's an array, if not, try to parse it
+              let businessImages: string[] = [];
+              if (selectedPlace.business_images_urls) {
+                if (Array.isArray(selectedPlace.business_images_urls)) {
+                  businessImages = selectedPlace.business_images_urls;
+                } else if (typeof selectedPlace.business_images_urls === 'string') {
+                  // If it's a string, try to parse it as JSON (defensive)
+                  try {
+                    const parsed = JSON.parse(selectedPlace.business_images_urls);
+                    if (Array.isArray(parsed)) {
+                      businessImages = parsed;
+                    } else {
+                      console.warn("business_images_urls is a string but not a valid JSON array:", selectedPlace.business_images_urls);
+                    }
+                  } catch (e) {
+                    console.warn("Failed to parse business_images_urls as JSON:", selectedPlace.business_images_urls, e);
+                  }
+                } else {
+                  console.warn("business_images_urls is not an array or string:", typeof selectedPlace.business_images_urls, selectedPlace.business_images_urls);
+                }
+              }
+              
+              if (businessImages.length > 0) {
+                allImages.push(...businessImages);
+              } else if (selectedPlace.main_image_url) {
+                allImages.push(selectedPlace.main_image_url);
+              }
+
+              // Filter out duplicates, empty strings, null, and undefined
+              const uniqueImages = Array.from(new Set(
+                allImages
+                  .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+                  .map(img => img.trim())
+              ));
+
+              // Debug logging
+              if (__DEV__ && uniqueImages.length > 0) {
+                console.log("=== LOADING PLACE IMAGES ===");
+                console.log("Raw business_images_urls:", selectedPlace.business_images_urls, "Type:", typeof selectedPlace.business_images_urls);
+                console.log("Parsed businessImages:", businessImages);
+                console.log("Raw main_image_url:", selectedPlace.main_image_url);
+                console.log("Filtered unique images:", uniqueImages);
+                console.log("API_BASE_URL:", API_BASE_URL);
+                uniqueImages.forEach((img, idx) => {
+                  const formatted = formatImageUri(img);
+                  console.log(`Image ${idx}:`, {
+                    original: img,
+                    formatted: formatted,
+                    isValid: formatted && formatted.startsWith('http')
+                  });
+                  // Test if URL is accessible (only in dev mode to avoid performance issues)
+                  if (formatted && formatted.startsWith('http')) {
+                    fetch(formatted, { method: 'HEAD' })
+                      .then(res => {
+                        console.log(`✅ Image ${idx} URL accessible:`, formatted, "Status:", res.status);
+                      })
+                      .catch(err => {
+                        console.error(`❌ Image ${idx} URL NOT accessible:`, formatted, "Error:", err.message);
+                      });
+                  }
+                });
+                console.log("===========================");
+              }
+
+              if (uniqueImages.length > 0) {
+                return (
+                  <View style={styles.imageGalleryContainer}>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={true}
+                      contentContainerStyle={styles.imageScrollContent}
+                      style={styles.imageScrollView}
+                    >
+                      {uniqueImages.map((imageUri, index) => {
+                        const hasError = imageErrors[index];
+                        const isLoading = imageLoading[index];
+                        const formattedUri = formatImageUri(imageUri);
+                        
+                        // Always render - let Image component handle invalid URIs
+                        return (
+                          <TouchableOpacity
+                            key={`image-${index}-${imageUri?.substring(0, 20) || index}`}
+                            onPress={() => {
+                              setSelectedPhotoIndex(index);
+                              setPhotoModalVisible(true);
+                              // Scroll to selected photo after modal opens
+                              setTimeout(() => {
+                                photoScrollViewRef.current?.scrollTo({
+                                  x: index * SCREEN_WIDTH,
+                                  animated: false,
+                                });
+                              }, 100);
+                            }}
+                            style={styles.imageGridItem}
+                            activeOpacity={0.8}
+                          >
+                            {!formattedUri ? (
+                              <View style={styles.photoErrorPlaceholder}>
+                                <Ionicons name="image-outline" size={32} color="#999" />
+                                <Text style={styles.photoErrorText} numberOfLines={2}>
+                                  {t("invalid_image_url") || "Invalid URL"}
+                                </Text>
+                              </View>
+                            ) : hasError ? (
+                              <View style={styles.photoErrorPlaceholder}>
+                                <Ionicons name="image-outline" size={32} color="#999" />
+                                <Text style={styles.photoErrorText} numberOfLines={2}>
+                                  {t("image_failed_to_load") || "Failed to load"}
+                                </Text>
+                                {__DEV__ && (
+                                  <Text style={[styles.photoErrorText, { fontSize: 8, marginTop: 4 }]} numberOfLines={1}>
+                                    {formattedUri.substring(0, 30)}...
+                                  </Text>
+                                )}
+                              </View>
+                            ) : (
+                              <View style={styles.photoContainer}>
+                                <Image 
+                                  source={{ uri: formattedUri }}
+                                  style={styles.gridImage}
+                                  resizeMode="cover"
+                                  onError={(e) => {
+                                    if (__DEV__) {
+                                      console.error(`❌ Image ${index} failed:`, {
+                                        original: imageUri,
+                                        formatted: formattedUri,
+                                        error: e?.nativeEvent?.error || e,
+                                        errorCode: e?.nativeEvent?.error?.code,
+                                        errorMessage: e?.nativeEvent?.error?.message
+                                      });
+                                      // Try to fetch the URL to see if it's accessible
+                                      fetch(formattedUri, { method: 'HEAD' })
+                                        .then(res => {
+                                          console.log(`🔍 Fetch test for ${formattedUri}:`, res.status, res.statusText, res.headers.get('content-type'));
+                                        })
+                                        .catch(err => {
+                                          console.error(`🔍 Fetch test failed for ${formattedUri}:`, err.message);
+                                        });
+                                    }
+                                    handleImageError(e, index, uniqueImages);
+                                  }}
+                                  onLoad={() => {
+                                    if (__DEV__) {
+                                      console.log(`✅ Image ${index} loaded successfully:`, formattedUri);
+                                    }
+                                    handleImageLoad(index);
+                                  }}
+                                  onLoadStart={() => {
+                                    if (__DEV__) {
+                                      console.log(`🔄 Image ${index} loading:`, formattedUri);
+                                    }
+                                    handleImageLoadStart(index);
+                                  }}
+                                />
+                                {isLoading && (
+                                  <View style={styles.photoLoadingOverlay}>
+                                    <ActivityIndicator size="small" color="#fff" />
+                                  </View>
+                                )}
+                              </View>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                );
+              } else {
+                return null; // Don't show anything if no images
+              }
+            })()}
+
+            {/* Details Section - Card Style */}
+            <View style={styles.detailsSection}>
+              {/* Location Card */}
+              <View style={styles.detailCard}>
+                <View style={styles.detailCardContent}>
+                  <Ionicons name="location-outline" size={20} color="#000" />
+                  <View style={styles.detailCardTextContainer}>
+                    <Text style={styles.detailCardText}>
+                      {getCityName(selectedPlace.city) || t("no_data") || "אין נתונים"}
+                    </Text>
+                  </View>
+                </View>
               </View>
+
+              {/* Category Card */}
+              {selectedPlace.category && (
+                <View style={styles.detailCard}>
+                  <View style={styles.detailCardContent}>
+                    <MaterialCommunityIcons 
+                      name={selectedPlace.category?.icon_name as any || "tag"} 
+                      size={20} 
+                      color="#000" 
+                    />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={styles.detailCardText}>
+                        {selectedPlace.category
+                          ? (i18n.language === "he" && selectedPlace.category.name_he
+                              ? selectedPlace.category.name_he
+                              : i18n.language === "ar" && selectedPlace.category.name_ar
+                              ? selectedPlace.category.name_ar
+                              : selectedPlace.category.name_ar || selectedPlace.category.name_he || "")
+                          : (t("no_data") || "אין נתונים")}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Phone Card */}
+              <View style={styles.detailCard}>
+                <View style={styles.detailCardContent}>
+                  <Ionicons name="call-outline" size={20} color="#000" />
+                  <View style={styles.detailCardTextContainer}>
+                    <Text style={[styles.detailCardText, !selectedPlace.phone && styles.noDataText]}>
+                      {selectedPlace.phone || (t("no_data") || "אין נתונים")}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Social Links Card */}
+              {selectedPlace.social_links ? (
+                <TouchableOpacity
+                  style={styles.detailCard}
+                  onPress={() => {
+                    const url = selectedPlace.social_links!.startsWith('http') 
+                      ? selectedPlace.social_links! 
+                      : `https://${selectedPlace.social_links}`;
+                    Linking.openURL(url).catch(_err => {
+                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                    });
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[styles.detailCardText, styles.socialLinkText]} numberOfLines={1}>
+                        {selectedPlace.social_links}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#666" />
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.detailCard}>
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text style={[styles.detailCardText, styles.noDataText]}>
+                        {t("no_data") || "אין נתונים"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
             </View>
 
             {/* Admin Actions - Only show edit/delete if place doesn't have an owner */}
@@ -858,6 +2006,154 @@ export default function AdminHomeScreen() {
           </>
       )}
       </Animated.View>
+
+      {/* Language Selector Modal */}
+      <Modal
+        visible={showLanguageSelector}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowLanguageSelector(false)}
+      >
+        <TouchableOpacity
+          style={styles.languageSelectorModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowLanguageSelector(false)}
+        >
+          <View style={styles.languageSelectorModal}>
+            <Text style={styles.languageSelectorTitle}>
+              {i18n.language === "ar" ? "اختر اللغة" : "בחר שפה"}
+            </Text>
+            <TouchableOpacity
+              style={styles.languageOption}
+              onPress={() => handleLanguageSelection("he")}
+            >
+              <Text style={styles.languageOptionText}>עברית</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.languageOption}
+              onPress={() => handleLanguageSelection("ar")}
+            >
+              <Text style={styles.languageOptionText}>العربية</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.languageSelectorCancel}
+              onPress={() => setShowLanguageSelector(false)}
+            >
+              <Text style={styles.languageSelectorCancelText}>
+                {i18n.language === "ar" ? "إلغاء" : "ביטול"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Photo Gallery Full Screen Modal */}
+      {selectedPlace && (() => {
+        const allImages: string[] = [];
+        
+        // Handle business_images_urls - check if it's an array, if not, try to parse it
+        let businessImages: string[] = [];
+        if (selectedPlace.business_images_urls) {
+          if (Array.isArray(selectedPlace.business_images_urls)) {
+            businessImages = selectedPlace.business_images_urls;
+          } else if (typeof selectedPlace.business_images_urls === 'string') {
+            // If it's a string, try to parse it as JSON (defensive)
+            try {
+              const parsed = JSON.parse(selectedPlace.business_images_urls);
+              if (Array.isArray(parsed)) {
+                businessImages = parsed;
+              }
+            } catch (e) {
+              console.warn("Failed to parse business_images_urls as JSON in modal:", selectedPlace.business_images_urls, e);
+            }
+          }
+        }
+        
+        if (businessImages.length > 0) {
+          allImages.push(...businessImages);
+        } else if (selectedPlace.main_image_url) {
+          allImages.push(selectedPlace.main_image_url);
+        }
+
+        // Filter out duplicates, empty strings, null, and undefined
+        const uniqueImages = Array.from(new Set(
+          allImages
+            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
+            .map(img => img.trim())
+        ));
+
+        if (uniqueImages.length === 0) return null;
+
+        return (
+          <Modal
+            visible={photoModalVisible}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => setPhotoModalVisible(false)}
+          >
+            <View style={styles.photoModalContainer}>
+              <TouchableOpacity
+                style={styles.photoModalCloseButton}
+                onPress={() => setPhotoModalVisible(false)}
+              >
+                <Ionicons name="close" size={32} color="#fff" />
+              </TouchableOpacity>
+              <ScrollView
+                ref={photoScrollViewRef}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(event) => {
+                  const newIndex = Math.round(event.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+                  setSelectedPhotoIndex(newIndex);
+                }}
+                style={styles.photoModalScrollView}
+              >
+                {uniqueImages.map((imageUri, index) => {
+                  const formattedUri = formatImageUri(imageUri);
+                  return (
+                    <View key={`modal-image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoModalImageContainer}>
+                      <Image
+                        source={{ uri: formattedUri }}
+                        style={styles.photoModalImage}
+                        resizeMode="contain"
+                        onError={(e) => {
+                          if (__DEV__) {
+                            console.error(`Modal image ${index} failed:`, {
+                              original: imageUri,
+                              formatted: formattedUri,
+                              error: e?.nativeEvent?.error || e
+                            });
+                          }
+                          // Don't show alert for every failed image, just log it
+                        }}
+                        onLoad={() => {
+                          if (__DEV__) {
+                            console.log(`✅ Modal image ${index} loaded:`, formattedUri);
+                          }
+                        }}
+                      />
+                    </View>
+                  );
+                })}
+              </ScrollView>
+              {/* Photo counter */}
+              <View style={styles.photoCounter}>
+                <Text style={styles.photoCounterText}>
+                  {selectedPhotoIndex + 1} / {uniqueImages.length}
+                </Text>
+              </View>
+            </View>
+          </Modal>
+        );
+      })()}
+
+      {!selectedPlace && !destination && (
+        <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
+          <Text style={styles.recenterButtonText}>🎯</Text>
+        </TouchableOpacity>
+      )}
+
     </View>
   );
 }
@@ -1210,6 +2506,100 @@ const styles = StyleSheet.create({
     borderColor: "#E5E5EA",
     borderStyle: "dashed",
   },
+  imageScrollView: {
+    flexGrow: 0,
+  },
+  imageScrollContent: {
+    paddingHorizontal: 16,
+  },
+  imageGridItem: {
+    width: SCREEN_WIDTH * 0.40,
+    aspectRatio: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#F2F2F7",
+    marginRight: 8,
+  },
+  gridImage: {
+    width: "100%",
+    height: "100%",
+  },
+  photoContainer: {
+    width: "100%",
+    height: "100%",
+    position: "relative",
+  },
+  photoErrorPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#f5f5f5",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    borderRadius: 12,
+  },
+  photoErrorText: {
+    fontSize: 10,
+    color: "#999",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  photoLoadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalContainer: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalCloseButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalScrollView: {
+    flex: 1,
+  },
+  photoModalImageContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  photoModalImage: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+  },
+  photoCounter: {
+    position: "absolute",
+    bottom: 50,
+    alignSelf: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  photoCounterText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
   noDataText: {
     fontSize: 15,
     color: "#999",
@@ -1218,6 +2608,65 @@ const styles = StyleSheet.create({
   detailsSection: {
     paddingHorizontal: 16,
     paddingBottom: 16,
+  },
+  detailCard: {
+    backgroundColor: "#F5F5F5",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+  },
+  detailCardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  detailCardTextContainer: {
+    flex: 1,
+  },
+  detailCardText: {
+    fontSize: 15,
+    color: "#000",
+    fontWeight: "400",
+  },
+  detailCardStatus: {
+    fontSize: 15,
+    color: "#4CAF50",
+    fontWeight: "500",
+  },
+  detailCardStatusClosed: {
+    color: "#F44336",
+  },
+  openingHoursTable: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0",
+  },
+  openingHoursRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  openingHoursRowToday: {
+    backgroundColor: "transparent",
+  },
+  openingHoursDay: {
+    fontSize: 15,
+    color: "#666",
+    fontWeight: "400",
+  },
+  openingHoursDayToday: {
+    color: "#000",
+    fontWeight: "600",
+  },
+  openingHoursTime: {
+    fontSize: 15,
+    color: "#000",
+    fontWeight: "400",
+  },
+  openingHoursClosed: {
+    color: "#999",
   },
   detailRow: {
     flexDirection: "row",
@@ -1230,9 +2679,24 @@ const styles = StyleSheet.create({
     color: "#000",
     flex: 1,
   },
+  socialLinkText: {
+    fontSize: 15,
+    color: "#0f5b63",
+    textDecorationLine: "underline",
+  },
   descriptionSection: {
     marginTop: 8,
     marginBottom: 16,
+  },
+  descriptionSectionInline: {
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  descriptionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
   },
   descriptionTitle: {
     fontSize: 16,
@@ -1240,10 +2704,103 @@ const styles = StyleSheet.create({
     color: "#000",
     marginBottom: 8,
   },
+  descriptionTitleInline: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000",
+    flex: 1,
+  },
   descriptionText: {
     fontSize: 15,
     color: "#333",
     lineHeight: 22,
+  },
+  descriptionTextInline: {
+    fontSize: 15,
+    color: "#333",
+    lineHeight: 22,
+  },
+  statusRow: {
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  statusBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: "#E8F5E9",
+  },
+  statusBadgeOpen: {
+    backgroundColor: "#E8F5E9",
+  },
+  statusBadgeClosed: {
+    backgroundColor: "#FFEBEE",
+  },
+  statusText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  statusTextOpen: {
+    color: "#4CAF50",
+  },
+  statusTextClosed: {
+    color: "#F44336",
+  },
+  announcementBanner: {
+    backgroundColor: "#FFF9E6",
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#FFE082",
+  },
+  announcementHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 8,
+  },
+  announcementTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0f5b63",
+    flex: 1,
+  },
+  translateButtonContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  translateIconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F2F2F7",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#0f5b63",
+  },
+  showOriginalButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#E8F4F8",
+    borderWidth: 1,
+    borderColor: "#0f5b63",
+  },
+  showOriginalButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#0f5b63",
+  },
+  announcementText: {
+    fontSize: 15,
+    color: "#000",
+    lineHeight: 22,
+    fontWeight: "400",
   },
   adminActionsSection: {
     paddingHorizontal: 16,
@@ -1305,5 +2862,218 @@ const styles = StyleSheet.create({
     backgroundColor: "#F2F2F7",
     alignItems: "center",
     justifyContent: "center",
+  },
+  languageSelectorModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  languageSelectorModal: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 24,
+    width: SCREEN_WIDTH * 0.8,
+    maxWidth: 320,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  languageSelectorTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#000",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  languageOption: {
+    backgroundColor: "#F2F2F7",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    alignItems: "center",
+  },
+  languageOptionText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#0f5b63",
+  },
+  languageSelectorCancel: {
+    marginTop: 8,
+    padding: 12,
+    alignItems: "center",
+  },
+  languageSelectorCancelText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#666",
+  },
+  searchContainer: {
+    position: "absolute",
+    top: 50,
+    left: 16,
+    right: 16,
+    zIndex: 1000,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInputTouchable: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInputPlaceholder: {
+    flex: 1,
+    fontSize: 16,
+    color: "#666",
+  },
+  loader: {
+    marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 20,
+    maxHeight: "80%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+  },
+  modalCloseButton: {
+    fontSize: 24,
+    color: "#666",
+    fontWeight: "300",
+  },
+  modalSearchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F8F9FA",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  modalSearchInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: "#333",
+  },
+  modalSearchIcon: {
+    marginLeft: 8,
+  },
+  searchResultsList: {
+    maxHeight: 400,
+  },
+  searchResultItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  searchResultName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 4,
+  },
+  searchResultDetails: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  searchResultCity: {
+    fontSize: 14,
+    color: "#666",
+  },
+  searchResultSeparator: {
+    fontSize: 14,
+    color: "#999",
+    marginHorizontal: 4,
+  },
+  searchResultCategory: {
+    fontSize: 14,
+    color: "#666",
+  },
+  noResults: {
+    padding: 16,
+    textAlign: "center",
+    color: "#999",
+    fontSize: 14,
+  },
+  userLocationMarker: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(15, 91, 99, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#0f5b63",
+  },
+  userLocationDot: {
+    flex: 1,
+    borderRadius: 7,
+    backgroundColor: "#0f5b63",
+    width: 14,
+    height: 14,
+  },
+  customPinMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 107, 107, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#ff6b6b",
+  },
+  customPinDot: {
+    flex: 1,
+    borderRadius: 9,
+    backgroundColor: "#ff6b6b",
+    width: 18,
+    height: 18,
+  },
+  destinationMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(15, 91, 99, 0.1)",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#0f5b63",
+  },
+  destinationMarkerText: {
+    fontSize: 24,
   },
 });

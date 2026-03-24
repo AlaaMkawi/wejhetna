@@ -32,11 +32,10 @@ import {
 import MessageModal from "../MessageModal";
 
 const DARK_TEAL = "#0f5b63";
+import { API_BASE_URL } from "../../../config";
+
 const SOFT_TEAL = "#3a8d96";
 const MINT = "#9bd3d8";
-
-const API_BASE_URL = "http://10.0.2.2:8000";
-
 type BusinessOwnerDetailsFormRoute = RouteProp<
   RootStackParamList,
   "BusinessOwnerDetailsForm"
@@ -66,7 +65,7 @@ export default function BusinessOwnerDetailsFormScreen() {
 
   const [description, setDescription] = useState("");
   const [phone, setPhone] = useState("");
-  const [openingHours, setOpeningHours] = useState("");
+  const [openingHours, _setOpeningHours] = useState(""); // Kept for payload compatibility, UI field removed
   const [socialMediaAccountName, setSocialMediaAccountName] = useState("");
 
   // Image uploads (UI only - not sent to backend)
@@ -394,6 +393,8 @@ export default function BusinessOwnerDetailsFormScreen() {
         business_phone: hasPhone ? phone : null, // Business phone (optional)
         opening_hours: openingHours.trim() || null,
         main_image_url: null,
+        business_license_image_url: businessLicenseUrl || null,
+        business_images_urls: businessImagesUrls.length > 0 ? businessImagesUrls : null,
         social_links: null,
       };
 
@@ -433,6 +434,18 @@ export default function BusinessOwnerDetailsFormScreen() {
           // Handle different error response formats
           if (typeof errorData?.detail === "string") {
             errorMessage = errorData.detail;
+            
+            // Handle specific "already exists" errors with better messages
+            const errorDetailLower = errorMessage.toLowerCase();
+            if (errorDetailLower.includes("username") && errorDetailLower.includes("already exists")) {
+              errorMessage = t("username_already_exists") || t("username_taken") || "Username already exists. Please choose a different username.";
+            } else if (errorDetailLower.includes("email") && errorDetailLower.includes("already exists")) {
+              errorMessage = t("email_already_exists") || "Email already exists. Please use a different email or try logging in.";
+            } else if (errorDetailLower.includes("phone") && (errorDetailLower.includes("already exists") || errorDetailLower.includes("already"))) {
+              errorMessage = t("phone_already_exists") || t("phone_taken") || "Phone number already exists. Please use a different phone number.";
+            } else if (errorDetailLower.includes("username or email") && errorDetailLower.includes("already exists")) {
+              errorMessage = t("username_or_email_exists") || "Username or email already exists. Please use different credentials or try logging in.";
+            }
           } else if (Array.isArray(errorData?.detail)) {
             // FastAPI validation errors
             const msgs = errorData.detail
@@ -658,17 +671,6 @@ export default function BusinessOwnerDetailsFormScreen() {
                 textAlign="right"
                 placeholderTextColor="#9ab8bd"
                 autoCorrect={false}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{t("opening_hours") || "Opening Hours"} ({t("optional") || "Optional"})</Text>
-              <TextInput
-                style={styles.input}
-                value={openingHours}
-                onChangeText={setOpeningHours}
-                placeholder={t("example_opening_hours") || "Example: Sun-Thu: 9:00-18:00"}
-                placeholderTextColor="#9ab8bd"
               />
             </View>
           </View>

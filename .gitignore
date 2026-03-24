@@ -7,3 +7,7 @@ __pycache__/
 wejhetna_backend\uploads
 node_modules/
 wejhetna_backend/uploads/
+
+wejhetna_backend/.env
+.env
+

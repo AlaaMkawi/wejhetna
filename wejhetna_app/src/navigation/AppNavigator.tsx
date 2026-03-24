@@ -35,6 +35,7 @@ import ProfileScreen from "../screens/ProfileScreen";
 import SavedPlacesScreen from "../screens/SavedPlacesScreen";
 import UserTabNavigator from "./UserTabNavigator";
 import ManageMyBusinessScreen from "../screens/businessOwner/ManageMyBusinessScreen";
+import RouteDetailsScreen from "../screens/RegularAccount/RouteDetailsScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -229,6 +230,11 @@ export default function AppNavigator() {
 <Stack.Screen
   name="ManageMyBusiness"
   component={ManageMyBusinessScreen}
+  options={{ headerShown: false }}
+/>
+<Stack.Screen
+  name="RouteDetails"
+  component={RouteDetailsScreen}
   options={{ headerShown: false }}
 />
 
