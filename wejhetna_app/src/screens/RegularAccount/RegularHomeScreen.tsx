@@ -448,6 +448,7 @@ export default function RegularHomeScreen({}: Props) {
         if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
         return formatted;
       }
+   
       
       // Otherwise, try to prepend API_BASE_URL
       const formatted = `${API_BASE_URL}/${trimmedUri}`;
