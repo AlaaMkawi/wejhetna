@@ -69,7 +69,7 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
       const res = await fetch(`${API_BASE_URL}/admin/business-owner/requests`);
       const json = await res.json();
       if (!res.ok) {
-        setError(json.detail || "Failed to load business owner requests");
+        setError(json.detail || t("failed_to_load_business_owner_requests") || "Failed to load business owner requests");
       } else {
         setRequests(json);
         
@@ -94,7 +94,7 @@ export default function AdminBusinessOwnerRequestsScreen({ route, navigation }: 
         }
       }
     } catch (e: any) {
-      setError("Network error: " + e.message);
+      setError(`${t("network_error") || "Network error"}: ${e.message}`);
     } finally {
       setLoading(false);
     }

@@ -279,33 +279,8 @@ export default function AdminHomeScreen() {
     const trimmedUri = uri.trim();
     
     try {
-      // If it's already a full URL with the correct base, return as is
-      if (trimmedUri.startsWith(API_BASE_URL)) {
-        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
-        return trimmedUri;
-      }
-      
-      // If it's already a full URL (http:// or https://), extract just the path
+      // If it's already a full URL (http:// or https://), return as-is (supports S3, CloudFront, etc.)
       if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
-        // Manually extract the path from the URL
-        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
-        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
-        if (urlMatch && urlMatch[1]) {
-          const path = urlMatch[1];
-          const formatted = `${API_BASE_URL}${path}`;
-          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
-          return formatted;
-        }
-        // If regex fails, try to find /uploads/ in the string
-        const uploadsIndex = trimmedUri.indexOf("/uploads/");
-        if (uploadsIndex !== -1) {
-          const path = trimmedUri.substring(uploadsIndex);
-          const formatted = `${API_BASE_URL}${path}`;
-          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
-          return formatted;
-        }
-        // If we can't extract path, try the original URL (might work if same network)
-        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
         return trimmedUri;
       }
       
