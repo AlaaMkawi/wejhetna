@@ -108,9 +108,34 @@ EMAIL_PASS = "cdoj zsjt xpqf uelp"
 
 def send_email(to_email: str, subject: str, body: str):
     """
-    Send a simple email using Gmail SMTP.
-    Uses EMAIL_USER and EMAIL_PASS defined above.
+    Queue a transactional email on Celery (tasks.send_email).
+    Used by verification, password reset, admin approval/rejection, etc.
+    Uses send_email_task.delay() (same binding the worker registered). If enqueue fails,
+    falls back to synchronous SMTP.
     """
+    print(
+        f"[API] send_email: enqueue tasks.send_email to={to_email!r} "
+        f"subject_len={len(subject)} body_len={len(body)}"
+    )
+    try:
+        from tasks import send_email_task
+
+        async_result = send_email_task.delay(to_email, subject, body)
+        print(
+            f"[API] send_email: Celery delay OK name={send_email_task.name!r} "
+            f"celery_task_id={async_result.id!r} state={async_result.state!r} "
+            f"to={to_email!r}"
+        )
+        return
+    except Exception as e:
+        import traceback
+
+        print(
+            f"[API] send_email: CRITICAL Celery delay(send_email_task) failed "
+            f"to={to_email!r}, falling back to sync SMTP. Error: {e}"
+        )
+        traceback.print_exc()
+
     if not EMAIL_USER or not EMAIL_PASS:
         print("Email config missing, skipping real send.")
         print("=== EMAIL (FAKE) ===")
@@ -139,6 +164,32 @@ def send_email(to_email: str, subject: str, body: str):
         print("Subject:", subject)
         print("Body:", body)
         print("=============")
+
+
+def enqueue_admin_status_email(
+    to_email: str,
+    subject: str,
+    body: str,
+    *,
+    status: str,
+    request_type: str,
+) -> None:
+    """
+    Queue approve/reject emails for business owner or driver via the same Celery path as
+    verification/password reset: send_email → tasks.send_email (subject/body unchanged).
+
+    status / request_type are for API logs only.
+    """
+    print(
+        f"[API] enqueue_admin_status_email: routing to send_email → send_email_task.delay "
+        f"(tasks.send_email) to={to_email!r} status={status!r} request_type={request_type!r} "
+        f"subject_len={len(subject)} body_len={len(body)}"
+    )
+    send_email(to_email, subject, body)
+    print(
+        f"[API] enqueue_admin_status_email: send_email handoff finished "
+        f"to={to_email!r} status={status!r} request_type={request_type!r}"
+    )
 
 
 # CORS (לאפליקציית React Native)
@@ -188,6 +239,11 @@ def generate_verification_code() -> str:
 
 def send_verification_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
     """Send verification code email to user in their preferred language."""
+
+    print(
+        f"[API] send_verification_email: to={to_email!r} language={language!r} "
+        "(will call send_email -> tasks.send_email)"
+    )
 
     # Email templates for different languages
     if language == "he":
@@ -273,6 +329,11 @@ def create_verification_code(user_id: int, email: str, db: Session) -> EmailVeri
 
 def send_password_reset_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
     """Send password reset code email to user in their preferred language."""
+
+    print(
+        f"[API] send_password_reset_email: to={to_email!r} language={language!r} "
+        "(will call send_email -> tasks.send_email)"
+    )
 
     # Email templates for different languages
     if language == "he":
@@ -735,14 +796,19 @@ def approve_business_owner_request(
 
     db.commit()
 
+    # Plain strings only after commit (no ORM attrs passed to Celery; avoid lazy-load edge cases)
+    to_email = str(user.email)
+    full_name = str(user.full_name)
+    username = str(user.username)
+
     # Send professional bilingual email (Arabic and Hebrew)
-    email_body = f"""عزيزي/عزيزتي {user.full_name},
+    email_body = f"""عزيزي/عزيزتي {full_name},
 
 نحن سعداء بإبلاغك بأن طلب صاحب العمل الخاص بك لوجهتنا تمت الموافقة عليه!
 
 يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في إدارة مكان عملك.
 
-اسم المستخدم الخاص بك لتسجيل الدخول: {user.username}
+اسم المستخدم الخاص بك لتسجيل الدخول: {username}
 استخدم كلمة المرور التي اخترتها عند إنشاء الحساب.
 
 نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
@@ -752,13 +818,13 @@ def approve_business_owner_request(
 
 ─────────────────────────────────────
 
-שלום {user.full_name},
+שלום {full_name},
 
 אנו שמחים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא אושרה!
 
 אתה יכול כעת להתחבר לאפליקציה ולהתחיל לנהל את מקום העסק שלך.
 
-שם המשתמש שלך להתחברות: {user.username}
+שם המשתמש שלך להתחברות: {username}
 השתמש/י בסיסמה שבחרת בעת יצירת החשבון.
 
 תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
@@ -768,10 +834,12 @@ def approve_business_owner_request(
 
     subject = "وجهتنا / ווג'הטנא – الموافقة على طلب صاحب العمل / אישור בקשת בעל עסק"
 
-    send_email(
-        to_email=user.email,
-        subject=subject,
-        body=email_body,
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="approved",
+        request_type="business_owner",
     )
 
     return {"detail": "Business owner request approved"}
@@ -818,8 +886,12 @@ def reject_business_owner_request(
 
     db.commit()
 
+    to_email = str(user.email)
+    full_name = str(user.full_name)
+    username = str(user.username)
+
     # Send professional bilingual email (Arabic and Hebrew) with reason and re-signup instructions
-    email_body = f"""عزيزي/عزيزتي {user.full_name},
+    email_body = f"""عزيزي/عزيزتي {full_name},
 
 نأسف لإبلاغك بأن طلب صاحب العمل الخاص بك لوجهتنا تمت مراجعته ولسوء الحظ، لا يمكننا الموافقة عليه في هذا الوقت.
 
@@ -829,8 +901,8 @@ def reject_business_owner_request(
 نفهم أن هذا قد يكون محبطاً، لكننا نريد أن نمنحك الفرصة لمعالجة المشاكل وإعادة التقديم.
 
 يمكنك تقديم طلب جديد باستخدام نفس بيانات الاعتماد:
-• البريد الإلكتروني: {user.email}
-• اسم المستخدم: {user.username}
+• البريد الإلكتروني: {to_email}
+• اسم المستخدم: {username}
 
 ببساطة قم بزيارة تطبيق وجهتنا وأكمل نموذج تسجيل صاحب العمل مرة أخرى بنفس البريد الإلكتروني واسم المستخدم. سنراجع طلبك الجديد بعد تقديمه.
 
@@ -843,7 +915,7 @@ def reject_business_owner_request(
 
 ─────────────────────────────────────
 
-שלום {user.full_name},
+שלום {full_name},
 
 אנו מצטערים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא נבדקה ולמרבה הצער, איננו יכולים לאשר אותה בשלב זה.
 
@@ -853,8 +925,8 @@ def reject_business_owner_request(
 אנו מבינים שזה עשוי להיות מאכזב, אך אנו רוצים לתת לך הזדמנות לטפל בבעיות ולהגיש בקשה מחדש.
 
 תוכל להגיש בקשה חדשה באמצעות אותם פרטי התחברות:
-• אימייל: {user.email}
-• שם משתמש: {user.username}
+• אימייל: {to_email}
+• שם משתמש: {username}
 
 פשוט בקר באפליקציית ווג'הטנא והשלם את טופס הרשמת בעל העסק שוב עם אותו אימייל ושם משתמש. נבדוק את הבקשה החדשה שלך לאחר הגשתה.
 
@@ -867,10 +939,12 @@ def reject_business_owner_request(
 
     subject = "وجهتنا / ווג'הטנא – تحديث حالة طلب صاحب العمل / עדכון סטטוס בקשת בעל עסק"
 
-    send_email(
-        to_email=user.email,
-        subject=subject,
-        body=email_body,
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="rejected",
+        request_type="business_owner",
     )
 
     return {"detail": "Business owner request rejected"}
@@ -1404,6 +1478,7 @@ def verify_email(data: VerifyEmailRequest, db: Session = Depends(get_db)):
 @app.post("/auth/resend-verification-code")
 def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_db)):
     """Resend verification code to user's email."""
+    print(f"[API] POST /auth/resend-verification-code for email={data.email!r}")
     # Find user by email
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
@@ -1431,6 +1506,7 @@ def resend_verification_code(data: ResendCodeRequest, db: Session = Depends(get_
 @app.post("/auth/request-password-reset")
 def request_password_reset(data: RequestPasswordResetRequest, db: Session = Depends(get_db)):
     """Request password reset code - sends email with verification code."""
+    print(f"[API] POST /auth/request-password-reset for email={data.email!r}")
     # Check if email exists in database
     user = db.query(User).filter(User.email == data.email).first()
     if not user:
@@ -1580,6 +1656,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/auth/request-email-verification")
 def request_email_verification(data: SendVerificationCodeRequest, db: Session = Depends(get_db)):
+    print(f"[API] POST /auth/request-email-verification for email={data.email!r}")
     # Check if user exists with this email
     existing_user = db.query(User).filter(User.email == data.email).first()
     
@@ -1827,7 +1904,10 @@ def translate_text(request: TranslationRequest):
 @app.post("/files/upload")
 async def upload_file(file: UploadFile = File(...), request: Request = None):
     """
-    Accept one file, upload it to S3, and return a URL.
+    Return a pre-signed S3 URL so the client uploads directly to S3.
+
+    This keeps the endpoint synchronous (no task_id) and avoids slow uploads
+    through the FastAPI server.
     """
     import os
     import traceback
@@ -1842,11 +1922,9 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
     except Exception as e:
         print("[UPLOAD] Could not load .env:", str(e))
 
-    print("[UPLOAD] entered upload_file handler")
+    print("[UPLOAD] entered upload_file handler (presign flow)")
     print("[UPLOAD] filename:", getattr(file, "filename", None))
     print("[UPLOAD] content_type:", getattr(file, "content_type", None))
-    print("[UPLOAD] AWS_ACCESS_KEY_ID exists:", bool(os.getenv("AWS_ACCESS_KEY_ID")))
-    print("[UPLOAD] AWS_SECRET_ACCESS_KEY exists:", bool(os.getenv("AWS_SECRET_ACCESS_KEY")))
     print("[UPLOAD] AWS_S3_BUCKET:", os.getenv("AWS_S3_BUCKET"))
     print("[UPLOAD] S3_BUCKET:", os.getenv("S3_BUCKET"))
     print("[UPLOAD] AWS_REGION:", os.getenv("AWS_REGION"))
@@ -1866,34 +1944,32 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
 
     try:
         s3 = boto3.client("s3", region_name=region)
-        try:
-            file.file.seek(0)
-        except Exception:
-            pass
+        content_type = file.content_type or "application/octet-stream"
 
         print("[UPLOAD] object_key:", object_key)
-
-        try:
-            s3.upload_fileobj(
-                file.file,
-                bucket_name,
-                object_key,
-                ExtraArgs={"ContentType": file.content_type or "application/octet-stream"},
-            )
-        except Exception as e:
-            print("S3 UPLOAD ERROR:")
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"S3 upload failed: {str(e)}")
-    except HTTPException:
-        raise
+        upload_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={
+                "Bucket": bucket_name,
+                "Key": object_key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=int(os.getenv("S3_PRESIGNED_EXPIRES_SECONDS", "300")),
+        )
     except Exception as e:
-        print("FULL ERROR TRACE:")
+        print("PRESIGN ERROR:")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"S3 presign failed: {str(e)}")
 
     file_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{object_key}"
-    print("UPLOAD RESPONSE:", {"file_url": file_url})
-    return {"file_url": file_url}
+    return {
+        "upload_url": upload_url,
+        "file_url": file_url,
+        "object_key": object_key,
+        "content_type": content_type,
+        "method": "PUT",
+        "headers": {"Content-Type": content_type},
+    }
 
 
 from datetime import datetime, timezone, timedelta  # make sure this import exists
@@ -1938,16 +2014,20 @@ def approve_driver(
 
     db.commit()
 
+    to_email = str(user.email)
+    full_name = str(user.full_name)
+    username = str(user.username)
+
     # Send bilingual email (Arabic + Hebrew) regardless of UI language
     subject = "وجهتنا / ווג'הטנא – الموافقة على طلب السائق / אישור בקשת נהג"
 
-    email_body_ar = f"""عزيزي/عزيزتي {user.full_name},
+    email_body_ar = f"""عزيزي/عزيزتي {full_name},
 
 نحن سعداء بإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت الموافقة عليه!
 
 يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في استخدامه كسائق.
 
-اسم المستخدم الخاص بك لتسجيل الدخول: {user.username}
+اسم المستخدم الخاص بك لتسجيل الدخول: {username}
 استخدم كلمة المرور التي اخترتها عند إنشاء الحساب.
 
 نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
@@ -1955,13 +2035,13 @@ def approve_driver(
 مع أطيب التحيات،
 فريق وجهتنا"""
 
-    email_body_he = f"""שלום {user.full_name},
+    email_body_he = f"""שלום {full_name},
 
 אנו שמחים להודיע לך כי בקשת הנהג שלך לוג'הטנא אושרה!
 
 אתה יכול כעת להתחבר לאפליקציה ולהתחיל להשתמש בה כנהג.
 
-שם המשתמש שלך להתחברות: {user.username}
+שם המשתמש שלך להתחברות: {username}
 השתמש/י בסיסמה שבחרת בעת יצירת החשבון.
 
 תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
@@ -1975,10 +2055,12 @@ def approve_driver(
 
 {email_body_he}"""
 
-    send_email(
-        to_email=user.email,
-        subject=subject,
-        body=email_body,
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="approved",
+        request_type="driver",
     )
 
     return {"detail": "Driver approved"}
@@ -2024,12 +2106,16 @@ def reject_driver(
 
     db.commit()
 
+    to_email = str(user.email)
+    full_name = str(user.full_name)
+    username = str(user.username)
+
     # Send professional bilingual email (Arabic and Hebrew) with reason and re-signup instructions
     # Get driver language from request if provided, otherwise use admin's language or default to Arabic
     driver_language = data.driver_language if hasattr(data, 'driver_language') and data.driver_language else "ar"
     
     if driver_language == "he":
-        email_body = f"""שלום {user.full_name},
+        email_body = f"""שלום {full_name},
 
 אנו מצטערים להודיע לך כי בקשת הנהג שלך לוג'הטנא נבדקה ולמרבה הצער, איננו יכולים לאשר אותה בשלב זה.
 
@@ -2039,8 +2125,8 @@ def reject_driver(
 אנו מבינים שזה עשוי להיות מאכזב, אך אנו רוצים לתת לך הזדמנות לטפל בבעיות ולהגיש בקשה מחדש.
 
 תוכל להגיש בקשה חדשה באמצעות אותם פרטי התחברות:
-• אימייל: {user.email}
-• שם משתמש: {user.username}
+• אימייל: {to_email}
+• שם משתמש: {username}
 
 פשוט בקר באפליקציית ווג'הטנא והשלם את טופס הרשמת הנהג שוב עם אותו אימייל ושם משתמש. נבדוק את הבקשה החדשה שלך לאחר הגשתה.
 
@@ -2052,7 +2138,7 @@ def reject_driver(
 צוות ווג'הטנא"""
         subject = "ווג'הטנא – עדכון סטטוס בקשת נהג"
     elif driver_language == "en":
-        email_body = f"""Dear {user.full_name},
+        email_body = f"""Dear {full_name},
 
 We regret to inform you that your driver application to Wejhetna has been reviewed and unfortunately, we cannot approve it at this time.
 
@@ -2062,8 +2148,8 @@ Rejection reason:
 We understand this may be disappointing, but we want to give you the opportunity to address the issues and resubmit.
 
 You can submit a new application using the same credentials:
-• Email: {user.email}
-• Username: {user.username}
+• Email: {to_email}
+• Username: {username}
 
 Simply visit the Wejhetna app and complete the driver registration form again with the same email and username. We will review your new application after submission.
 
@@ -2075,7 +2161,7 @@ Best regards,
 Wejhetna Team"""
         subject = "Wejhetna – Driver application status update"
     else:  # Arabic (default)
-        email_body = f"""عزيزي/عزيزتي {user.full_name},
+        email_body = f"""عزيزي/عزيزتي {full_name},
 
 نأسف لإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت مراجعته ولسوء الحظ، لا يمكننا الموافقة عليه في هذا الوقت.
 
@@ -2085,8 +2171,8 @@ Wejhetna Team"""
 نفهم أن هذا قد يكون محبطاً، لكننا نريد أن نمنحك الفرصة لمعالجة المشاكل وإعادة التقديم.
 
 يمكنك تقديم طلب جديد باستخدام نفس بيانات الاعتماد:
-• البريد الإلكتروني: {user.email}
-• اسم المستخدم: {user.username}
+• البريد الإلكتروني: {to_email}
+• اسم المستخدم: {username}
 
 ببساطة قم بزيارة تطبيق وجهتنا وأكمل نموذج تسجيل السائق مرة أخرى بنفس البريد الإلكتروني واسم المستخدم. سنراجع طلبك الجديد بعد تقديمه.
 
@@ -2098,10 +2184,12 @@ Wejhetna Team"""
 فريق وجهتنا"""
         subject = "وجهتنا – تحديث حالة طلب السائق"
 
-    send_email(
-        to_email=user.email,
-        subject=subject,
-        body=email_body,
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="rejected",
+        request_type="driver",
     )
 
     return {"detail": "Driver rejected"}

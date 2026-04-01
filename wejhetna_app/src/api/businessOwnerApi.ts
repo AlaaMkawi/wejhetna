@@ -1,6 +1,7 @@
 // src/api/businessOwnerApi.ts
 import axios from "axios";
 import { API_BASE_URL } from "../../config";
+import { normalizePlaceImageFields } from "../utils/imageUrl";
 
 // ---------- Types ----------
 export type LoginRole = "REGULAR" | "DRIVER" | "BUSINESS_OWNER" | "ADMIN";
@@ -141,5 +142,9 @@ export async function getBusinessOwnerProfile(
   const res = await axios.get(
     `${API_BASE_URL}/users/${userId}/business-owner-profile`
   );
-  return res.data;
+  const data: BusinessOwnerProfileOut = res.data;
+  if (data.place) {
+    data.place = normalizePlaceImageFields(data.place);
+  }
+  return data;
 }

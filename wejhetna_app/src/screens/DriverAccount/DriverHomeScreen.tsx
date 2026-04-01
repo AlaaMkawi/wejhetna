@@ -34,6 +34,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -1623,13 +1624,10 @@ export default function DriverHomeScreen({ }: Props) {
 
             {/* Image Gallery - Horizontal Scroll */}
             {(() => {
-              // Get all images: business_images_urls first, then main_image_url as fallback
-              const allImages: string[] = [];
-              if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
-                allImages.push(...selectedPlace.business_images_urls);
-              } else if (selectedPlace.main_image_url) {
-                allImages.push(selectedPlace.main_image_url);
-              }
+              const allImages = collectBusinessImageUrls(
+                selectedPlace.business_images_urls,
+                selectedPlace.main_image_url
+              );
 
               if (allImages.length > 0) {
                 return (
@@ -1640,35 +1638,37 @@ export default function DriverHomeScreen({ }: Props) {
                       contentContainerStyle={styles.imageScrollContent}
                       style={styles.imageScrollView}
                     >
-                      {allImages.map((imageUri, index) => (
-                        <TouchableOpacity
-                          key={index}
-                          onPress={() => {
-                            setSelectedPhotoIndex(index);
-                            setPhotoModalVisible(true);
-                            // Scroll to selected photo after modal opens
-                            setTimeout(() => {
-                              photoScrollViewRef.current?.scrollTo({
-                                x: index * SCREEN_WIDTH,
-                                animated: false,
-                              });
-                            }, 100);
-                          }}
-                          style={styles.imageGridItem}
-                        >
-                          <Image 
-                            source={{ uri: imageUri }}
-                            style={styles.gridImage}
-                            resizeMode="cover"
-                          />
-                        </TouchableOpacity>
-                      ))}
+                      {allImages.map((imageUri, index) => {
+                        const uri = formatApiImageUri(imageUri);
+                        if (!uri) return null;
+                        return (
+                          <TouchableOpacity
+                            key={index}
+                            onPress={() => {
+                              setSelectedPhotoIndex(index);
+                              setPhotoModalVisible(true);
+                              setTimeout(() => {
+                                photoScrollViewRef.current?.scrollTo({
+                                  x: index * SCREEN_WIDTH,
+                                  animated: false,
+                                });
+                              }, 100);
+                            }}
+                            style={styles.imageGridItem}
+                          >
+                            <Image
+                              source={{ uri }}
+                              style={styles.gridImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        );
+                      })}
                     </ScrollView>
                   </View>
                 );
-              } else {
-                return null; // Don't show anything if no images
               }
+              return null;
             })()}
 
             {/* Details Section - Card Style */}
@@ -1859,12 +1859,10 @@ export default function DriverHomeScreen({ }: Props) {
 
       {/* Photo Gallery Full Screen Modal */}
       {selectedPlace && (() => {
-        const allImages: string[] = [];
-        if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
-          allImages.push(...selectedPlace.business_images_urls);
-        } else if (selectedPlace.main_image_url) {
-          allImages.push(selectedPlace.main_image_url);
-        }
+        const allImages = collectBusinessImageUrls(
+          selectedPlace.business_images_urls,
+          selectedPlace.main_image_url
+        );
 
         if (allImages.length === 0) return null;
 
@@ -1893,15 +1891,19 @@ export default function DriverHomeScreen({ }: Props) {
                 }}
                 style={styles.photoModalScrollView}
               >
-                {allImages.map((imageUri, index) => (
-                  <View key={index} style={styles.photoModalImageContainer}>
-                    <Image
-                      source={{ uri: imageUri }}
-                      style={styles.photoModalImage}
-                      resizeMode="contain"
-                    />
-                  </View>
-                ))}
+                {allImages.map((imageUri, index) => {
+                  const uri = formatApiImageUri(imageUri);
+                  if (!uri) return null;
+                  return (
+                    <View key={index} style={styles.photoModalImageContainer}>
+                      <Image
+                        source={{ uri }}
+                        style={styles.photoModalImage}
+                        resizeMode="contain"
+                      />
+                    </View>
+                  );
+                })}
               </ScrollView>
               {/* Photo counter */}
               <View style={styles.photoCounter}>

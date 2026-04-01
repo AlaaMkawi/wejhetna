@@ -30,6 +30,7 @@ import {
   BusinessOwnerPlaceRequestPayload,
 } from "../../api/businessOwnerApi";
 import MessageModal from "../MessageModal";
+import { uploadAssetToS3Presigned } from "../../api/upload";
 
 const DARK_TEAL = "#0f5b63";
 import { API_BASE_URL } from "../../../config";
@@ -231,6 +232,7 @@ export default function BusinessOwnerDetailsFormScreen() {
       quality: 0.7,
       maxWidth: 1920,
       maxHeight: 1920,
+      includeBase64: true,
     }, async (res) => {
       console.log("[UPLOAD] picker response:", res);
       if (!res) {
@@ -265,44 +267,19 @@ export default function BusinessOwnerDetailsFormScreen() {
         // Small defer to let the picker/asset URI settle (fixes immediate-select race)
         await wait(0);
         await wait(150);
-        const formData = new FormData();
-        formData.append("file", {
-          uri: asset.uri,
-          name: asset.fileName || "upload.jpg",
-          type: asset.type || "image/jpeg",
-        } as any);
-
         let lastError: any = null;
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
-            console.log("[UPLOAD] request sent (attempt):", attempt);
-            const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-              method: "POST",
-              body: formData,
+            console.log("[UPLOAD] presign+put started (attempt):", attempt);
+            const fileUrl = await uploadAssetToS3Presigned({
+              uri: asset.uri,
+              fileName: asset.fileName,
+              type: asset.type,
+              base64: (asset as any).base64,
             });
-            console.log("[UPLOAD] response received:", uploadRes.status);
-
-            const raw = await uploadRes.text();
-            let json: any = null;
-            try {
-              json = raw ? JSON.parse(raw) : null;
-            } catch {
-              json = null;
-            }
-            console.log("[UPLOAD] response json:", json ?? raw);
-
-            if (!uploadRes.ok) {
-              const msg = json?.detail || `Upload failed (HTTP ${uploadRes.status})`;
-              throw new Error(msg);
-            }
-
-            if (!json?.file_url || typeof json.file_url !== "string") {
-              throw new Error("Upload succeeded but file_url is missing/invalid");
-            }
-
-            console.log("[UPLOAD] file_url:", json.file_url);
+            console.log("[UPLOAD] file_url:", fileUrl);
             console.log("[UPLOAD] state updated with file_url");
-            setUrl(json.file_url);
+            setUrl(fileUrl);
             lastError = null;
             break;
           } catch (err: any) {
@@ -357,6 +334,7 @@ export default function BusinessOwnerDetailsFormScreen() {
       quality: 0.7,
       maxWidth: 1920,
       maxHeight: 1920,
+      includeBase64: true,
     }, async (res) => {
       console.log("[UPLOAD] picker response:", res);
       if (!res) {
@@ -391,44 +369,19 @@ export default function BusinessOwnerDetailsFormScreen() {
         // Small defer to let the picker/asset URI settle (fixes immediate-select race)
         await wait(0);
         await wait(150);
-        const formData = new FormData();
-        formData.append("file", {
-          uri: asset.uri,
-          name: asset.fileName || "upload.jpg",
-          type: asset.type || "image/jpeg",
-        } as any);
-
         let lastError: any = null;
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
-            console.log("[UPLOAD] request sent (attempt):", attempt);
-            const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-              method: "POST",
-              body: formData,
+            console.log("[UPLOAD] presign+put started (attempt):", attempt);
+            const fileUrl = await uploadAssetToS3Presigned({
+              uri: asset.uri,
+              fileName: asset.fileName,
+              type: asset.type,
+              base64: (asset as any).base64,
             });
-            console.log("[UPLOAD] response received:", uploadRes.status);
-
-            const raw = await uploadRes.text();
-            let json: any = null;
-            try {
-              json = raw ? JSON.parse(raw) : null;
-            } catch {
-              json = null;
-            }
-            console.log("[UPLOAD] response json:", json ?? raw);
-
-            if (!uploadRes.ok) {
-              const msg = json?.detail || `Upload failed (HTTP ${uploadRes.status})`;
-              throw new Error(msg);
-            }
-
-            if (!json?.file_url || typeof json.file_url !== "string") {
-              throw new Error("Upload succeeded but file_url is missing/invalid");
-            }
-
-            console.log("[UPLOAD] file_url:", json.file_url);
+            console.log("[UPLOAD] file_url:", fileUrl);
             console.log("[UPLOAD] state updated with file_url");
-            setBusinessImagesUrls((prev) => [...prev, json.file_url]);
+            setBusinessImagesUrls((prev) => [...prev, fileUrl]);
             lastError = null;
             break;
           } catch (err: any) {

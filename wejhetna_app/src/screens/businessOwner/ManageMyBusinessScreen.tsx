@@ -35,6 +35,13 @@ import i18n from "../../i18n";
 import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "../MessageModal";
 import { API_BASE_URL } from "../../../config";
+import { uploadAssetToS3Presigned } from "../../api/upload";
+import {
+  collectBusinessImageUrls,
+  formatApiImageUri,
+  getValidImageUrl,
+  logPlaceImageRenderDebug,
+} from "../../utils/imageUrl";
 
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
@@ -302,44 +309,10 @@ const parseOpeningHours = React.useCallback(
         );
         setSocialLink(profileData.place.social_links || "");
         setAnnouncement(profileData.place.announcement || "");
-        // Load business images if available
-        // Use business_images_urls if available, otherwise fallback to main_image_url
-        const images: string[] = [];
-        
-        // Handle business_images_urls - check if it's an array, if not, try to parse it
-        let parsedBusinessImages: string[] = [];
-        if (profileData.place.business_images_urls) {
-          if (Array.isArray(profileData.place.business_images_urls)) {
-            parsedBusinessImages = profileData.place.business_images_urls;
-          } else if (typeof profileData.place.business_images_urls === 'string') {
-            // If it's a string, try to parse it as JSON (defensive)
-            try {
-              const parsed = JSON.parse(profileData.place.business_images_urls);
-              if (Array.isArray(parsed)) {
-                parsedBusinessImages = parsed;
-              } else {
-                console.warn("business_images_urls is a string but not a valid JSON array:", profileData.place.business_images_urls);
-              }
-            } catch (e) {
-              console.warn("Failed to parse business_images_urls as JSON:", profileData.place.business_images_urls, e);
-            }
-          } else {
-            console.warn("business_images_urls is not an array or string:", typeof profileData.place.business_images_urls, profileData.place.business_images_urls);
-          }
-        }
-        
-        if (parsedBusinessImages.length > 0) {
-          images.push(...parsedBusinessImages);
-        } else if (profileData.place.main_image_url) {
-          // Fallback to main_image_url for backward compatibility
-          images.push(profileData.place.main_image_url);
-        }
-        // Filter out duplicates, empty strings, null, and undefined
-        const uniqueImages = Array.from(new Set(
-          images
-            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
-            .map(img => img.trim())
-        ));
+        const uniqueImages = collectBusinessImageUrls(
+          profileData.place.business_images_urls,
+          profileData.place.main_image_url
+        );
         
         // Debug logging
         if (__DEV__) {
@@ -349,7 +322,7 @@ const parseOpeningHours = React.useCallback(
           console.log("Filtered unique images:", uniqueImages);
           console.log("API_BASE_URL:", API_BASE_URL);
           uniqueImages.forEach((img, idx) => {
-            const formatted = formatImageUri(img);
+            const formatted = formatApiImageUri(img);
             console.log(`Image ${idx}:`, {
               original: img,
               formatted: formatted,
@@ -525,6 +498,29 @@ const parseOpeningHours = React.useCallback(
     }
   }
 
+  /** Same sanitization as EditPlace submit: drop placeholders and invalid sentinels before PUT /admin/places */
+  function sanitizeBusinessImagesForApi(images: string[]): {
+    business_images_urls: string[] | null;
+    main_image_url: string | null;
+  } {
+    const cleaned = images
+      .filter(
+        (u) =>
+          typeof u === "string" &&
+          u.length > 0 &&
+          !u.startsWith("__uploading__")
+      )
+      .map((u) => getValidImageUrl(u))
+      .filter((u): u is string => u != null);
+    if (cleaned.length === 0) {
+      return { business_images_urls: null, main_image_url: null };
+    }
+    return {
+      business_images_urls: cleaned,
+      main_image_url: getValidImageUrl(cleaned[0]),
+    };
+  }
+
   // Handle image upload
   async function handleAddPhoto() {
     if (businessImages.length >= 20) {
@@ -541,8 +537,10 @@ const parseOpeningHours = React.useCallback(
         mediaType: "photo",
         quality: 0.8,
         selectionLimit: 1,
+        includeBase64: true,
       },
       async (res) => {
+        if (__DEV__) console.log("[UPLOAD] picker response:", res);
         if (res.didCancel || res.errorCode) {
           return;
         }
@@ -562,30 +560,37 @@ const parseOpeningHours = React.useCallback(
             // Small defer to avoid immediate-select race from the picker
             await new Promise<void>((resolve) => setTimeout(resolve, 0));
             await new Promise<void>((resolve) => setTimeout(resolve, 150));
-            const formData = new FormData();
-            formData.append("file", {
-              uri: asset.uri,
-              name: asset.fileName || "upload.jpg",
-              type: asset.type || "image/jpeg",
-            } as any);
-
-            const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-              method: "POST",
-              body: formData,
-            });
-
-            if (!uploadRes.ok) {
-              const text = await uploadRes.text().catch(() => "");
-              throw new Error(`Upload failed (${uploadRes.status}): ${text}`);
+            let fileUrl: string | null = null;
+            let lastError: any = null;
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              try {
+                fileUrl = await uploadAssetToS3Presigned({
+                  uri: asset.uri,
+                  fileName: asset.fileName,
+                  type: asset.type,
+                  base64: (asset as any).base64,
+                });
+                lastError = null;
+                break;
+              } catch (err: any) {
+                lastError = err;
+                const msg = err?.message || String(err);
+                if (attempt < 2 && /Network request failed/i.test(msg)) {
+                  await new Promise<void>((r) => setTimeout(r, 300));
+                  continue;
+                }
+                break;
+              }
+            }
+            if (lastError) {
+              throw lastError;
             }
 
-            const json = await uploadRes.json();
-            if (__DEV__) console.log("[UPLOAD] response json:", json);
-            if (json.file_url) {
-              if (__DEV__) console.log("[UPLOAD] file_url:", json.file_url);
+            if (fileUrl) {
+              if (__DEV__) console.log("[UPLOAD] file_url:", fileUrl);
               // Replace placeholder with final S3 URL (avoid stale state)
               setBusinessImages((prev) => {
-                const next = prev.map((img) => (img === placeholderToken ? json.file_url : img));
+                const next = prev.map((img) => (img === placeholderToken ? fileUrl : img));
                 // Save to backend in background
                 saveBusinessImages(next).catch((error) => {
                   console.error("Background save error:", error);
@@ -652,18 +657,13 @@ const parseOpeningHours = React.useCallback(
     if (!place) return;
 
     try {
-      // Backend now fully supports business_images_urls field
+      const { business_images_urls, main_image_url } =
+        sanitizeBusinessImagesForApi(images);
       const updateData: any = {
-        business_images_urls: images.length > 0 ? images : null,
+        business_images_urls,
+        main_image_url,
       };
-      
-      // Also update main_image_url to first image for backward compatibility
-      if (images.length > 0) {
-        updateData.main_image_url = images[0];
-      } else {
-        updateData.main_image_url = null;
-      }
-      
+
       await updatePlace(place.id, updateData);
       
       // Never reload to prevent scroll reset - state is already updated
@@ -728,66 +728,10 @@ const parseOpeningHours = React.useCallback(
     return t(dayKey) || day;
   }
 
-  // Helper function to format image URI - ensure it's a valid URL
-  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
-  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
-  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
-  function formatImageUri(uri: string): string {
-    if (!uri || !uri.trim()) {
-      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
-      return "";
-    }
-    
-    const trimmedUri = uri.trim();
-    
-    try {
-      // If it's already a full URL (http:// or https://), return as-is (supports S3, CloudFront, etc.)
-      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
-        return trimmedUri;
-      }
-
-      // Local device URIs for previews (Android/iOS)
-      if (
-        trimmedUri.startsWith("file://") ||
-        trimmedUri.startsWith("content://") ||
-        trimmedUri.startsWith("ph://")
-      ) {
-        return trimmedUri;
-      }
-      
-      // If it's a relative path starting with /, prepend API_BASE_URL
-      if (trimmedUri.startsWith("/")) {
-        const formatted = `${API_BASE_URL}${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // If it doesn't start with /, assume it's a filename and add /uploads/
-      // This handles cases where backend might return just "filename.jpg"
-      if (!trimmedUri.includes("/")) {
-        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // Otherwise, try to prepend API_BASE_URL
-      const formatted = `${API_BASE_URL}/${trimmedUri}`;
-      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
-      return formatted;
-    } catch (error) {
-      // If URL parsing fails, try to construct a valid URL
-      console.warn("Error formatting image URI:", trimmedUri, error);
-      if (trimmedUri.startsWith("/")) {
-        return `${API_BASE_URL}${trimmedUri}`;
-      }
-      return `${API_BASE_URL}/uploads/${trimmedUri}`;
-    }
-  }
-
   // Handle image load error
   const handleImageError = (error: any, index: number) => {
     const originalUri = businessImages[index];
-    const formattedUri = formatImageUri(originalUri);
+    const formattedUri = formatApiImageUri(originalUri);
     console.warn(`❌ Image ${index} failed to load:`, {
       original: originalUri,
       formatted: formattedUri,
@@ -814,7 +758,7 @@ const parseOpeningHours = React.useCallback(
   // Handle image load success
   const handleImageLoad = (index: number) => {
     if (__DEV__) {
-      console.log(`✅ Image ${index} loaded successfully:`, formatImageUri(businessImages[index]));
+      console.log(`✅ Image ${index} loaded successfully:`, formatApiImageUri(businessImages[index]));
     }
     setImageLoading((prev) => ({ ...prev, [index]: false }));
     setImageErrors((prev) => {
@@ -827,7 +771,7 @@ const parseOpeningHours = React.useCallback(
   // Handle image load start
   const handleImageLoadStart = (index: number) => {
     if (__DEV__) {
-      console.log(`🔄 Image ${index} loading:`, formatImageUri(businessImages[index]));
+      console.log(`🔄 Image ${index} loading:`, formatApiImageUri(businessImages[index]));
     }
     setImageLoading((prev) => ({ ...prev, [index]: true }));
   };
@@ -1628,12 +1572,32 @@ const parseOpeningHours = React.useCallback(
           </View>
 
           <View style={styles.photoGallery}>
+            {place &&
+              (() => {
+                const fromApi = collectBusinessImageUrls(
+                  place.business_images_urls,
+                  place.main_image_url
+                );
+                logPlaceImageRenderDebug(
+                  "ManageMyBusiness:gallery",
+                  place,
+                  fromApi
+                );
+                if (__DEV__) {
+                  console.log("[PlaceImageDebug ManageMyBusiness:businessImagesState]", {
+                    placeId: place.id,
+                    businessImagesState: businessImages,
+                    stateUrisForImage: businessImages.map((u) => formatApiImageUri(u)),
+                  });
+                }
+                return null;
+              })()}
             {/* Display existing photos */}
             {businessImages.map((imageUri, index) => {
               const hasError = imageErrors[index];
               const isLoading = imageLoading[index];
               const isUploadingThis = !!uploadingImageTokens[imageUri];
-              const formattedUri = formatImageUri(imageUri);
+              const formattedUri = formatApiImageUri(imageUri);
               
               // Skip rendering if URI is invalid
               if (isUploadingThis) {
@@ -1743,7 +1707,7 @@ const parseOpeningHours = React.useCallback(
               <Ionicons name="close" size={32} color="#fff" />
             </TouchableOpacity>
             {selectedImageIndex !== null && businessImages[selectedImageIndex] && (() => {
-              const fullScreenUri = formatImageUri(businessImages[selectedImageIndex]);
+              const fullScreenUri = formatApiImageUri(businessImages[selectedImageIndex]);
               return (
                 <Image
                   source={{ uri: fullScreenUri }}
