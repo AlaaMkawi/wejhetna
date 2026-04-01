@@ -210,12 +210,19 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
         
         // Validate response has file_url
         if (json && json.file_url) {
-          // Ensure the URL uses the correct base URL (in case backend returns wrong one)
-          let finalUrl = json.file_url;
-          // If backend returned emulator URL but we're on physical device, fix it
-          if (finalUrl.includes("10.0.2.2") && !API_BASE_URL.includes("10.0.2.2")) {
-            finalUrl = finalUrl.replace("http://10.0.2.2:8000", API_BASE_URL);
+          // Ensure the URL uses the current app API base (physical device vs emulator),
+          // by extracting the path and rebasing it onto API_BASE_URL.
+          const rawUrl = String(json.file_url || "").trim();
+          let finalUrl = rawUrl;
+          if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+            const match = rawUrl.match(/https?:\/\/[^/]+(\/.*)/);
+            if (match && match[1]) {
+              finalUrl = `${API_BASE_URL}${match[1]}`;
+            }
+          } else if (rawUrl.startsWith("/")) {
+            finalUrl = `${API_BASE_URL}${rawUrl}`;
           }
+
           setUrl(finalUrl);
           console.log("Upload successful:", finalUrl);
         } else {

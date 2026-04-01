@@ -67,8 +67,7 @@ Your app needs to connect to your backend server. Since you're using a physical 
 2. Update the API_BASE_URL to use your computer's IP:
 
 ```typescript
-// Replace 192.168.1.100 with YOUR computer's IP address from Step 4
-export const API_BASE_URL = "http://192.168.1.100:8000";
+export const API_BASE_URL = "http://10.0.0.6:8000";
 ```
 
 **Important:** Make sure your phone and computer are on the **same Wi-Fi network**!
@@ -77,7 +76,7 @@ export const API_BASE_URL = "http://192.168.1.100:8000";
 
 Your backend needs to accept connections from your local network:
 
-1. Make sure your backend is running on `0.0.0.0` instead of `localhost` or `127.0.0.1`
+1. Make sure your backend is running on `0.0.0.0` instead of binding only to the loopback interface
 2. In `wejhetna_backend`, when starting the server, use:
 
 ```bash
@@ -167,7 +166,7 @@ export const API_BASE_URL = "http://192.168.1.100:8000";
 
 Open Terminal and run:
 ```bash
-ifconfig | grep "inet " | grep -v 127.0.0.1
+ifconfig | grep "inet "
 ```
 
 Look for your IP address (usually 192.168.x.x)

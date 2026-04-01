@@ -24,8 +24,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from models import Place
 
-# Database connection (same as in database.py)
-DATABASE_URL = "postgresql+psycopg2://postgres:123@localhost:5432/wejhetna_db"
+DATABASE_URL = None
 
 try:
     from dotenv import load_dotenv
@@ -35,6 +34,12 @@ try:
         DATABASE_URL = os.getenv("DATABASE_URL")
 except:
     pass
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Create a .env file (or set an environment variable) "
+        "with your PostgreSQL connection string."
+    )
 
 def fix_database():
     print("=" * 60)

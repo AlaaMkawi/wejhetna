@@ -20,7 +20,7 @@
 ```powershell
 ipconfig | findstr /i "IPv4"
 ```
-Look for an IP like `192.168.x.x` or `10.x.x.x` (NOT `127.0.0.1` or `169.254.x.x`)
+Look for an IP like `192.168.x.x` or `10.x.x.x` (NOT a loopback address or `169.254.x.x`)
 
 ### Step 3: Update Config File
 
@@ -33,7 +33,7 @@ export const API_BASE_URL = "http://YOUR_IP:8000";
 
 **Example:**
 ```typescript
-export const API_BASE_URL = "http://192.168.1.100:8000";
+export const API_BASE_URL = "http://10.0.0.6:8000";
 ```
 
 ### Step 4: Start Backend Server
@@ -44,7 +44,7 @@ cd wejhetna_backend
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-**Important:** Use `--host 0.0.0.0` (not `localhost`) so your phone can connect!
+**Important:** Use `--host 0.0.0.0` (not loopback-only) so your phone can connect!
 
 ### Step 5: Verify Device Connection
 
