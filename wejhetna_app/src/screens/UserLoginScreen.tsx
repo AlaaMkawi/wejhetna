@@ -10,9 +10,11 @@ import {
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
 import { API_BASE_URL } from "../../config";
+import { useTranslation } from "react-i18next";
 type Props = NativeStackScreenProps<RootStackParamList, "UserLogin">;
 
 export default function UserLoginScreen({ route }: Props) {
+  const { t } = useTranslation();
   const { mode } = route.params; // "REGULAR" or "DRIVER"
 
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
@@ -22,14 +24,16 @@ export default function UserLoginScreen({ route }: Props) {
   const [success, setSuccess] = useState<string | null>(null);
 
   const title =
-    mode === "REGULAR" ? "Regular User Login" : "Driver Login";
+    mode === "REGULAR"
+      ? t("regular_user_login") || "Regular User Login"
+      : t("driver_login") || "Driver Login";
 
   const handleLogin = async () => {
     setError(null);
     setSuccess(null);
 
     if (!usernameOrEmail.trim() || !password.trim()) {
-      setError("Please enter username/email and password");
+      setError(t("login_missing_fields") || "Please enter username/email and password");
       return;
     }
 
@@ -47,7 +51,7 @@ export default function UserLoginScreen({ route }: Props) {
       const json = await res.json();
 
       if (!res.ok) {
-        setError(json.detail || "Login failed");
+        setError(json.detail || t("login_failed") || "Login failed");
         return;
       }
 
@@ -57,28 +61,28 @@ export default function UserLoginScreen({ route }: Props) {
 
       if (mode === "REGULAR") {
         if (role !== "REGULAR") {
-          setError("This account is not a regular user account.");
+          setError(t("not_regular_account") || "This account is not a regular user account.");
           return;
         }
         if (status !== "ACTIVE") {
-          setError("Your account is not active yet.");
+          setError(t("account_not_active") || "Your account is not active yet.");
           return;
         }
-        setSuccess(`Logged in as regular user: ${json.full_name}`);
+        setSuccess(t("logged_in_as_regular", { name: json.full_name }) || `Logged in as regular user: ${json.full_name}`);
       } else {
         // DRIVER mode
         if (role !== "DRIVER") {
-          setError("This account is not a driver account.");
+          setError(t("not_driver_account") || "This account is not a driver account.");
           return;
         }
         if (status !== "ACTIVE") {
-          setError("Your driver application is not approved yet.");
+          setError(t("driver_not_approved") || "Your driver application is not approved yet.");
           return;
         }
-        setSuccess(`Logged in as driver: ${json.full_name}`);
+        setSuccess(t("logged_in_as_driver", { name: json.full_name }) || `Logged in as driver: ${json.full_name}`);
       }
     } catch (e: any) {
-      setError("Network error: " + e.message);
+      setError(`${t("network_error") || "Network error"}: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -92,7 +96,7 @@ export default function UserLoginScreen({ route }: Props) {
         style={styles.input}
         value={usernameOrEmail}
         onChangeText={setUsernameOrEmail}
-        placeholder="Username or email"
+        placeholder={t("username_or_email") || "Username or email"}
         autoCapitalize="none"
       />
 
@@ -100,14 +104,14 @@ export default function UserLoginScreen({ route }: Props) {
         style={styles.input}
         value={password}
         onChangeText={setPassword}
-        placeholder="Password"
+        placeholder={t("password") || "Password"}
         secureTextEntry
       />
 
       {loading ? (
         <ActivityIndicator />
       ) : (
-        <Button title="Login" onPress={handleLogin} />
+        <Button title={t("login") || "Login"} onPress={handleLogin} />
       )}
 
       {error && <Text style={styles.error}>{error}</Text>}

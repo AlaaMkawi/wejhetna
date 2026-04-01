@@ -21,6 +21,9 @@ import smtplib
 from email.message import EmailMessage
 import os
 import re
+import boto3
+from uuid import uuid4
+from pathlib import Path
 from models import (
     User,
     UserRole,
@@ -739,6 +742,9 @@ def approve_business_owner_request(
 
 يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في إدارة مكان عملك.
 
+اسم المستخدم الخاص بك لتسجيل الدخول: {user.username}
+استخدم كلمة المرور التي اخترتها عند إنشاء الحساب.
+
 نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
 
 مع أطيب التحيات،
@@ -751,6 +757,9 @@ def approve_business_owner_request(
 אנו שמחים להודיע לך כי בקשת בעל העסק שלך לוג'הטנא אושרה!
 
 אתה יכול כעת להתחבר לאפליקציה ולהתחיל לנהל את מקום העסק שלך.
+
+שם המשתמש שלך להתחברות: {user.username}
+השתמש/י בסיסמה שבחרת בעת יצירת החשבון.
 
 תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
 
@@ -1818,38 +1827,72 @@ def translate_text(request: TranslationRequest):
 @app.post("/files/upload")
 async def upload_file(file: UploadFile = File(...), request: Request = None):
     """
-    Accept one file, save it to 'uploads' folder, and return a URL.
-    Later we can switch this to AWS S3 with the same response format.
+    Accept one file, upload it to S3, and return a URL.
     """
-    # make unique filename
+    import os
+    import traceback
+
+    # Load .env (if present) for local dev runs
+    try:
+        from dotenv import load_dotenv
+        env_path = Path(__file__).parent / ".env"
+        print(f"[UPLOAD] Loading .env from: {env_path}")
+        load_dotenv(dotenv_path=env_path)
+        load_dotenv()
+    except Exception as e:
+        print("[UPLOAD] Could not load .env:", str(e))
+
+    print("[UPLOAD] entered upload_file handler")
+    print("[UPLOAD] filename:", getattr(file, "filename", None))
+    print("[UPLOAD] content_type:", getattr(file, "content_type", None))
+    print("[UPLOAD] AWS_ACCESS_KEY_ID exists:", bool(os.getenv("AWS_ACCESS_KEY_ID")))
+    print("[UPLOAD] AWS_SECRET_ACCESS_KEY exists:", bool(os.getenv("AWS_SECRET_ACCESS_KEY")))
+    print("[UPLOAD] AWS_S3_BUCKET:", os.getenv("AWS_S3_BUCKET"))
+    print("[UPLOAD] S3_BUCKET:", os.getenv("S3_BUCKET"))
+    print("[UPLOAD] AWS_REGION:", os.getenv("AWS_REGION"))
+
+    bucket_name = os.getenv("AWS_S3_BUCKET") or os.getenv("S3_BUCKET")
+    if not bucket_name:
+        raise HTTPException(status_code=500, detail="S3 bucket is not configured (AWS_S3_BUCKET or S3_BUCKET).")
+
+    region = os.getenv("AWS_REGION")
+    if not region:
+        raise HTTPException(status_code=500, detail="AWS_REGION is not configured.")
+
+    # make unique filename/key
     ext = Path(file.filename).suffix or ".bin"
     new_name = f"{uuid4().hex}{ext}"
-    dest = UPLOAD_DIR / new_name
+    object_key = f"uploads/{new_name}"
 
-    with dest.open("wb") as out_file:
-        shutil.copyfileobj(file.file, out_file)
-
-    # Get the base URL from the request
-    # Try to get from Host header first, then fallback to base_url, then environment variable
-    import os
-    base_url = os.getenv("API_BASE_URL", "http://192.168.0.192:8000")
-    
-    if request:
+    try:
+        s3 = boto3.client("s3", region_name=region)
         try:
-            # Try to get from Host header (more reliable for physical devices)
-            host = request.headers.get("host")
-            if host:
-                scheme = "https" if request.url.scheme == "https" else "http"
-                base_url = f"{scheme}://{host}"
-            else:
-                # Fallback to base_url
-                base_url = str(request.base_url).rstrip('/')
+            file.file.seek(0)
         except Exception:
-            # If anything fails, use environment variable or default
             pass
-    
-    # URL that the app can store in DB / display
-    file_url = f"{base_url}/uploads/{new_name}"
+
+        print("[UPLOAD] object_key:", object_key)
+
+        try:
+            s3.upload_fileobj(
+                file.file,
+                bucket_name,
+                object_key,
+                ExtraArgs={"ContentType": file.content_type or "application/octet-stream"},
+            )
+        except Exception as e:
+            print("S3 UPLOAD ERROR:")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"S3 upload failed: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("FULL ERROR TRACE:")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    file_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{object_key}"
+    print("UPLOAD RESPONSE:", {"file_url": file_url})
     return {"file_url": file_url}
 
 
@@ -1895,46 +1938,42 @@ def approve_driver(
 
     db.commit()
 
-    # Send professional bilingual email (Arabic and Hebrew)
-    # Get driver language from request if provided, otherwise use admin's language or default to Arabic
-    driver_language = data.driver_language if hasattr(data, 'driver_language') and data.driver_language else "ar"
-    
-    if driver_language == "he":
-        email_body = f"""שלום {user.full_name},
+    # Send bilingual email (Arabic + Hebrew) regardless of UI language
+    subject = "وجهتنا / ווג'הטנא – الموافقة على طلب السائق / אישור בקשת נהג"
 
-אנו שמחים להודיע לך כי בקשת הנהג שלך לוג'הטנא אושרה!
-
-אתה יכול כעת להתחבר לאפליקציה ולהתחיל להשתמש בה כנהג.
-
-תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
-
-בברכה,
-צוות ווג'הטנא"""
-        subject = "ווג'הטנא – אישור בקשת נהג"
-    elif driver_language == "en":
-        email_body = f"""Dear {user.full_name},
-
-We are pleased to inform you that your driver application to Wejhetna has been approved!
-
-You can now log in to the app and start using it as a driver.
-
-Thank you for your interest in joining Wejhetna and we wish you a pleasant experience.
-
-Best regards,
-Wejhetna Team"""
-        subject = "Wejhetna – Driver application approved"
-    else:  # Arabic (default)
-        email_body = f"""عزيزي/عزيزتي {user.full_name},
+    email_body_ar = f"""عزيزي/عزيزتي {user.full_name},
 
 نحن سعداء بإبلاغك بأن طلب السائق الخاص بك لوجهتنا تمت الموافقة عليه!
 
 يمكنك الآن تسجيل الدخول إلى التطبيق والبدء في استخدامه كسائق.
 
+اسم المستخدم الخاص بك لتسجيل الدخول: {user.username}
+استخدم كلمة المرور التي اخترتها عند إنشاء الحساب.
+
 نشكرك على اهتمامك بالانضمام إلى وجهتنا ونتمنى لك تجربة ممتعة.
 
 مع أطيب التحيات،
 فريق وجهتنا"""
-        subject = "وجهتنا – الموافقة على طلب السائق"
+
+    email_body_he = f"""שלום {user.full_name},
+
+אנו שמחים להודיע לך כי בקשת הנהג שלך לוג'הטנא אושרה!
+
+אתה יכול כעת להתחבר לאפליקציה ולהתחיל להשתמש בה כנהג.
+
+שם המשתמש שלך להתחברות: {user.username}
+השתמש/י בסיסמה שבחרת בעת יצירת החשבון.
+
+תודה על העניין שלך להצטרף לוג'הטנא ואנו מאחלים לך חוויה נעימה.
+
+בברכה,
+צוות ווג'הטנא"""
+
+    email_body = f"""{email_body_ar}
+
+------------------------------
+
+{email_body_he}"""
 
     send_email(
         to_email=user.email,

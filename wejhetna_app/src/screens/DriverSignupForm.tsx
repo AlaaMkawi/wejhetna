@@ -169,22 +169,41 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
     setUrl: (url: string) => void,
     setUploading: (loading: boolean) => void
   ) => {
+    if (
+      uploadingDriverLicense ||
+      uploadingCarLicense ||
+      uploadingCarInsurance ||
+      uploadingCarPhoto1 ||
+      uploadingCarPhoto2
+    ) {
+      console.log("[UPLOAD] blocked: already uploading");
+      return;
+    }
     launchImageLibrary({ 
       mediaType: "photo",
       quality: 0.7, // Reduce image quality to save memory
       maxWidth: 1920, // Limit max width
       maxHeight: 1920, // Limit max height
     }, async (res) => {
+      console.log("[UPLOAD] picker response:", res);
       if (res.didCancel || res.errorCode) {
-        console.log("User cancelled or error:", res.errorMessage);
+        console.log("[UPLOAD] picker cancelled/error:", res.errorCode, res.errorMessage);
         return;
       }
 
       const asset = res.assets?.[0];
-      if (!asset || !asset.uri) return;
+      if (!asset || !asset.uri) {
+        console.log("[UPLOAD] invalid picker asset:", asset);
+        showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: invalid picker asset");
+        return;
+      }
 
       setUploading(true);
       try {
+        console.log("[UPLOAD] selected asset uri:", asset.uri);
+        // Small defer to avoid immediate-select race
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => setTimeout(resolve, 150));
         const formData = new FormData();
         formData.append("file", {
           uri: asset.uri,
@@ -194,7 +213,6 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
 
         const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
           method: "POST",
-          headers: { "Content-Type": "multipart/form-data" },
           body: formData,
         });
 
@@ -207,24 +225,13 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
         }
 
         const json = await uploadRes.json();
+        console.log("[UPLOAD] response json:", json);
         
         // Validate response has file_url
         if (json && json.file_url) {
-          // Ensure the URL uses the current app API base (physical device vs emulator),
-          // by extracting the path and rebasing it onto API_BASE_URL.
-          const rawUrl = String(json.file_url || "").trim();
-          let finalUrl = rawUrl;
-          if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-            const match = rawUrl.match(/https?:\/\/[^/]+(\/.*)/);
-            if (match && match[1]) {
-              finalUrl = `${API_BASE_URL}${match[1]}`;
-            }
-          } else if (rawUrl.startsWith("/")) {
-            finalUrl = `${API_BASE_URL}${rawUrl}`;
-          }
-
-          setUrl(finalUrl);
-          console.log("Upload successful:", finalUrl);
+          // Use backend-provided URL as-is (supports S3)
+          setUrl(json.file_url);
+          console.log("[UPLOAD] success file_url:", json.file_url);
         } else {
           console.log("Invalid upload response:", json);
           showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: Invalid response");

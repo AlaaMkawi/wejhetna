@@ -23,6 +23,7 @@ import MessageModal from "../MessageModal";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { fetchCategories, Category } from "../../api/places";
 import i18n from "../../i18n";
+import FullscreenImageViewer from "../../components/FullscreenImageViewer";
 
 import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
@@ -66,6 +67,17 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     title: "",
     message: "",
   });
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [viewerImages, setViewerImages] = useState<string[]>([]);
+
+  const openViewer = (images: string[], index: number) => {
+    const safe = images.filter((u) => typeof u === "string" && u.trim().length > 0);
+    if (safe.length === 0) return;
+    setViewerImages(safe);
+    setViewerIndex(Math.min(Math.max(index, 0), safe.length - 1));
+    setViewerVisible(true);
+  };
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
   const [loadingUser, setLoadingUser] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -80,23 +92,8 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     const trimmedUri = uri.trim();
     
     try {
-      // If it's already a full URL with the correct base, return as is
-      if (trimmedUri.startsWith(API_BASE_URL)) {
-        return trimmedUri;
-      }
-      
-      // If it's already a full URL (http:// or https://), extract just the path
+      // If it's already a full URL (http:// or https://), return as-is (supports S3, CloudFront, etc.)
       if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
-        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
-        if (urlMatch && urlMatch[1]) {
-          const path = urlMatch[1];
-          return `${API_BASE_URL}${path}`;
-        }
-        const uploadsIndex = trimmedUri.indexOf("/uploads/");
-        if (uploadsIndex !== -1) {
-          const path = trimmedUri.substring(uploadsIndex);
-          return `${API_BASE_URL}${path}`;
-        }
         return trimmedUri;
       }
       
@@ -412,36 +409,22 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
             </Text>
           </View>
 
-          {/* Main Image - Always show */}
-          <View style={styles.imageRow}>
-            <Text style={styles.imageLabel}>{t("main_image") || "Main Image"}</Text>
-            {request.main_image_url ? (
-              <Image
-                source={{ uri: formatImageUri(request.main_image_url) }}
-                style={styles.documentImage}
-                resizeMode="contain"
-                onError={(e) => console.log("Main image error:", e.nativeEvent.error, "URL:", request.main_image_url)}
-                onLoad={() => console.log("Main image loaded:", formatImageUri(request.main_image_url))}
-              />
-            ) : (
-              <View style={styles.noImageContainer}>
-                <Ionicons name="image-outline" size={40} color="#999" />
-                <Text style={styles.noDataText}>{t("no_data") || "No data"}</Text>
-              </View>
-            )}
-          </View>
-
           {/* Business License - Always show */}
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("business_license")}</Text>
             {request.business_license_image_url ? (
-              <Image
-                source={{ uri: formatImageUri(request.business_license_image_url) }}
-                style={styles.documentImage}
-                resizeMode="contain"
-                onError={(e) => console.log("Business license image error:", e.nativeEvent.error, "URL:", request.business_license_image_url)}
-                onLoad={() => console.log("Business license image loaded:", formatImageUri(request.business_license_image_url))}
-              />
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => openViewer([formatImageUri(request.business_license_image_url)], 0)}
+              >
+                <Image
+                  source={{ uri: formatImageUri(request.business_license_image_url) }}
+                  style={styles.documentImage}
+                  resizeMode="contain"
+                  onError={(e) => console.log("Business license image error:", e.nativeEvent.error, "URL:", request.business_license_image_url)}
+                  onLoad={() => console.log("Business license image loaded:", formatImageUri(request.business_license_image_url))}
+                />
+              </TouchableOpacity>
             ) : (
               <View style={styles.noImageContainer}>
                 <Ionicons name="image-outline" size={40} color="#999" />
@@ -469,21 +452,32 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
                   }
                   return (
                     <View key={`business-img-${index}-${url.substring(0, 20)}`} style={styles.imageWrapper}>
-                      <Image
-                        source={{ uri: formattedUrl }}
-                        style={styles.carPhotoImage}
-                        resizeMode="cover"
-                        onError={(e) => {
-                          console.error(`Business image ${index} failed to load:`, {
-                            original: url,
-                            formatted: formattedUrl,
-                            error: e?.nativeEvent?.error || e
-                          });
+                      <TouchableOpacity
+                        activeOpacity={0.9}
+                        onPress={() => {
+                          const all = request.business_images_urls
+                            .filter((u: any) => typeof u === "string")
+                            .map((u: string) => formatImageUri(u.trim()))
+                            .filter((u: string) => !!u);
+                          openViewer(all, index);
                         }}
-                        onLoad={() => {
-                          console.log(`✅ Business image ${index} loaded successfully:`, formattedUrl);
-                        }}
-                      />
+                      >
+                        <Image
+                          source={{ uri: formattedUrl }}
+                          style={styles.carPhotoImage}
+                          resizeMode="cover"
+                          onError={(e) => {
+                            console.error(`Business image ${index} failed to load:`, {
+                              original: url,
+                              formatted: formattedUrl,
+                              error: e?.nativeEvent?.error || e
+                            });
+                          }}
+                          onLoad={() => {
+                            console.log(`✅ Business image ${index} loaded successfully:`, formattedUrl);
+                          }}
+                        />
+                      </TouchableOpacity>
                     </View>
                   );
                 }).filter(Boolean)}
@@ -666,6 +660,13 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
         title={errorModal.title}
         message={errorModal.message}
         onClose={() => setErrorModal({ ...errorModal, visible: false })}
+      />
+
+      <FullscreenImageViewer
+        visible={viewerVisible}
+        images={viewerImages}
+        initialIndex={viewerIndex}
+        onRequestClose={() => setViewerVisible(false)}
       />
     </View>
   );

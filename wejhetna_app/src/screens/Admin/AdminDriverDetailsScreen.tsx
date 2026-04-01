@@ -1,6 +1,6 @@
 // src/screens/AdminDriverDetailsScreen.tsx
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import i18n from "../../i18n";
 import MessageModal from "../MessageModal";
+import FullscreenImageViewer from "../../components/FullscreenImageViewer";
 
 import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
@@ -28,6 +29,21 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { adminUserId, driver } = route.params;
   const [tab, setTab] = useState<"personal" | "vehicle">("personal");
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [viewerImages, setViewerImages] = useState<string[]>([]);
+  const openViewer = (images: string[], index: number) => {
+    const safe = images.filter((u) => typeof u === "string" && u.trim().length > 0);
+    if (safe.length === 0) return;
+    setViewerImages(safe);
+    setViewerIndex(Math.min(Math.max(index, 0), safe.length - 1));
+    setViewerVisible(true);
+  };
+
+  const carPhotos = useMemo(() => {
+    const urls = driver.car_photos_urls || [];
+    return Array.isArray(urls) ? urls.filter((u) => typeof u === "string" && u.trim().length > 0) : [];
+  }, [driver.car_photos_urls]);
   
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -56,6 +72,8 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
 
   const handleApprove = async () => {
     try {
+      // Use current UI language for the driver's approval email (ar/he)
+      const adminLanguage = i18n.language || "ar";
       const res = await fetch(
         `${API_BASE_URL}/admin/drivers/${driver.driver_profile_id}/approve`,
         {
@@ -64,6 +82,7 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           body: JSON.stringify({
             admin_user_id: adminUserId,
             reason: null,
+            driver_language: adminLanguage,
           }),
         }
       );
@@ -185,12 +204,14 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           {/* Check if it's a URL (image) or just a number string */}
           {driver.id_card_image_url.startsWith("http://") || driver.id_card_image_url.startsWith("https://") ? (
             <View style={styles.imageRow}>
-              <Image
-                source={{ uri: driver.id_card_image_url }}
-                style={styles.documentImage}
-                resizeMode="contain"
-                onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
-              />
+              <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.id_card_image_url], 0)}>
+                <Image
+                  source={{ uri: driver.id_card_image_url }}
+                  style={styles.documentImage}
+                  resizeMode="contain"
+                  onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
+                />
+              </TouchableOpacity>
             </View>
           ) : (
             <Text style={styles.infoValue}>{driver.id_card_image_url}</Text>
@@ -200,12 +221,14 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
       {driver.driver_license_image_url && (
         <View style={styles.imageRow}>
           <Text style={styles.imageLabel}>{t("driver_license")}</Text>
-          <Image
-            source={{ uri: driver.driver_license_image_url }}
-            style={styles.documentImage}
-            resizeMode="contain"
-            onError={(e) => console.log("Driver license image error:", e.nativeEvent.error)}
-          />
+          <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.driver_license_image_url], 0)}>
+            <Image
+              source={{ uri: driver.driver_license_image_url }}
+              style={styles.documentImage}
+              resizeMode="contain"
+              onError={(e) => console.log("Driver license image error:", e.nativeEvent.error)}
+            />
+          </TouchableOpacity>
         </View>
       )}
     </View>
@@ -232,39 +255,45 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         {driver.car_license_image_url && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_license")}</Text>
-            <Image
-              source={{ uri: driver.car_license_image_url }}
-              style={styles.documentImage}
-              resizeMode="contain"
-              onError={(e) => console.log("Car license image error:", e.nativeEvent.error)}
-            />
+            <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.car_license_image_url], 0)}>
+              <Image
+                source={{ uri: driver.car_license_image_url }}
+                style={styles.documentImage}
+                resizeMode="contain"
+                onError={(e) => console.log("Car license image error:", e.nativeEvent.error)}
+              />
+            </TouchableOpacity>
           </View>
         )}
         {driver.car_insurance_image_url && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_insurance")}</Text>
-            <Image
-              source={{ uri: driver.car_insurance_image_url }}
-              style={styles.documentImage}
-              resizeMode="contain"
-              onError={(e) => console.log("Car insurance image error:", e.nativeEvent.error)}
-            />
+            <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.car_insurance_image_url], 0)}>
+              <Image
+                source={{ uri: driver.car_insurance_image_url }}
+                style={styles.documentImage}
+                resizeMode="contain"
+                onError={(e) => console.log("Car insurance image error:", e.nativeEvent.error)}
+              />
+            </TouchableOpacity>
           </View>
         )}
-        {driver.car_photos_urls && driver.car_photos_urls.length > 0 && (
+        {carPhotos.length > 0 && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>
-              {t("car_photos")} ({driver.car_photos_urls.length})
+              {t("car_photos")} ({carPhotos.length})
             </Text>
             <View style={styles.imagesGrid}>
-              {driver.car_photos_urls.map((url, index) => (
+              {carPhotos.map((url, index) => (
                 <View key={index} style={styles.imageWrapper}>
-                  <Image
-                    source={{ uri: url }}
-                    style={styles.carPhotoImage}
-                    resizeMode="cover"
-                    onError={(e) => console.log(`Car photo ${index} error:`, e.nativeEvent.error, "URL:", url)}
-                  />
+                  <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer(carPhotos, index)}>
+                    <Image
+                      source={{ uri: url }}
+                      style={styles.carPhotoImage}
+                      resizeMode="cover"
+                      onError={(e) => console.log(`Car photo ${index} error:`, e.nativeEvent.error, "URL:", url)}
+                    />
+                  </TouchableOpacity>
                 </View>
               ))}
             </View>
@@ -405,6 +434,13 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         title={errorModal.title}
         message={errorModal.message}
         onClose={() => setErrorModal({ ...errorModal, visible: false })}
+      />
+
+      <FullscreenImageViewer
+        visible={viewerVisible}
+        images={viewerImages}
+        initialIndex={viewerIndex}
+        onRequestClose={() => setViewerVisible(false)}
       />
     </View>
   );

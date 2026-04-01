@@ -65,7 +65,7 @@ export default function AlreadyUsersScreen({ route }: Props) {
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         console.error("Non-JSON response:", responseText.substring(0, 500));
-        setError(`Server error: ${responseText.substring(0, 100)}...`);
+        setError(t("server_error_prefix", { msg: `${responseText.substring(0, 100)}...` }) || `Server error: ${responseText.substring(0, 100)}...`);
         return;
       }
       
@@ -75,20 +75,20 @@ export default function AlreadyUsersScreen({ route }: Props) {
         json = JSON.parse(responseText);
       } catch (parseError: any) {
         console.error("JSON parse error. Response:", responseText.substring(0, 500));
-        setError(`Parse error: ${parseError.message}. Response: ${responseText.substring(0, 100)}`);
+        setError(t("parse_error_prefix", { msg: `${parseError.message}. ${responseText.substring(0, 100)}` }) || `Parse error: ${parseError.message}. Response: ${responseText.substring(0, 100)}`);
         return;
       }
       
       if (!res.ok) {
-        setError(json.detail || json.message || "Failed to load users");
+        setError(json.detail || json.message || t("failed_to_load_users") || "Failed to load users");
       } else {
         setUsers(json);
       }
     } catch (e: any) {
       console.error("Error loading users:", e);
-      let errorMsg = "Network error: " + (e.message || "Unknown error");
+      let errorMsg = `${t("network_error") || "Network error"}: ${(e.message || (t("unknown_error") || "Unknown error"))}`;
       if (e.message && e.message.includes("JSON")) {
-        errorMsg = "Server error: Invalid response format. Please check the backend endpoint.";
+        errorMsg = t("server_invalid_response") || "Server error: Invalid response format. Please check the backend endpoint.";
       }
       setError(errorMsg);
     } finally {

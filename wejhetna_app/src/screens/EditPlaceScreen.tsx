@@ -187,6 +187,7 @@ export default function EditPlaceScreen() {
   }
 
   async function handleUploadImage() {
+    if (uploadingImage) return;
     launchImageLibrary(
       {
         mediaType: "photo",
@@ -194,15 +195,22 @@ export default function EditPlaceScreen() {
         selectionLimit: 1,
       },
       async (res) => {
+        console.log("[UPLOAD] picker response:", res);
         if (res.didCancel || res.errorCode) {
           return;
         }
 
         const asset = res.assets?.[0];
-        if (!asset || !asset.uri) return;
+        if (!asset || !asset.uri) {
+          Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
+          return;
+        }
 
         setUploadingImage(true);
         try {
+          // Small defer to avoid immediate-select race
+          await new Promise((r) => setTimeout(r, 0));
+          await new Promise((r) => setTimeout(r, 150));
           const formData = new FormData();
           formData.append("file", {
             uri: asset.uri,
@@ -212,9 +220,14 @@ export default function EditPlaceScreen() {
 
           const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
             method: "POST",
-            headers: { "Content-Type": "multipart/form-data" },
             body: formData,
           });
+          if (!uploadRes.ok) {
+            const text = await uploadRes.text().catch(() => "");
+            console.log("[UPLOAD] failed:", uploadRes.status, text);
+            Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
+            return;
+          }
           const json = await uploadRes.json();
           if (json.file_url) {
             setMainImageUrl(json.file_url);

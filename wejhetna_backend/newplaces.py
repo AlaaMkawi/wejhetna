@@ -1,6 +1,6 @@
 import requests
 
-API_URL = "http://10.0.0.6:8000/admin/places"
+API_URL = "http://10.0.0.17:8000/admin/places"
 
 
 def normalize(value):
