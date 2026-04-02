@@ -8,6 +8,6 @@ module.exports = {
         path: '.env',
       },
     ],
-    'react-native-reanimated/plugin', // תמיד אחרון
+    'react-native-worklets/plugin',
   ],
 };
