@@ -17,7 +17,7 @@ import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@mapli
 import Geolocation from "@react-native-community/geolocation";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import i18n from "../../i18n";
-import { Modal, Alert } from "react-native";
+import { Modal} from "react-native";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";

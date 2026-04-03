@@ -24,8 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-# Database connection (same as in database.py)
-DATABASE_URL = "postgresql+psycopg2://postgres:123@localhost:5432/wejhetna_db"
+DATABASE_URL = None
 
 try:
     from dotenv import load_dotenv
@@ -35,6 +34,12 @@ try:
         DATABASE_URL = os.getenv("DATABASE_URL")
 except:
     pass
+
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Create a .env file (or set an environment variable) "
+        "with your PostgreSQL connection string."
+    )
 
 def reconstruct_url_from_chars(chars_list_or_str):
     """Reconstruct a URL from a list of characters or string"""

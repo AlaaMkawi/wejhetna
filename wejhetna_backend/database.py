@@ -1,9 +1,15 @@
-# database.py
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# ⚠️ CHANGE username, password, dbname if needed
-DATABASE_URL = "postgresql+psycopg2://postgres:123@localhost:5432/wejhetna_db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Create a .env file (or set an environment variable) "
+        "with your PostgreSQL connection string, e.g. "
+        '"postgresql+psycopg2://USER:PASSWORD@HOST:5432/DBNAME".'
+    )
 
 engine = create_engine(DATABASE_URL, echo=True)  # echo=True = log SQL to console
 

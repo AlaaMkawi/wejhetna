@@ -6,4 +6,5 @@ psycopg[binary]
 python-dotenv
 passlib[bcrypt]
 openai
-#pip install python-dotenv
+celery[redis]
+flower

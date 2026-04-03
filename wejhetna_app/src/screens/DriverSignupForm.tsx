@@ -15,6 +15,7 @@ import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "./MessageModal"; // 👈 pretty popup
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { API_BASE_URL } from "../../config";
+import { uploadAssetToS3Presigned } from "../api/upload";
 
 const MINT = "#9bd3d8";
 const DARK_TEAL = "#0f5b63";
@@ -184,6 +185,7 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
       quality: 0.7, // Reduce image quality to save memory
       maxWidth: 1920, // Limit max width
       maxHeight: 1920, // Limit max height
+      includeBase64: true,
     }, async (res) => {
       console.log("[UPLOAD] picker response:", res);
       if (res.didCancel || res.errorCode) {
@@ -210,32 +212,14 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
           name: asset.fileName || "upload.jpg",
           type: asset.type || "image/jpeg",
         } as any);
-
-        const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-          method: "POST",
-          body: formData,
+        const fileUrl = await uploadAssetToS3Presigned({
+          uri: asset.uri,
+          fileName: asset.fileName,
+          type: asset.type,
+          base64: (asset as any).base64,
         });
-
-        // Check if response is OK
-        if (!uploadRes.ok) {
-          const errorText = await uploadRes.text();
-          console.log("Upload failed:", uploadRes.status, errorText);
-          showModal("error", t("error") || "Error", t("upload_failed") || `Failed to upload image: ${uploadRes.status}`);
-          return;
-        }
-
-        const json = await uploadRes.json();
-        console.log("[UPLOAD] response json:", json);
-        
-        // Validate response has file_url
-        if (json && json.file_url) {
-          // Use backend-provided URL as-is (supports S3)
-          setUrl(json.file_url);
-          console.log("[UPLOAD] success file_url:", json.file_url);
-        } else {
-          console.log("Invalid upload response:", json);
-          showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: Invalid response");
-        }
+        setUrl(fileUrl);
+        console.log("[UPLOAD] success file_url:", fileUrl);
       } catch (e: any) {
         console.log("Upload error", e?.message || e);
         showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: " + (e?.message || "Unknown error"));

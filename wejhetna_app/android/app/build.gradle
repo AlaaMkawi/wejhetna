@@ -84,6 +84,10 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+
+        // Used by AndroidManifest.xml: android:usesCleartextTraffic="${usesCleartextTraffic}"
+        // Allow HTTP requests to API_BASE_URL (e.g. local LAN IP) on physical devices.
+        manifestPlaceholders = [usesCleartextTraffic: "true"]
     }
     signingConfigs {
         debug {

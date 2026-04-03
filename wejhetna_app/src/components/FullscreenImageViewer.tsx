@@ -12,6 +12,7 @@ import {
   Platform,
 } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
+import { formatApiImageUri, getValidImageUrl } from "../utils/imageUrl";
 
 type Props = {
   visible: boolean;
@@ -30,7 +31,10 @@ export default function FullscreenImageViewer({
   const { width, height } = Dimensions.get("window");
 
   const safeImages = useMemo(
-    () => images.filter((u) => typeof u === "string" && u.trim().length > 0),
+    () =>
+      images
+        .map((u) => (getValidImageUrl(u) ? formatApiImageUri(u) : ""))
+        .filter((u) => u.length > 0),
     [images]
   );
 
@@ -132,4 +136,3 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 });
-

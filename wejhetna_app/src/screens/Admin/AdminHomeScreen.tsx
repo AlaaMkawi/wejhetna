@@ -35,6 +35,7 @@ import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../../config";
 import Geolocation from "@react-native-community/geolocation";
+import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -266,57 +267,10 @@ export default function AdminHomeScreen() {
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
   const [showSearchModal, setShowSearchModal] = useState(false);
 
-  // Helper function to format image URI - ensure it's a valid URL
-  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
-  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
-  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
-  const formatImageUri = (uri: string): string => {
-    if (!uri || !uri.trim()) {
-      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
-      return "";
-    }
-    
-    const trimmedUri = uri.trim();
-    
-    try {
-      // If it's already a full URL (http:// or https://), return as-is (supports S3, CloudFront, etc.)
-      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
-        return trimmedUri;
-      }
-      
-      // If it's a relative path starting with /, prepend API_BASE_URL
-      if (trimmedUri.startsWith("/")) {
-        const formatted = `${API_BASE_URL}${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // If it doesn't start with /, assume it's a filename and add /uploads/
-      // This handles cases where backend might return just "filename.jpg"
-      if (!trimmedUri.includes("/")) {
-        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // Otherwise, try to prepend API_BASE_URL
-      const formatted = `${API_BASE_URL}/${trimmedUri}`;
-      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
-      return formatted;
-    } catch (error) {
-      // If URL parsing fails, try to construct a valid URL
-      console.warn("Error formatting image URI:", trimmedUri, error);
-      if (trimmedUri.startsWith("/")) {
-        return `${API_BASE_URL}${trimmedUri}`;
-      }
-      return `${API_BASE_URL}/uploads/${trimmedUri}`;
-    }
-  };
-
   // Handle image load error
   const handleImageError = (error: any, index: number, allImages: string[]) => {
     const originalUri = allImages[index];
-    const formattedUri = formatImageUri(originalUri);
+    const formattedUri = formatApiImageUri(originalUri);
     console.warn(`Image ${index} failed to load:`, {
       original: originalUri,
       formatted: formattedUri,
@@ -1673,54 +1627,20 @@ export default function AdminHomeScreen() {
 
             {/* Image Gallery - Horizontal Scroll */}
             {(() => {
-              // Get all images: business_images_urls first, then main_image_url as fallback
-              const allImages: string[] = [];
-              
-              // Handle business_images_urls - check if it's an array, if not, try to parse it
-              let businessImages: string[] = [];
-              if (selectedPlace.business_images_urls) {
-                if (Array.isArray(selectedPlace.business_images_urls)) {
-                  businessImages = selectedPlace.business_images_urls;
-                } else if (typeof selectedPlace.business_images_urls === 'string') {
-                  // If it's a string, try to parse it as JSON (defensive)
-                  try {
-                    const parsed = JSON.parse(selectedPlace.business_images_urls);
-                    if (Array.isArray(parsed)) {
-                      businessImages = parsed;
-                    } else {
-                      console.warn("business_images_urls is a string but not a valid JSON array:", selectedPlace.business_images_urls);
-                    }
-                  } catch (e) {
-                    console.warn("Failed to parse business_images_urls as JSON:", selectedPlace.business_images_urls, e);
-                  }
-                } else {
-                  console.warn("business_images_urls is not an array or string:", typeof selectedPlace.business_images_urls, selectedPlace.business_images_urls);
-                }
-              }
-              
-              if (businessImages.length > 0) {
-                allImages.push(...businessImages);
-              } else if (selectedPlace.main_image_url) {
-                allImages.push(selectedPlace.main_image_url);
-              }
-
-              // Filter out duplicates, empty strings, null, and undefined
-              const uniqueImages = Array.from(new Set(
-                allImages
-                  .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
-                  .map(img => img.trim())
-              ));
+              const uniqueImages = collectBusinessImageUrls(
+                selectedPlace.business_images_urls,
+                selectedPlace.main_image_url
+              );
 
               // Debug logging
               if (__DEV__ && uniqueImages.length > 0) {
                 console.log("=== LOADING PLACE IMAGES ===");
                 console.log("Raw business_images_urls:", selectedPlace.business_images_urls, "Type:", typeof selectedPlace.business_images_urls);
-                console.log("Parsed businessImages:", businessImages);
                 console.log("Raw main_image_url:", selectedPlace.main_image_url);
                 console.log("Filtered unique images:", uniqueImages);
                 console.log("API_BASE_URL:", API_BASE_URL);
                 uniqueImages.forEach((img, idx) => {
-                  const formatted = formatImageUri(img);
+                  const formatted = formatApiImageUri(img);
                   console.log(`Image ${idx}:`, {
                     original: img,
                     formatted: formatted,
@@ -1752,7 +1672,7 @@ export default function AdminHomeScreen() {
                       {uniqueImages.map((imageUri, index) => {
                         const hasError = imageErrors[index];
                         const isLoading = imageLoading[index];
-                        const formattedUri = formatImageUri(imageUri);
+                        const formattedUri = formatApiImageUri(imageUri);
                         
                         // Always render - let Image component handle invalid URIs
                         return (
@@ -2024,38 +1944,10 @@ export default function AdminHomeScreen() {
 
       {/* Photo Gallery Full Screen Modal */}
       {selectedPlace && (() => {
-        const allImages: string[] = [];
-        
-        // Handle business_images_urls - check if it's an array, if not, try to parse it
-        let businessImages: string[] = [];
-        if (selectedPlace.business_images_urls) {
-          if (Array.isArray(selectedPlace.business_images_urls)) {
-            businessImages = selectedPlace.business_images_urls;
-          } else if (typeof selectedPlace.business_images_urls === 'string') {
-            // If it's a string, try to parse it as JSON (defensive)
-            try {
-              const parsed = JSON.parse(selectedPlace.business_images_urls);
-              if (Array.isArray(parsed)) {
-                businessImages = parsed;
-              }
-            } catch (e) {
-              console.warn("Failed to parse business_images_urls as JSON in modal:", selectedPlace.business_images_urls, e);
-            }
-          }
-        }
-        
-        if (businessImages.length > 0) {
-          allImages.push(...businessImages);
-        } else if (selectedPlace.main_image_url) {
-          allImages.push(selectedPlace.main_image_url);
-        }
-
-        // Filter out duplicates, empty strings, null, and undefined
-        const uniqueImages = Array.from(new Set(
-          allImages
-            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
-            .map(img => img.trim())
-        ));
+        const uniqueImages = collectBusinessImageUrls(
+          selectedPlace.business_images_urls,
+          selectedPlace.main_image_url
+        );
 
         if (uniqueImages.length === 0) return null;
 
@@ -2085,7 +1977,8 @@ export default function AdminHomeScreen() {
                 style={styles.photoModalScrollView}
               >
                 {uniqueImages.map((imageUri, index) => {
-                  const formattedUri = formatImageUri(imageUri);
+                  const formattedUri = formatApiImageUri(imageUri);
+                  if (!formattedUri) return null;
                   return (
                     <View key={`modal-image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoModalImageContainer}>
                       <Image
