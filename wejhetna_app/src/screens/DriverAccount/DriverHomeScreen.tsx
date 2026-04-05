@@ -1,6 +1,6 @@
 // src/screens/DriverAccount/DriverHomeScreen.tsx
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,10 +12,10 @@ import {
   PanResponder,
   StatusBar,
   Dimensions,
-  TextInput,
   Modal,
   ActivityIndicator,
   Linking,
+  DeviceEventEmitter,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -24,24 +24,22 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
-import { useRoute, RouteProp, useNavigation } from "@react-navigation/native";
+import { useRoute, RouteProp, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
-import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, checkLocationInServiceCities, translateText, Category } from "../../api/places";
+import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, translateText, Category } from "../../api/places";
 import { useInitialMapGeolocation } from "../../hooks/useInitialMapGeolocation";
-import {
-  ensureForegroundLocationForNavigation,
-  getCurrentPositionForRoute,
-  isLocationTimeoutOrUnavailableError,
-} from "../../utils/locationPermission";
-import { fetchOsrmDrivingRoute } from "../../services/navigation/osrmRoute";
-import { lineStringToFeatureCollection } from "../../types/navigation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
+import MapInlineSearch from "../../components/map/MapInlineSearch";
+import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
+import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
+import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -374,11 +372,15 @@ export default function DriverHomeScreen({ }: Props) {
 
   // Route
   const [routeLoading, setRouteLoading] = useState(false);
+  const [isPickingMapDestination, setIsPickingMapDestination] = useState(false);
+  const [pickPreviewCoords, setPickPreviewCoords] = useState<{ lat: number; lon: number } | null>(
+    null
+  );
+  const pickMapTapInFlightRef = useRef(false);
 
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
-  const [showSearchModal, setShowSearchModal] = useState(false);
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -401,6 +403,26 @@ export default function DriverHomeScreen({ }: Props) {
     hasShownLocationPermissionMessage,
     setHasShownLocationPermissionMessage
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        setIsPickingMapDestination(false);
+        setPickPreviewCoords(null);
+        pickMapTapInFlightRef.current = false;
+      };
+    }, [])
+  );
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(LIVE_NAVIGATION_EXIT_EVENT, () => {
+      setDestination(null);
+      setCustomPin(null);
+      setIsPickingMapDestination(false);
+      setPickPreviewCoords(null);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Fetch all places on mount
   useEffect(() => {
@@ -575,43 +597,30 @@ export default function DriverHomeScreen({ }: Props) {
     }
   };
 
-  // Handle map long press (drop custom pin for destination)
   const handleMapLongPress = async (e: any) => {
     try {
       const coords = e?.geometry?.coordinates;
       if (Array.isArray(coords) && coords.length >= 2) {
         const [lon, lat] = coords;
-        
-        // Check boundary - destination must be within service cities
-        try {
-          const boundaryCheck = await checkLocationInServiceCities(lat, lon);
-          if (!boundaryCheck.is_within) {
-            Alert.alert(
-              t("location_outside_service_area") || "Location Outside Service Area",
-              t("destination_must_be_in_service_cities") || "Destination must be within one of the 3 service cities: רהט (Rahat), לקיה (Lakiya), or תל שבע (Tel Sheva).\n\nPlease choose a location within these boundaries.",
-              [{ text: t("ok") || "OK" }]
-            );
-            return;
-          }
-        } catch (error: any) {
-          console.error("Error checking boundary:", error);
-          Alert.alert(
-            t("boundary_check_error") || "Boundary Check Error",
-            t("boundary_check_error_message") || "Failed to check location boundary. Please try again."
-          );
-          return;
-        }
-        
+        const ok = await assertDestinationInServiceCities(lat, lon, t);
+        if (!ok) return;
         setCustomPin({ lat, lon });
-        setDestination({ lat, lon, name: `📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}` });
-        setSelectedPlace(null); // Clear selected place
+        setDestination({ lat, lon, name: t("map_selected_destination_label") });
+        setSelectedPlace(null);
         setSearchResults([]);
-        setShowSearchModal(false);
+        setIsPickingMapDestination(false);
       }
     } catch (error) {
       console.error("Error handling long press:", error);
     }
   };
+
+  const dismissPlaceDetailsPanel = useCallback(() => {
+    setSelectedPlace((prev) => {
+      setDestination((d) => destinationAfterClosingPlaceDetails(d, prev));
+      return null;
+    });
+  }, []);
 
   // Handle place marker tap - set as destination
   const handlePlaceTap = async (place: PlaceForMap) => {
@@ -625,7 +634,13 @@ export default function DriverHomeScreen({ }: Props) {
     });
     setCustomPin(null);
     setSearchResults([]);
-    setShowSearchModal(false);
+    if (cameraRef.current) {
+      cameraRef.current.setCamera({
+        centerCoordinate: [place.location.lon, place.location.lat],
+        zoomLevel: 16.5,
+        animationDuration: 700,
+      });
+    }
   };
 
   // Search places - comprehensive search across all fields
@@ -696,91 +711,41 @@ export default function DriverHomeScreen({ }: Props) {
   };
 
   const getRoute = async () => {
-    const currentLanguage = i18n.language || "ar";
+    await openDrivingRoutePreview({
+      navigation,
+      destination,
+      t,
+      setRouteLoading,
+      setUserLocation,
+    });
+  };
 
-    if (!destination) {
-      const title =
-        currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
-      const message =
-        currentLanguage === "ar"
-          ? "يرجى اختيار وجهة أولاً"
-          : currentLanguage === "he"
-            ? "אנא בחר יעד תחילה"
-            : "Please select a destination first";
-      Alert.alert(title, message);
-      return;
-    }
-
-    setRouteLoading(true);
-
+  const handleMapTapPickDestination = async (lat: number, lon: number) => {
+    if (pickMapTapInFlightRef.current) return;
+    pickMapTapInFlightRef.current = true;
+    setPickPreviewCoords({ lat, lon });
     try {
-      const permissionOk = await ensureForegroundLocationForNavigation();
-      if (!permissionOk) {
-        Alert.alert(
-          t("location_required_title") || "Location required",
-          t("location_required_for_navigation") ||
-            "Please enable location access to start navigation."
-        );
+      const ok = await assertDestinationInServiceCities(lat, lon, t);
+      if (!ok) {
+        setPickPreviewCoords(null);
         return;
       }
-
-      const freshLocation = await getCurrentPositionForRoute();
-
-      setUserLocation(freshLocation);
-
-      const boundaryCheck = await checkLocationInServiceCities(destination.lat, destination.lon);
-      if (!boundaryCheck.is_within) {
-        Alert.alert(
-          t("location_outside_service_area") || "Location Outside Service Area",
-          t("destination_must_be_in_service_cities") ||
-            "Navigation is only available to destinations in Tel Sheva, Lakiya, or Rahat."
-        );
-        return;
-      }
-
-      const osrm = await fetchOsrmDrivingRoute(freshLocation, destination);
-
-      const routeInfoData = {
-        distance: osrm.distanceMeters,
-        duration: osrm.durationSeconds,
-        startAddress: t("your_location") || "Your Location",
-        endAddress: destination.name || t("destination") || "Destination",
-      };
-
-      const routeCoords = lineStringToFeatureCollection(osrm.coordinates);
-
-      navigation.navigate("RouteDetails", {
-        routeInfo: routeInfoData,
-        destination,
-        userLocation: freshLocation,
-        routeCoordinates: routeCoords,
-        navigationPhase: "preview",
+      setIsPickingMapDestination(false);
+      setPickPreviewCoords(null);
+      setSelectedPlace(null);
+      setSearchResults([]);
+      const dest = { lat, lon, name: t("map_selected_destination_label") };
+      setCustomPin(null);
+      setDestination(dest);
+      await openDrivingRoutePreview({
+        navigation,
+        destination: dest,
+        t,
+        setRouteLoading,
+        setUserLocation,
       });
-    } catch (error: any) {
-      console.error("Route error:", error?.message || String(error));
-      const code = error?.code;
-      if (code === 1) {
-        Alert.alert(
-          t("location_required_title") || "Location required",
-          t("location_required_for_navigation") ||
-            "Please enable location access to start navigation."
-        );
-      } else if (isLocationTimeoutOrUnavailableError(error)) {
-        Alert.alert(
-          t("route_location_timeout_title") || "Could not get location",
-          t("route_location_timeout_body") ||
-            "GPS is taking too long or signal is weak. Move to an open area, wait a few seconds, and try again."
-        );
-      } else {
-        Alert.alert(
-          t("route_error") || "Route Error",
-          error?.message ||
-            t("could_not_get_route") ||
-            "Could not get driving directions. Please try again."
-        );
-      }
     } finally {
-      setRouteLoading(false);
+      pickMapTapInFlightRef.current = false;
     }
   };
 
@@ -896,120 +861,32 @@ export default function DriverHomeScreen({ }: Props) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <TouchableOpacity
-          style={styles.searchInputTouchable}
-          onPress={() => setShowSearchModal(true)}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="search-outline" size={20} color="#666" style={styles.searchIcon} />
-          <Text style={styles.searchInputPlaceholder}>
-            {searchQuery || (t("search_places") || "Search places...")}
-          </Text>
-        </TouchableOpacity>
-        {locationLoading && (
-          <ActivityIndicator size="small" color="#0f5b63" style={styles.loader} />
-        )}
-      </View>
-
-      {/* Search Results Modal */}
-      <Modal
-        visible={showSearchModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSearchModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t("search_places") || "Search Places"}</Text>
-              <TouchableOpacity onPress={() => {
-                setShowSearchModal(false);
-                setSearchQuery("");
-              }}>
-                <Text style={styles.modalCloseButton}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            {/* Search Input Inside Modal */}
-            <View style={styles.modalSearchContainer}>
-              <TextInput
-                style={styles.modalSearchInput}
-                placeholder={t("search_places") || "Search places..."}
-                placeholderTextColor="#666"
-                value={searchQuery}
-                onChangeText={handleSearch}
-                autoFocus={true}
-              />
-              <Ionicons name="search-outline" size={20} color="#666" style={styles.modalSearchIcon} />
-            </View>
-            <ScrollView style={styles.searchResultsList} keyboardShouldPersistTaps="handled">
-              {searchQuery.trim().length === 0 && (
-                <Text style={styles.noResults}>{t("start_typing_to_search") || "Start typing to search places..."}</Text>
-              )}
-              {searchResults.length === 0 && searchQuery.trim().length > 0 && (
-                <Text style={styles.noResults}>{t("no_places_found") || "No places found"}</Text>
-              )}
-              {searchResults.map((place) => (
-                <TouchableOpacity
-                  key={place.id}
-                  style={styles.searchResultItem}
-                  onPress={() => {
-                    handlePlaceTap(place);
-                    setSearchQuery("");
-                    setShowSearchModal(false);
-                  }}
-                >
-                  <Text style={styles.searchResultName}>{getPlaceName(place)}</Text>
-                  <View style={styles.searchResultDetails}>
-                    {getCityName(place.city) && (
-                      <Text style={styles.searchResultCity}>{getCityName(place.city)}</Text>
-                    )}
-                    {place.category && (
-                      <>
-                        {getCityName(place.city) && <Text style={styles.searchResultSeparator}> • </Text>}
-                        <Text style={styles.searchResultCategory}>
-                          {i18n.language === "he" && place.category.name_he
-                            ? place.category.name_he
-                            : i18n.language === "ar" && place.category.name_ar
-                            ? place.category.name_ar
-                            : place.category.name_ar || place.category.name_he || ""}
-                        </Text>
-                      </>
-                    )}
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
       <MapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
         onLongPress={handleMapLongPress}
         onPress={(e: any) => {
-          // Handle regular tap - check if tapping near a place
           try {
             const coords = e?.geometry?.coordinates;
-            if (Array.isArray(coords) && coords.length >= 2) {
-              const [lon, lat] = coords;
-              // Find nearest place within reasonable distance
-              const nearestPlace = places.find((place) => {
-                if (!place.location) return false;
-                const distance = Math.sqrt(
-                  Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
-                );
-                return distance < 0.001; // ~100 meters
-              });
-              if (nearestPlace) {
-                handlePlaceTap(nearestPlace);
-              }
+            if (!Array.isArray(coords) || coords.length < 2) return;
+            const [lon, lat] = coords;
+            if (isPickingMapDestination) {
+              void handleMapTapPickDestination(lat, lon);
+              return;
+            }
+            const nearestPlace = places.find((place) => {
+              if (!place.location) return false;
+              const distance = Math.sqrt(
+                Math.pow(place.location.lon - lon, 2) + Math.pow(place.location.lat - lat, 2)
+              );
+              return distance < 0.001;
+            });
+            if (nearestPlace) {
+              handlePlaceTap(nearestPlace);
             }
           } catch {
-            // Ignore tap errors
+            /* ignore */
           }
         }}
         scrollEnabled={true}
@@ -1037,8 +914,7 @@ export default function DriverHomeScreen({ }: Props) {
           animationMode="flyTo"
         />
 
-        {/* User Location Marker */}
-        {userLocation && (
+        {userLocation && !isPickingMapDestination && (
           <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
             <View style={styles.userLocationMarker}>
               <View style={styles.userLocationDot} />
@@ -1046,7 +922,18 @@ export default function DriverHomeScreen({ }: Props) {
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (destination from map tap) */}
+        {isPickingMapDestination && pickPreviewCoords && (
+          <PointAnnotation
+            id="map_pick_preview"
+            coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
+          >
+            <View style={styles.customPinMarker} accessibilityLabel={t("map_pick_preview_label")}>
+              <View style={styles.customPinDot} />
+            </View>
+          </PointAnnotation>
+        )}
+
+        {/* Custom Pin Marker (long-press) */}
         {customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
             <View style={styles.customPinMarker}>
@@ -1064,7 +951,8 @@ export default function DriverHomeScreen({ }: Props) {
           </PointAnnotation>
         )}
 
-        {places.map((place) => {
+        {!isPickingMapDestination &&
+          places.map((place) => {
           if (!place.location) return null;
           
           const isSelected = selectedPlace?.id === place.id;
@@ -1205,6 +1093,80 @@ export default function DriverHomeScreen({ }: Props) {
         })}
       </MapView>
 
+      <MapInlineSearch
+        value={searchQuery}
+        onChangeText={handleSearch}
+        placeholder={t("search_places") || "Search places..."}
+        locationLoading={locationLoading}
+        results={searchResults}
+        getResultTitle={getPlaceName}
+        getResultSubtitle={(place) => {
+          const city = getCityName(place.city);
+          const cat = place.category
+            ? i18n.language === "he" && place.category.name_he
+              ? place.category.name_he
+              : i18n.language === "ar" && place.category.name_ar
+                ? place.category.name_ar
+                : place.category.name_ar || place.category.name_he || ""
+            : "";
+          if (city && cat) return `${city} · ${cat}`;
+          return city || cat || undefined;
+        }}
+        onSelectPlace={(place) => {
+          handlePlaceTap(place);
+          setSearchQuery("");
+        }}
+        emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
+        noResultsText={t("no_places_found") || "No places found"}
+        onSearchFocus={dismissPlaceDetailsPanel}
+      />
+
+      <TouchableOpacity
+        style={[styles.pickDestinationFab, isPickingMapDestination && styles.pickDestinationFabActive]}
+        onPress={() => {
+          setIsPickingMapDestination((v) => {
+            const next = !v;
+            if (!next) {
+              setPickPreviewCoords(null);
+              pickMapTapInFlightRef.current = false;
+            }
+            return next;
+          });
+        }}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={t("map_pick_destination_title")}
+        accessibilityState={{ selected: isPickingMapDestination }}
+      >
+        <Ionicons
+          name={isPickingMapDestination ? "close" : "navigate-outline"}
+          size={26}
+          color="#FFFFFF"
+        />
+      </TouchableOpacity>
+
+      {isPickingMapDestination && (
+        <View style={styles.pickDestinationBanner} pointerEvents="box-none">
+          <View style={styles.pickDestinationBannerInner}>
+            <View style={styles.pickDestinationBannerTextCol}>
+              <Text style={styles.pickDestinationBannerTitle}>{t("map_pick_destination_banner_title")}</Text>
+              <Text style={styles.pickDestinationBannerBody}>{t("map_pick_destination_banner_body")}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                setIsPickingMapDestination(false);
+                setPickPreviewCoords(null);
+                pickMapTapInFlightRef.current = false;
+              }}
+              style={styles.pickDestinationCancelBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.pickDestinationCancelText}>{t("map_pick_destination_cancel")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {!selectedPlace && !destination && (
         <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
           <Text style={styles.recenterButtonText}>🎯</Text>
@@ -1237,7 +1199,7 @@ export default function DriverHomeScreen({ }: Props) {
               <View style={styles.bottomSheetHeaderLeft}>
             <TouchableOpacity
               style={styles.closeButton}
-              onPress={() => setSelectedPlace(null)}
+              onPress={dismissPlaceDetailsPanel}
             >
                   <Ionicons name="close" size={24} color="#000" />
             </TouchableOpacity>
@@ -1906,6 +1868,76 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
     flex: 1,
   },
+  pickDestinationFab: {
+    position: "absolute",
+    left: 20,
+    bottom: 100,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "#0f5b63",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1100,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 10,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.95)",
+  },
+  pickDestinationFabActive: {
+    backgroundColor: "#0a4a52",
+    borderColor: "rgba(255,255,255,0.55)",
+  },
+  pickDestinationBanner: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    bottom: 168,
+    zIndex: 1099,
+  },
+  pickDestinationBannerInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.97)",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.22)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  pickDestinationBannerTextCol: {
+    flex: 1,
+    marginRight: 10,
+  },
+  pickDestinationBannerTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1a1a1a",
+    letterSpacing: -0.3,
+  },
+  pickDestinationBannerBody: {
+    marginTop: 4,
+    fontSize: 14,
+    color: "#5F6368",
+    lineHeight: 20,
+  },
+  pickDestinationCancelBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  pickDestinationCancelText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#0f5b63",
+  },
   recenterButton: {
     position: "absolute", right: 20, bottom: 100, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFF",
     alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
@@ -2338,126 +2370,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
       justifyContent: "center",
     },
-    // Search Styles
-    searchContainer: {
-    position: "absolute",
-    top: 50,
-    left: 16,
-    right: 16,
-    zIndex: 1000,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  searchInputTouchable: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff",
-    borderRadius: 24,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  searchIcon: {
-    marginRight: 10,
-  },
-  searchInputPlaceholder: {
-    flex: 1,
-    fontSize: 16,
-    color: "#666",
-  },
-  loader: {
-    marginLeft: 8,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
-  },
-  modalContent: {
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: "70%",
-    padding: 16,
-  },
-  modalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#333",
-  },
-  modalCloseButton: {
-    fontSize: 24,
-    color: "#666",
-    fontWeight: "300",
-  },
-  modalSearchContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F8F9FA",
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-  },
-  modalSearchInput: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: "#333",
-  },
-  modalSearchIcon: {
-    marginLeft: 8,
-  },
-  searchResultsList: {
-    maxHeight: 400,
-  },
-  searchResultItem: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-  },
-  searchResultName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 4,
-  },
-  searchResultDetails: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 2,
-  },
-  searchResultCity: {
-    fontSize: 14,
-    color: "#666",
-  },
-  searchResultSeparator: {
-    fontSize: 14,
-    color: "#999",
-    marginHorizontal: 4,
-  },
-  searchResultCategory: {
-    fontSize: 14,
-    color: "#666",
-  },
-  noResults: {
-    padding: 16,
-    textAlign: "center",
-    color: "#999",
-    fontSize: 14,
-  },
   // User Location Marker
   userLocationMarker: {
     width: 20,

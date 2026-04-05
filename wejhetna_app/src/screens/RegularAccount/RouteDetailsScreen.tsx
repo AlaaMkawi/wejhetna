@@ -11,6 +11,7 @@ import {
   Platform,
   Modal,
 } from "react-native";
+import { emitLiveNavigationExit } from "../../navigation/navigationEvents";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -36,6 +37,11 @@ import {
   trimPolylineAheadOfUser,
   bearingDegrees,
 } from "../../utils/routePolyline";
+import {
+  getFreshPositionForNavigationStart,
+  getNavigationRouteOrigin,
+} from "../../utils/locationPermission";
+import { createLatLonSmoother, smoothHeadingStep } from "../../utils/smoothGeoAnimation";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -48,6 +54,8 @@ const ON_ROUTE_THRESHOLD_M = 28;
 const REROUTE_MIN_INTERVAL_MS = 4500;
 const ARRIVAL_RADIUS_M = 55;
 const SNAP_TRIM_M = 22;
+/** If live start position is this far from the preview-route origin, refetch OSRM from the fresh point. */
+const ROUTE_ORIGIN_DRIFT_REFETCH_M = 45;
 
 type RouteDetailsRoute = NativeStackScreenProps<RootStackParamList, "RouteDetails">;
 
@@ -72,6 +80,12 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(
     initialUserLocation
   );
+  /** Smoothed position for marker + camera during live navigation (reduces jumps). */
+  const [smoothedUserLocation, setSmoothedUserLocation] = useState<{
+    lat: number;
+    lon: number;
+  }>(initialUserLocation);
+  const [displayHeading, setDisplayHeading] = useState<number | null>(null);
   const [sessionPhase, setSessionPhase] = useState<"preview" | "active">(
     navigationPhaseParam === "active" ? "active" : "preview"
   );
@@ -112,6 +126,82 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const userLocationRef = useRef<{ lat: number; lon: number } | null>(initialUserLocation);
   const destinationRef = useRef(destination);
   const lastProgressAtRef = useRef(0);
+  const lastCameraMoveAtRef = useRef(0);
+  const headingForSmoothRef = useRef<number | null>(null);
+
+  const routeParamsKey = useMemo(() => {
+    const c0 = initialCoords.length >= 1 ? initialCoords[0] : null;
+    const routeHead = c0 ? `${c0[0].toFixed(5)}_${c0[1].toFixed(5)}` : "x";
+    return `${destination.lat.toFixed(5)}_${destination.lon.toFixed(5)}_${initialUserLocation.lat.toFixed(5)}_${initialUserLocation.lon.toFixed(5)}_${initialRouteInfo.distance}_${initialRouteInfo.duration}_${routeHead}`;
+  }, [
+    destination,
+    initialUserLocation,
+    initialRouteInfo.distance,
+    initialRouteInfo.duration,
+    initialCoords,
+  ]);
+
+  const locationSmoother = useMemo(() => createLatLonSmoother({ durationMs: 400 }), []);
+
+  /** New destination / new preview route: clear GPS watch, reset map state, avoid stale start point. */
+  // routeParamsKey encodes destination, user origin, route head, and leg stats — avoids extra runs from object identity churn.
+  useEffect(() => {
+    const w = watchIdRef.current;
+    if (w != null) {
+      Geolocation.clearWatch(w);
+    }
+    watchIdRef.current = null;
+    locationSmoother.cancel();
+
+    const ul = initialUserLocation;
+    setUserLocation(ul);
+    userLocationRef.current = ul;
+    setSmoothedUserLocation(ul);
+    locationSmoother.initialize(ul);
+
+    const coords: RouteLineStringCoords =
+      initialCoords.length >= 2
+        ? [...initialCoords]
+        : [
+            [ul.lon, ul.lat],
+            [destination.lon, destination.lat],
+          ];
+    activeRouteCoordsRef.current = coords;
+    legDistanceRef.current = initialRouteInfo.distance;
+    legDurationRef.current = initialRouteInfo.duration;
+    setRouteInfo(initialRouteInfo);
+    setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+    setDisplayRouteFC(lineStringToFeatureCollection(coords));
+
+    setSessionPhase(navigationPhaseParam === "active" ? "active" : "preview");
+    hasArrivedRef.current = false;
+    setShowArrivalModal(false);
+    offRouteSinceRef.current = null;
+    headingForSmoothRef.current = null;
+    setDisplayHeading(null);
+    setCurrentHeading(null);
+    lastCameraMoveAtRef.current = 0;
+    setIsFollowingUser(false);
+    setShowFullRoute(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- synced via routeParamsKey above
+  }, [routeParamsKey, navigationPhaseParam, locationSmoother]);
+
+  /** After opening a route (or changing it), refine user dot from a fast GPS read without blocking the UI. */
+  useEffect(() => {
+    let alive = true;
+    getNavigationRouteOrigin()
+      .then((loc) => {
+        if (!alive) return;
+        setUserLocation(loc);
+        userLocationRef.current = loc;
+        setSmoothedUserLocation(loc);
+        locationSmoother.initialize(loc);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [routeParamsKey, locationSmoother]);
 
   useEffect(() => {
     destinationRef.current = destination;
@@ -286,27 +376,27 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     [applyNewRoute]
   );
 
-  const stopNavigation = useCallback(() => {
+  const stopLiveNavigationAndReturnHome = useCallback(() => {
     const w = watchIdRef.current;
     if (w != null) {
       Geolocation.clearWatch(w);
     }
     watchIdRef.current = null;
-    activeRouteCoordsRef.current =
-      initialCoords.length >= 2 ? [...initialCoords] : [...initialCoords];
-    legDistanceRef.current = initialRouteInfo.distance;
-    legDurationRef.current = initialRouteInfo.duration;
-    setRouteInfo(initialRouteInfo);
-    setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
-    setDisplayRouteFC(lineStringToFeatureCollection(activeRouteCoordsRef.current));
-    setSessionPhase("preview");
-    setIsFollowingUser(false);
+    locationSmoother.cancel();
     isNavigatingRef.current = false;
+    isFollowingRef.current = false;
     offRouteSinceRef.current = null;
-  }, [initialCoords, initialRouteInfo]);
+    headingForSmoothRef.current = null;
+    setDisplayHeading(null);
+    setCurrentHeading(null);
+    hasArrivedRef.current = false;
+    setShowArrivalModal(false);
+    emitLiveNavigationExit();
+    navigation.goBack();
+  }, [locationSmoother, navigation]);
 
   const startLiveNavigation = useCallback(() => {
-    if (!userLocationRef.current || !destination) return;
+    if (!destination) return;
 
     const wPrev = watchIdRef.current;
     if (wPrev != null) {
@@ -314,145 +404,212 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       watchIdRef.current = null;
     }
 
-    setSessionPhase("active");
-    setIsFollowingUser(true);
     setShowFullRoute(false);
     hasArrivedRef.current = false;
     setShowArrivalModal(false);
-
-    activeRouteCoordsRef.current =
-      initialCoords.length >= 2 ? [...initialCoords] : [...initialCoords];
-    legDistanceRef.current = initialRouteInfo.distance;
-    legDurationRef.current = initialRouteInfo.duration;
-    setDisplayRouteFC(lineStringToFeatureCollection(activeRouteCoordsRef.current));
+    headingForSmoothRef.current = null;
+    setDisplayHeading(null);
     lastProgressAtRef.current = 0;
+    lastCameraMoveAtRef.current = 0;
 
-    const ul = userLocationRef.current;
-    setTimeout(() => {
-      if (cameraRef.current && ul) {
-        cameraRef.current.setCamera({
-          centerCoordinate: [ul.lon, ul.lat],
-          zoomLevel: 17.5,
-          animationDuration: 900,
-        });
+    const beginLiveNav = async () => {
+      let fresh = userLocationRef.current ?? initialUserLocation;
+      try {
+        fresh = await getFreshPositionForNavigationStart();
+      } catch {
+        /* keep fallback above */
       }
-    }, 150);
 
-    const id = Geolocation.watchPosition(
-      (position) => {
-        const { latitude, longitude, heading, accuracy, speed } = position.coords;
-        const course = (position.coords as { course?: number }).course;
-        const prevLoc = userLocationRef.current;
-        const newLocation = { lat: latitude, lon: longitude };
-        setUserLocation(newLocation);
-        userLocationRef.current = newLocation;
+      userLocationRef.current = fresh;
+      setUserLocation(fresh);
+      locationSmoother.initialize(fresh);
+      setSmoothedUserLocation(fresh);
+      locationSmoother.animateTo(fresh, (p) => setSmoothedUserLocation(p));
 
-        const dest = destinationRef.current;
-        if (dest && !hasArrivedRef.current) {
-          const dDest = calculateDistance(latitude, longitude, dest.lat, dest.lon);
-          if (dDest <= ARRIVAL_RADIUS_M) {
-            hasArrivedRef.current = true;
-            setShowArrivalModal(true);
-            const wid = watchIdRef.current;
-            if (wid != null) {
-              Geolocation.clearWatch(wid);
+      const driftM = haversineMeters(
+        fresh.lat,
+        fresh.lon,
+        initialUserLocation.lat,
+        initialUserLocation.lon
+      );
+
+      if (driftM > ROUTE_ORIGIN_DRIFT_REFETCH_M) {
+        try {
+          const res = await fetchOsrmDrivingRoute(fresh, destination);
+          applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
+        } catch (e) {
+          console.warn("Refetch route from fresh GPS failed", e);
+          const fallbackCoords: RouteLineStringCoords =
+            initialCoords.length >= 2
+              ? [...initialCoords]
+              : [
+                  [fresh.lon, fresh.lat],
+                  [destination.lon, destination.lat],
+                ];
+          activeRouteCoordsRef.current = fallbackCoords;
+          legDistanceRef.current = initialRouteInfo.distance;
+          legDurationRef.current = initialRouteInfo.duration;
+          setRouteInfo(initialRouteInfo);
+          setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+          setDisplayRouteFC(lineStringToFeatureCollection(fallbackCoords));
+        }
+      } else {
+        const coords: RouteLineStringCoords =
+          initialCoords.length >= 2
+            ? [...initialCoords]
+            : [
+                [fresh.lon, fresh.lat],
+                [destination.lon, destination.lat],
+              ];
+        activeRouteCoordsRef.current = coords;
+        legDistanceRef.current = initialRouteInfo.distance;
+        legDurationRef.current = initialRouteInfo.duration;
+        setRouteInfo(initialRouteInfo);
+        setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+        setDisplayRouteFC(lineStringToFeatureCollection(coords));
+      }
+
+      setSessionPhase("active");
+      setIsFollowingUser(true);
+
+      setTimeout(() => {
+        if (cameraRef.current) {
+          cameraRef.current.setCamera({
+            centerCoordinate: [fresh.lon, fresh.lat],
+            zoomLevel: 17.5,
+            animationDuration: 520,
+          });
+        }
+      }, 80);
+
+      const id = Geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, heading, accuracy, speed } = position.coords;
+          const course = (position.coords as { course?: number }).course;
+          const newLocation = { lat: latitude, lon: longitude };
+          setUserLocation(newLocation);
+          userLocationRef.current = newLocation;
+
+          const dest = destinationRef.current;
+          if (dest && !hasArrivedRef.current) {
+            const dDest = calculateDistance(latitude, longitude, dest.lat, dest.lon);
+            if (dDest <= ARRIVAL_RADIUS_M) {
+              hasArrivedRef.current = true;
+              setShowArrivalModal(true);
+              const wid = watchIdRef.current;
+              if (wid != null) {
+                Geolocation.clearWatch(wid);
+              }
+              watchIdRef.current = null;
+              locationSmoother.cancel();
+              setSessionPhase("preview");
+              setIsFollowingUser(false);
+              isNavigatingRef.current = false;
+              return;
             }
-            watchIdRef.current = null;
-            setSessionPhase("preview");
-            setIsFollowingUser(false);
-            isNavigatingRef.current = false;
-            return;
           }
-        }
 
-        let bearing: number | null = null;
-        const speedMps = speed != null && !Number.isNaN(speed) ? speed : 0;
-        if (speedMps > 1.2 && course != null && !Number.isNaN(course) && course >= 0) {
-          bearing = course;
-        } else if (heading != null && !Number.isNaN(heading) && heading >= 0) {
-          bearing = heading;
-        }
-
-        const coords = activeRouteCoordsRef.current;
-        if (coords.length >= 2) {
-          const [lon1, lat1] = coords[1];
-          if (bearing === null) {
-            bearing = bearingDegrees(latitude, longitude, lat1, lon1);
+          let bearing: number | null = null;
+          const speedMps = speed != null && !Number.isNaN(speed) ? speed : 0;
+          if (speedMps > 1.2 && course != null && !Number.isNaN(course) && course >= 0) {
+            bearing = course;
+          } else if (heading != null && !Number.isNaN(heading) && heading >= 0) {
+            bearing = heading;
           }
-        }
-        if (bearing !== null) {
-          setCurrentHeading(bearing);
-        }
 
-        const distToRoute = minDistanceToPolylineMeters(latitude, longitude, coords);
-        if (distToRoute > OFF_ROUTE_THRESHOLD_M) {
-          if (offRouteSinceRef.current === null) {
-            offRouteSinceRef.current = Date.now();
-          } else if (Date.now() - offRouteSinceRef.current > 2800) {
+          const coords = activeRouteCoordsRef.current;
+          if (coords.length >= 2) {
+            const [lon1, lat1] = coords[1];
+            if (bearing === null) {
+              bearing = bearingDegrees(latitude, longitude, lat1, lon1);
+            }
+          }
+          if (bearing !== null) {
+            setCurrentHeading(bearing);
+            const sm = smoothHeadingStep(headingForSmoothRef.current, bearing, 0.38);
+            headingForSmoothRef.current = sm;
+            setDisplayHeading(sm);
+          }
+
+          const distToRoute = minDistanceToPolylineMeters(latitude, longitude, coords);
+          if (distToRoute > OFF_ROUTE_THRESHOLD_M) {
+            if (offRouteSinceRef.current === null) {
+              offRouteSinceRef.current = Date.now();
+            } else if (Date.now() - offRouteSinceRef.current > 2800) {
+              offRouteSinceRef.current = null;
+              maybeReroute(latitude, longitude);
+            }
+          } else if (distToRoute < ON_ROUTE_THRESHOLD_M) {
             offRouteSinceRef.current = null;
-            maybeReroute(latitude, longitude);
           }
-        } else if (distToRoute < ON_ROUTE_THRESHOLD_M) {
-          offRouteSinceRef.current = null;
-        }
 
-        const now = Date.now();
-        const shouldProgress =
-          coords.length >= 2 &&
-          (lastProgressAtRef.current === 0 || now - lastProgressAtRef.current > 3200);
-        if (shouldProgress) {
-          lastProgressAtRef.current = now;
-          const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
-            latitude,
-            longitude,
-            coords,
-            SNAP_TRIM_M
-          );
-          activeRouteCoordsRef.current = trimmed;
-          setDisplayRouteFC(lineStringToFeatureCollection(trimmed));
-          const legD = legDistanceRef.current;
-          const legT = legDurationRef.current;
-          const ratio =
-            legD > 50 ? Math.min(1, Math.max(0, remainingLengthMeters / legD)) : 0;
-          const remSec = Math.round(legT * ratio);
-          setRemainingSeconds(remSec);
-        }
-
-        const nav = isNavigatingRef.current;
-        const follow = isFollowingRef.current;
-        if (cameraRef.current && nav && follow) {
-          const cameraOptions: Record<string, unknown> = {
-            centerCoordinate: [longitude, latitude],
-            zoomLevel: 17.2,
-            animationDuration: 650,
-          };
-          if (bearing != null && (!accuracy || accuracy < 35)) {
-            cameraOptions.bearing = bearing;
+          const now = Date.now();
+          const shouldProgress =
+            coords.length >= 2 &&
+            (lastProgressAtRef.current === 0 || now - lastProgressAtRef.current > 3200);
+          if (shouldProgress) {
+            lastProgressAtRef.current = now;
+            const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
+              latitude,
+              longitude,
+              coords,
+              SNAP_TRIM_M
+            );
+            activeRouteCoordsRef.current = trimmed;
+            setDisplayRouteFC(lineStringToFeatureCollection(trimmed));
+            const legD = legDistanceRef.current;
+            const legT = legDurationRef.current;
+            const ratio =
+              legD > 50 ? Math.min(1, Math.max(0, remainingLengthMeters / legD)) : 0;
+            const remSec = Math.round(legT * ratio);
+            setRemainingSeconds(remSec);
           }
-          if (prevLoc) {
-            const moved = calculateDistance(prevLoc.lat, prevLoc.lon, latitude, longitude);
-            if (moved > 5) {
-              cameraRef.current.setCamera(cameraOptions);
+
+          locationSmoother.animateTo(newLocation, (p) => {
+            setSmoothedUserLocation(p);
+            const nav = isNavigatingRef.current;
+            const follow = isFollowingRef.current;
+            if (!cameraRef.current || !nav || !follow) return;
+            const camNow = Date.now();
+            if (camNow - lastCameraMoveAtRef.current < 360) return;
+            lastCameraMoveAtRef.current = camNow;
+            const brg = headingForSmoothRef.current;
+            const cameraOptions: Record<string, unknown> = {
+              centerCoordinate: [p.lon, p.lat],
+              zoomLevel: 17.2,
+              animationDuration: 400,
+            };
+            if (brg != null && (!accuracy || accuracy < 40)) {
+              cameraOptions.bearing = brg;
             }
-          } else {
             cameraRef.current.setCamera(cameraOptions);
-          }
-        }
-      },
-      (error) => {
-        console.error("GPS tracking error:", error);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 20000,
-        maximumAge: 8000,
-        distanceFilter: 12,
-        interval: 4500,
-      } as Parameters<typeof Geolocation.watchPosition>[2]
-    );
+          });
+        },
+        (error) => {
+          console.error("GPS tracking error:", error);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 4000,
+          distanceFilter: 8,
+          interval: 3000,
+        } as Parameters<typeof Geolocation.watchPosition>[2]
+      );
 
-    watchIdRef.current = id;
-  }, [destination, initialCoords, initialRouteInfo.distance, initialRouteInfo.duration, maybeReroute]);
+      watchIdRef.current = id;
+    };
+
+    beginLiveNav().catch((e) => console.warn("startLiveNavigation failed", e));
+  }, [
+    applyNewRoute,
+    destination,
+    initialCoords,
+    initialRouteInfo,
+    initialUserLocation,
+    locationSmoother,
+    maybeReroute,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -461,8 +618,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         Geolocation.clearWatch(w);
       }
       watchIdRef.current = null;
+      locationSmoother.cancel();
     };
-  }, []);
+  }, [locationSmoother]);
 
   const showFullRouteOverview = () => {
     const coords = activeRouteCoordsRef.current;
@@ -500,14 +658,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="arrow-back" size={24} color={DARK_TEAL} />
-        </TouchableOpacity>
         <Text style={styles.headerTitle}>{headerTitle}</Text>
-        <View style={styles.headerSpacer} />
       </View>
 
       <View style={styles.mapContainer}>
@@ -550,7 +701,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           )}
 
           {userLocation && isActive && (
-            <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <PointAnnotation
+              id="user_location"
+              coordinate={[smoothedUserLocation.lon, smoothedUserLocation.lat]}
+            >
               <View style={styles.userLocationMarkerContainer}>
                 <Animated.View
                   style={[
@@ -597,7 +751,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                   style={[
                     styles.userLocationDirection,
                     {
-                      transform: [{ rotate: `${(currentHeading ?? 0) - (mapBearing || 0)}deg` }],
+                      transform: [
+                        {
+                          rotate: `${(displayHeading ?? currentHeading ?? 0) - (mapBearing || 0)}deg`,
+                        },
+                      ],
                     },
                   ]}
                 >
@@ -654,7 +812,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             onPress={() => {
               if (cameraRef.current && userLocation) {
                 cameraRef.current.setCamera({
-                  centerCoordinate: [userLocation.lon, userLocation.lat],
+                  centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
                   zoomLevel: 17,
                   bearing: 0,
                   animationDuration: 300,
@@ -682,10 +840,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
               if (userLocation && cameraRef.current) {
                 setIsFollowingUser(true);
                 cameraRef.current.setCamera({
-                  centerCoordinate: [userLocation.lon, userLocation.lat],
+                  centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
                   zoomLevel: 17.5,
-                  bearing: currentHeading ?? 0,
-                  animationDuration: 700,
+                  bearing: displayHeading ?? currentHeading ?? 0,
+                  animationDuration: 520,
                 });
               }
             }}
@@ -782,20 +940,19 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
               style={styles.backToPlaceButton}
               onPress={() => navigation.goBack()}
             >
-              <Ionicons name="business-outline" size={20} color={DARK_TEAL} />
-              <Text style={styles.backToPlaceButtonText}>
-                {t("back_to_place_details") || "Back to Place Details"}
-              </Text>
+              <Ionicons name="map-outline" size={20} color={DARK_TEAL} />
+              <Text style={styles.backToPlaceButtonText}>{t("return_to_map")}</Text>
             </TouchableOpacity>
           </View>
         )}
 
         {isActive && (
-          <TouchableOpacity style={styles.stopNavigationButton} onPress={stopNavigation}>
+          <TouchableOpacity
+            style={styles.stopNavigationButton}
+            onPress={stopLiveNavigationAndReturnHome}
+          >
             <Ionicons name="stop-circle" size={20} color="#FFFFFF" />
-            <Text style={styles.stopNavigationButtonText}>
-              {t("stop_navigation") || "Stop Navigation"}
-            </Text>
+            <Text style={styles.stopNavigationButtonText}>{t("stop_navigation")}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -841,28 +998,22 @@ const styles = StyleSheet.create({
     backgroundColor: "#F2F2F7",
   },
   header: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
+    justifyContent: "center",
+    paddingHorizontal: 20,
     paddingTop: Platform.OS === "ios" ? 50 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
-    paddingBottom: 12,
+    paddingBottom: 14,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
     borderBottomColor: "#E5E7EB",
-  },
-  backButton: {
-    padding: 8,
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: DARK_TEAL,
-    flex: 1,
     textAlign: "center",
-  },
-  headerSpacer: {
-    width: 40,
+    width: "100%",
+    letterSpacing: -0.2,
   },
   mapContainer: {
     flex: 1,
