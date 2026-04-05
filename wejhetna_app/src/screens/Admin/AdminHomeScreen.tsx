@@ -28,13 +28,20 @@ import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-nativ
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, checkLocationInServiceCities, translateText, Category } from "../../api/places";
+import {
+  ensureForegroundLocationForNavigation,
+  getCurrentPositionForRoute,
+  isLocationTimeoutOrUnavailableError,
+} from "../../utils/locationPermission";
+import { fetchOsrmDrivingRoute } from "../../services/navigation/osrmRoute";
+import { lineStringToFeatureCollection } from "../../types/navigation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../../config";
-import Geolocation from "@react-native-community/geolocation";
+import { useInitialMapGeolocation } from "../../hooks/useInitialMapGeolocation";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 
 const MAP_STYLE_URL =
@@ -190,18 +197,6 @@ const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boole
   return false;
 };
 
-type RouteCoordinates = {
-  type: "FeatureCollection";
-  features: Array<{
-    type: "Feature";
-    geometry: {
-      type: "LineString";
-      coordinates: [number, number][];
-    };
-    properties: Record<string, any>;
-  }>;
-};
-
 export default function AdminHomeScreen() {
   const { t } = useTranslation();
   const route = useRoute();
@@ -312,117 +307,12 @@ export default function AdminHomeScreen() {
     loadUserId();
   }, []);
 
-  // Get user's GPS location
-  useEffect(() => {
-    setLocationLoading(true);
-    
-    Geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude } = position.coords;
-        setUserLocation({ lat: latitude, lon: longitude });
-        setLocationLoading(false);
-      },
-      (error) => {
-        console.log("GPS error", error);
-        const currentLanguage = i18n.language || "ar";
-        let title = "";
-        let message = "";
-        
-        // Handle different error codes
-        if (error.code === 1) {
-          // PERMISSION_DENIED - Show initial permission message only once
-          if (!hasShownLocationPermissionMessage) {
-            title = currentLanguage === "ar"
-              ? "السماح بالموقع"
-              : currentLanguage === "he"
-              ? "אפשר גישת מיקום"
-              : "Allow Location Access";
-            message = currentLanguage === "ar"
-              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع ورؤية موقعك الحالي كنقطة بداية للمسارات."
-              : currentLanguage === "he"
-              ? "אנא אפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום ולראות את המיקום הנוכחי שלך כנקודת התחלה למסלולים."
-              : "Please allow the app to access your location to use the location feature and see your current location as the starting point for routes.";
-            setHasShownLocationPermissionMessage(true);
-          } else {
-            title = currentLanguage === "ar" 
-              ? "السماح بالموقع مطلوب" 
-              : currentLanguage === "he"
-              ? "נדרש אישור מיקום"
-              : "Location Permission Required";
-            message = currentLanguage === "ar"
-              ? "يجب السماح للتطبيق بالوصول إلى موقعك لاستخدام ميزة الموقع. يرجى تفعيل الموقع في إعدادات الجهاز."
-              : currentLanguage === "he"
-              ? "יש לאפשר לאפליקציה גישה למיקום שלך כדי להשתמש בתכונת המיקום. אנא הפעל את המיקום בהגדרות המכשיר."
-              : "The app needs access to your location to use the location feature. Please enable location in device settings.";
-          }
-        } else if (error.code === 2) {
-          // POSITION_UNAVAILABLE
-          title = currentLanguage === "ar"
-            ? "الموقع غير متاح"
-            : currentLanguage === "he"
-            ? "מיקום לא זמין"
-            : "Location Unavailable";
-          message = currentLanguage === "ar"
-            ? "لا يمكن تحديد موقعك. يرجى التأكد من تفعيل GPS في إعدادات الجهاز."
-            : currentLanguage === "he"
-            ? "לא ניתן לקבוע את המיקום שלך. אנא ודא ש-GPS מופעל בהגדרות המכשיר."
-            : "Unable to determine your location. Please make sure GPS is enabled in device settings.";
-        } else if (error.code === 3) {
-          // TIMEOUT
-          title = currentLanguage === "ar"
-            ? "انتهت مهلة انتظار الموقع"
-            : currentLanguage === "he"
-            ? "זמן המיקום פג"
-            : "Location Timeout";
-          message = currentLanguage === "ar"
-            ? "استغرق الحصول على موقعك وقتاً طويلاً. يرجى المحاولة مرة أخرى."
-            : currentLanguage === "he"
-            ? "קבלת המיקום שלך ארכה זמן רב מדי. אנא נסה שוב."
-            : "Getting your location took too long. Please try again.";
-        } else {
-          // Generic error
-          title = currentLanguage === "ar"
-            ? "خطأ في الموقع"
-            : currentLanguage === "he"
-            ? "שגיאת מיקום"
-            : "Location Error";
-          message = currentLanguage === "ar"
-            ? "لا يمكن الحصول على موقعك. سيتم استخدام موقع افتراضي."
-            : currentLanguage === "he"
-            ? "לא ניתן לקבל את המיקום שלך. ייעשה שימוש במיקום ברירת מחדל."
-            : "Could not get your location. Using default location.";
-        }
-        
-        const allowText = currentLanguage === "ar" ? "السماح" : currentLanguage === "he" ? "אפשר" : "Allow";
-        const cancelText = currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
-        
-        Alert.alert(
-          title,
-          message,
-          [
-            {
-              text: cancelText,
-              style: "cancel"
-            },
-            {
-              text: allowText,
-              onPress: () => {
-                if (error.code === 1) {
-                  Linking.openSettings();
-                }
-              }
-            }
-          ]
-        );
-        setLocationLoading(false);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 10000,
-      }
-    );
-  }, [t, hasShownLocationPermissionMessage]);
+  useInitialMapGeolocation(
+    setUserLocation,
+    setLocationLoading,
+    hasShownLocationPermissionMessage,
+    setHasShownLocationPermissionMessage
+  );
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -706,143 +596,94 @@ export default function AdminHomeScreen() {
     }
   };
 
-  // Get route from user location to destination using OSRM
   const getRoute = async () => {
     const currentLanguage = i18n.language || "ar";
-    
-    // Check if destination is selected
+
     if (!destination) {
-      const title = currentLanguage === "ar"
-        ? "خطأ"
-        : currentLanguage === "he"
-        ? "שגיאה"
-        : "Error";
-      const message = currentLanguage === "ar"
-        ? "يرجى اختيار وجهة أولاً"
-        : currentLanguage === "he"
-        ? "אנא בחר יעד תחילה"
-        : "Please select a destination first";
+      const title =
+        currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
+      const message =
+        currentLanguage === "ar"
+          ? "يرجى اختيار وجهة أولاً"
+          : currentLanguage === "he"
+            ? "אנא בחר יעד תחילה"
+            : "Please select a destination first";
       Alert.alert(title, message);
-      return;
-    }
-    
-    // Check if user location is available
-    if (!userLocation) {
-      const title = currentLanguage === "ar"
-        ? "تفعيل الموقع مطلوب"
-        : currentLanguage === "he"
-        ? "נדרש הפעלת מיקום"
-        : "Location Required";
-      const message = currentLanguage === "ar"
-        ? "لا يمكن بدء المسار بدون موقعك الحالي. يرجى تفعيل GPS والسماح للتطبيق بالوصول إلى موقعك في إعدادات الجهاز."
-        : currentLanguage === "he"
-        ? "לא ניתן להתחיל מסלול ללא המיקום הנוכחי שלך. אנא הפעל GPS ואפשר לאפליקציה גישה למיקום שלך בהגדרות המכשיר."
-        : "Cannot start route without your current location. Please enable GPS and allow the app to access your location in device settings.";
-      Alert.alert(title, message);
-      
-      // Try to get location again
-      setLocationLoading(true);
-      Geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          setUserLocation({ lat: latitude, lon: longitude });
-          setLocationLoading(false);
-        },
-        (error) => {
-          console.log("GPS error when retrying:", error);
-          setLocationLoading(false);
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 5000,
-        }
-      );
       return;
     }
 
     setRouteLoading(true);
-    
+
     try {
-      // Using OSRM (Open Source Routing Machine) - free, no API key needed
-      const profile = "driving"; // driving, walking, or cycling
-      const coordinates = `${userLocation.lon},${userLocation.lat};${destination.lon},${destination.lat}`;
-      
-      // Using OSRM public server (free, no API key required)
-      const url = `https://router.project-osrm.org/route/v1/${profile}/${coordinates}?overview=full&geometries=geojson&alternatives=false&steps=false`;
-      
-      console.log("Requesting route from OSRM:", url);
-      
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("OSRM API error:", response.status, errorText);
-        throw new Error(`Routing service error: ${response.status} - ${errorText}`);
+      const permissionOk = await ensureForegroundLocationForNavigation();
+      if (!permissionOk) {
+        Alert.alert(
+          t("location_required_title") || "Location required",
+          t("location_required_for_navigation") ||
+            "Please enable location access to start navigation."
+        );
+        return;
       }
-      
-      const routeData = await response.json();
-      
-      // OSRM response format: { code: "Ok", routes: [{ distance, duration, geometry }] }
-      if (routeData.code === "Ok" && routeData.routes && routeData.routes.length > 0) {
-        const routeInfo = routeData.routes[0];
-        
-        // Extract route information
-        const distance = routeInfo.distance || 0; // in meters
-        const duration = routeInfo.duration || 0; // in seconds
-        
-        // OSRM geometry format is already GeoJSON LineString
-        const routeGeometry = routeInfo.geometry || {
-          type: "LineString",
-          coordinates: [
-            [userLocation.lon, userLocation.lat],
-            [destination.lon, destination.lat],
-          ],
-        };
-        
-        // Store route info (distance, duration)
-        const routeInfoData = {
-          distance,
-          duration,
-          startAddress: t("your_location") || "Your Location",
-          endAddress: destination.name || t("destination") || "Destination",
-        };
 
-        // Store route coordinates
-        const routeCoords: RouteCoordinates = {
-          type: "FeatureCollection",
-          features: [
-            {
-              type: "Feature",
-              geometry: routeGeometry,
-              properties: {},
-            },
-          ],
-        };
+      const freshLocation = await getCurrentPositionForRoute();
 
-        // Navigate directly to RouteDetailsScreen
-        navigation.navigate("RouteDetails", {
-          routeInfo: routeInfoData,
-          destination,
-          userLocation,
-          routeCoordinates: routeCoords,
-        });
-      } else {
-        const errorMsg = routeData.code === "NoRoute" 
-          ? t("no_route_found") || "No route found between these points"
-          : routeData.message || t("no_route_found") || "No route found in response";
-        throw new Error(errorMsg);
+      setUserLocation(freshLocation);
+
+      const boundaryCheck = await checkLocationInServiceCities(destination.lat, destination.lon);
+      if (!boundaryCheck.is_within) {
+        Alert.alert(
+          t("location_outside_service_area") || "Location Outside Service Area",
+          t("destination_must_be_in_service_cities") ||
+            "Navigation is only available to destinations in Tel Sheva, Lakiya, or Rahat."
+        );
+        return;
       }
-      } catch (error: any) {
+
+      const osrm = await fetchOsrmDrivingRoute(freshLocation, destination);
+
+      const routeInfoData = {
+        distance: osrm.distanceMeters,
+        duration: osrm.durationSeconds,
+        startAddress: t("your_location") || "Your Location",
+        endAddress: destination.name || t("destination") || "Destination",
+      };
+
+      const routeCoords = lineStringToFeatureCollection(osrm.coordinates);
+
+      navigation.navigate("RouteDetails", {
+        routeInfo: routeInfoData,
+        destination,
+        userLocation: freshLocation,
+        routeCoordinates: routeCoords,
+        navigationPhase: "preview",
+      });
+    } catch (error: any) {
       console.error("Route error:", error?.message || String(error));
-      Alert.alert(
-        t("route_error") || "Route Error",
-        error?.message || t("could_not_get_route") || "Could not get driving directions. Please try again."
-      );
-      } finally {
-        setRouteLoading(false);
+      const code = error?.code;
+      if (code === 1) {
+        Alert.alert(
+          t("location_required_title") || "Location required",
+          t("location_required_for_navigation") ||
+            "Please enable location access to start navigation."
+        );
+      } else if (isLocationTimeoutOrUnavailableError(error)) {
+        Alert.alert(
+          t("route_location_timeout_title") || "Could not get location",
+          t("route_location_timeout_body") ||
+            "GPS is taking too long or signal is weak. Move to an open area, wait a few seconds, and try again."
+        );
+      } else {
+        Alert.alert(
+          t("route_error") || "Route Error",
+          error?.message ||
+            t("could_not_get_route") ||
+            "Could not get driving directions. Please try again."
+        );
       }
-    };
+    } finally {
+      setRouteLoading(false);
+    }
+  };
 
   // Bottom sheet animation values
   const translateY = useSharedValue(SCREEN_HEIGHT);
@@ -1549,7 +1390,7 @@ export default function AdminHomeScreen() {
                 <TouchableOpacity
                   style={styles.actionButtonPrimary}
                   onPress={getRoute}
-                  disabled={routeLoading || !userLocation}
+                  disabled={routeLoading}
                 >
                   {routeLoading ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
@@ -1557,7 +1398,7 @@ export default function AdminHomeScreen() {
                     <>
                       <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
                       <Text style={styles.actionButtonPrimaryText}>
-                        {t("get_directions") || "Get Directions"}
+                        {t("start_navigation") || "Start Navigation"}
                       </Text>
                     </>
                   )}
