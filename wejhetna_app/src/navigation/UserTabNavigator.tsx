@@ -21,6 +21,11 @@ import BusinessOwnerHomeScreen from '../screens/businessOwner/BusinessOwnerHomeS
 import ProfileScreen from '../screens/ProfileScreen';
 import ManageMyBusinessScreen from '../screens/businessOwner/ManageMyBusinessScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { requestForegroundLocationPermission } from '../utils/locationPermission';
+import {
+  shouldRunLoginLocationPrompt,
+  markLoginLocationPromptStarted,
+} from '../utils/locationSession';
 
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
@@ -197,6 +202,14 @@ export default function UserTabNavigator() {
       }
     }
     loadAndSaveUserData();
+  }, []);
+
+  React.useEffect(() => {
+    if (!shouldRunLoginLocationPrompt()) {
+      return;
+    }
+    markLoginLocationPromptStarted();
+    requestForegroundLocationPermission().catch(() => {});
   }, []);
 
   // Determine which home screen to use based on role

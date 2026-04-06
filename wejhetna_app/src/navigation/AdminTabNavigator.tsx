@@ -19,6 +19,11 @@ import NewUsersScreen from '../screens/Admin/NewUsersScreen';
 import UsersSelectorScreen from '../screens/Admin/UsersSelectorScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { requestForegroundLocationPermission } from '../utils/locationPermission';
+import {
+  shouldRunLoginLocationPrompt,
+  markLoginLocationPromptStarted,
+} from '../utils/locationSession';
 
 import Feather from 'react-native-vector-icons/Feather';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -179,6 +184,14 @@ export default function AdminTabNavigator({ route }: AdminTabsProps) {
     }
     saveAdminData();
   }, [adminUserId, role]);
+
+  React.useEffect(() => {
+    if (!shouldRunLoginLocationPrompt()) {
+      return;
+    }
+    markLoginLocationPromptStarted();
+    requestForegroundLocationPermission().catch(() => {});
+  }, []);
 
   return (
     <Tab.Navigator

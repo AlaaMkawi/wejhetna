@@ -112,6 +112,8 @@ export type RootStackParamList = {
         properties: Record<string, any>;
       }>;
     } | null;
+    /** When omitted, screen defaults to preview (map + summary before live navigation). */
+    navigationPhase?: "preview" | "active";
   };
 };
 export type AuthStackParamList = {

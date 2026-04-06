@@ -20,6 +20,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Accordion from "../components/Accordion";
 import SimpleLanguageSwitcher from "../components/SimpleLanguageSwitcher";
 import { RootStackParamList } from "../navigation/types";
+import { notifyUserLoggedOut } from "../utils/locationSession";
 import {
   getUserProfile,
   getDriverProfile,
@@ -152,6 +153,7 @@ export default function ProfileScreen() {
           style: "destructive",
           onPress: async () => {
             try {
+              notifyUserLoggedOut();
               // Clear ALL stored data
               await AsyncStorage.clear();
               
@@ -167,6 +169,7 @@ export default function ProfileScreen() {
               );
             } catch (error) {
               console.error("Logout error:", error);
+              notifyUserLoggedOut();
               // Even if there's an error, try to navigate to home
               const rootNavigation = navigation.getParent()?.getParent() || navigation.getParent() || navigation;
               rootNavigation.dispatch(
