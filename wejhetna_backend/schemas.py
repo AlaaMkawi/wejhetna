@@ -261,3 +261,70 @@ class ResetPasswordRequest(BaseModel):
 class PasswordResetResponse(BaseModel):
     success: bool
     message: str
+
+
+# =========================
+# ADVERTISEMENT SCHEMAS
+# =========================
+
+class AdvertisementUserPublicOut(BaseModel):
+    """Minimal user info for advertisement display (no internal ids)."""
+
+    username: str
+    full_name: str
+
+    class Config:
+        orm_mode = True
+
+
+class AdvertisementCreateResponse(BaseModel):
+    """Response after creating an advertisement request (user submission)."""
+
+    id: int
+    image_url: str
+    status: str
+    message: str
+
+
+class AdvertisementPublicOut(BaseModel):
+    """Approved, non-expired advertisement for public listing (GET /advertisements)."""
+
+    id: int
+    image_url: str
+    category_id: int
+    city_id: int
+    description: Optional[str] = None
+    user: AdvertisementUserPublicOut
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class AdminPendingAdvertisementOut(BaseModel):
+    """Pending advertisement row for admin list (GET /admin/advertisements/pending)."""
+
+    id: int
+    image_url: str
+    category_id: int
+    city_id: int
+    description: Optional[str] = None
+    user: AdvertisementUserPublicOut
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class AdvertisementAdminRequest(BaseModel):
+    """Body for admin advertisement approve/reject (matches other admin_*_user_id patterns)."""
+
+    admin_user_id: int
+
+
+class AdvertisementAdminActionResponse(BaseModel):
+    """Response after admin approve or reject."""
+
+    id: int
+    status: str
+    message: str

@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.context import CryptContext
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
-from fastapi import File, UploadFile
+from fastapi import File, UploadFile, Form
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +16,7 @@ import shutil
 from typing import List
 from models import Location, Place
 from db import Base, engine, SessionLocal
+from deps import get_db
 import models
 import smtplib
 from email.message import EmailMessage
@@ -61,8 +62,31 @@ from schemas import (
     VerifyPasswordResetCodeRequest,
     ResetPasswordRequest,
     PasswordResetResponse,
+    AdvertisementCreateResponse,
+    AdvertisementPublicOut,
+    AdminPendingAdvertisementOut,
+    AdvertisementAdminActionResponse,
 )
 import requests
+from dependencies import (
+    get_current_user,
+    get_current_admin_user,
+    get_admin_user_from_body,
+)
+from services.advertisement_service import (
+    create_advertisement_request,
+    list_pending_advertisements,
+    list_public_approved_advertisements,
+    approve_advertisement,
+    reject_advertisement,
+    CategoryNotFoundError,
+    CityNotFoundError,
+    AdvertisementNotFoundError,
+    AdvertisementInvalidStateError,
+    AdvertisementImageValidationError,
+    AdvertisementS3ConfigError,
+    AdvertisementS3UploadError,
+)
 
 
 def find_osm_poi(lat: float, lon: float):
@@ -102,8 +126,6 @@ app = FastAPI(
     version="0.1.0"
 )
 Base.metadata.create_all(bind=engine)
-EMAIL_USER = "wejhetna@gmail.com"
-EMAIL_PASS = "cdoj zsjt xpqf uelp"
 
 
 def send_email(to_email: str, subject: str, body: str):
@@ -136,7 +158,11 @@ def send_email(to_email: str, subject: str, body: str):
         )
         traceback.print_exc()
 
-    if not EMAIL_USER or not EMAIL_PASS:
+    from email_settings import get_smtp_host_port, get_smtp_login, log_smtp_diagnostics
+
+    log_smtp_diagnostics(prefix="[API send_email sync fallback]")
+    email_user, email_pass = get_smtp_login()
+    if not email_user or not email_pass:
         print("Email config missing, skipping real send.")
         print("=== EMAIL (FAKE) ===")
         print("To:", to_email)
@@ -147,13 +173,14 @@ def send_email(to_email: str, subject: str, body: str):
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
+    msg["From"] = email_user
     msg["To"] = to_email
     msg.set_content(body)
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_USER, EMAIL_PASS)
+        host, port = get_smtp_host_port()
+        with smtplib.SMTP_SSL(host, port) as smtp:
+            smtp.login(email_user, email_pass)
             smtp.send_message(msg)
         print("Email sent to", to_email)
     except Exception as e:
@@ -192,6 +219,68 @@ def enqueue_admin_status_email(
     )
 
 
+def enqueue_advertisement_approved_email(to_email: str, full_name: str) -> None:
+    """Notify submitter that their advertisement was approved and published (7 days)."""
+    subject = (
+        "وجهتنا / ווג'הטנא – تمت الموافقة على نشر إعلانك / אישור פרסום המודעה"
+    )
+    email_body = f"""عزيزي/عزيزتي {full_name},
+
+يسرّنا إبلاغك بأنه تمت الموافقة على إعلانك (البوستر) وتم نشره في التطبيق.
+
+سيظل إعلانك منشوراً لمدة 7 أيام.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {full_name},
+
+אנו שמחים לעדכן כי בקשתך לפרסם מודעה (פוסטר) אושרה והמודעה פורסמה באפליקציה.
+
+המודעה תוצג למשך 7 ימים.
+
+בברכה,
+צוות ווג'הטנא"""
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="approved",
+        request_type="advertisement",
+    )
+
+
+def enqueue_advertisement_rejected_email(to_email: str, full_name: str) -> None:
+    """Notify submitter that their advertisement publish request was rejected."""
+    subject = (
+        "وجهتنا / ווג'הטנא – لم تتم الموافقة على طلب نشر إعلانك / בקשת פרסום המודעה נדחתה"
+    )
+    email_body = f"""عزيزي/عزيزتي {full_name},
+
+نأسف لإبلاغك بأنه لم تتم الموافقة على طلبك لنشر الإعلان (البوستر) في التطبيق.
+
+مع أطيب التحيات،
+فريق وجهتنا
+
+─────────────────────────────────────
+
+שלום {full_name},
+
+אנו מצטערים לעדכן כי בקשתך לפרסם מודעה (פוסטר) לא אושרה.
+
+בברכה,
+צוות ווג'הטנא"""
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="rejected",
+        request_type="advertisement",
+    )
+
+
 # CORS (לאפליקציית React Native)
 app.add_middleware(
     CORSMiddleware,
@@ -200,15 +289,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# --- Database session ---
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 # ----- File uploads (local for now) -----
@@ -1970,6 +2050,155 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
         "method": "PUT",
         "headers": {"Content-Type": content_type},
     }
+
+
+# =========================
+# ADVERTISEMENTS (user requests)
+# =========================
+
+
+@app.get("/advertisements", response_model=List[AdvertisementPublicOut])
+def list_public_advertisements(
+    category_id: Optional[int] = None,
+    city_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Public list of approved, non-expired advertisements (newest first).
+    Optional query filters: category_id, city_id.
+    """
+    return list_public_approved_advertisements(
+        db, category_id=category_id, city_id=city_id
+    )
+
+
+@app.post("/advertisements", response_model=AdvertisementCreateResponse)
+async def create_advertisement(
+    image: UploadFile = File(..., description="Advertisement image (jpg, jpeg, png; max 5MB)"),
+    category_id: int = Form(...),
+    city_id: int = Form(...),
+    description: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submit a new advertisement request (image stored under S3 prefix advertisements/).
+    Requires multipart/form-data: user_id (logged-in user), category_id, city_id,
+    optional description, and image file.
+    """
+    _max_ad_image_bytes = 5 * 1024 * 1024
+    if getattr(image, "size", None) is not None and image.size > _max_ad_image_bytes:
+        raise HTTPException(status_code=400, detail="Image too large (max 5MB).")
+
+    file_content = await image.read()
+    if not file_content:
+        raise HTTPException(status_code=400, detail="Image file is required and cannot be empty.")
+
+    original_filename = image.filename or "image.jpg"
+
+    try:
+        ad = create_advertisement_request(
+            db,
+            user=current_user,
+            category_id=category_id,
+            city_id=city_id,
+            description=description,
+            file_content=file_content,
+            original_filename=original_filename,
+        )
+    except CategoryNotFoundError:
+        raise HTTPException(status_code=404, detail="Category not found")
+    except CityNotFoundError:
+        raise HTTPException(status_code=404, detail="City not found")
+    except AdvertisementImageValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except AdvertisementS3ConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except AdvertisementS3UploadError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return AdvertisementCreateResponse(
+        id=ad.id,
+        image_url=ad.image_url,
+        status=ad.status.value,
+        message="Advertisement request submitted and is pending review.",
+    )
+
+
+@app.get(
+    "/admin/advertisements/pending",
+    response_model=List[AdminPendingAdvertisementOut],
+)
+def admin_list_pending_advertisements(
+    category_id: Optional[int] = None,
+    city_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_current_admin_user),
+):
+    """List pending advertisement requests (newest first). Optional filters: category_id, city_id."""
+    return list_pending_advertisements(db, category_id=category_id, city_id=city_id)
+
+
+@app.post(
+    "/admin/advertisements/{advertisement_id}/approve",
+    response_model=AdvertisementAdminActionResponse,
+)
+def admin_approve_advertisement(
+    advertisement_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user_from_body),
+):
+    try:
+        ad, message = approve_advertisement(db, advertisement_id)
+    except AdvertisementNotFoundError:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    except AdvertisementInvalidStateError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+    if message == "Advertisement approved successfully.":
+        owner = db.query(User).filter(User.id == ad.user_id).first()
+        if owner and owner.email:
+            enqueue_advertisement_approved_email(
+                str(owner.email),
+                str(owner.full_name or owner.username),
+            )
+
+    return AdvertisementAdminActionResponse(
+        id=ad.id,
+        status=ad.status.value,
+        message=message,
+    )
+
+
+@app.post(
+    "/admin/advertisements/{advertisement_id}/reject",
+    response_model=AdvertisementAdminActionResponse,
+)
+def admin_reject_advertisement(
+    advertisement_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_admin_user_from_body),
+):
+    try:
+        ad, message = reject_advertisement(db, advertisement_id)
+    except AdvertisementNotFoundError:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    except AdvertisementInvalidStateError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+    if message == "Advertisement rejected successfully.":
+        owner = db.query(User).filter(User.id == ad.user_id).first()
+        if owner and owner.email:
+            enqueue_advertisement_rejected_email(
+                str(owner.email),
+                str(owner.full_name or owner.username),
+            )
+
+    return AdvertisementAdminActionResponse(
+        id=ad.id,
+        status=ad.status.value,
+        message=message,
+    )
 
 
 from datetime import datetime, timezone, timedelta  # make sure this import exists

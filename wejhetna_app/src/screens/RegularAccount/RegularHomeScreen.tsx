@@ -35,6 +35,7 @@ import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityI
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
+import { isOpenNow } from "../../utils/openingHours";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
 import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
@@ -164,42 +165,7 @@ const parseOpeningHours = (openingHours: string | null | undefined): Array<{day:
 
 // Helper function to check if business is currently open
 const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boolean => {
-  if (!openingHours) return false;
-
-  const now = new Date();
-  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const currentDayName = dayNames[currentDay];
-
-  // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
-  const dayEntries = openingHours.split(",").map(s => s.trim());
-  
-  for (const entry of dayEntries) {
-    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
-    if (match) {
-      const [, startH, startM, startP, endH, endM, endP] = match;
-      
-      const startHour = parseInt(startH, 10);
-      const startMin = parseInt(startM, 10);
-      const endHour = parseInt(endH, 10);
-      const endMin = parseInt(endM, 10);
-      
-      // Convert to 24-hour format
-      let startMinutes = startHour * 60 + startMin;
-      let endMinutes = endHour * 60 + endMin;
-      
-      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
-      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
-      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
-      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
-      
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      
-      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-    }
-  }
-  
-  return false;
+  return isOpenNow(openingHours);
 };
 
 // Helper function to get opening hours status text (e.g., "Closed · Opens 10:30 Sat")
