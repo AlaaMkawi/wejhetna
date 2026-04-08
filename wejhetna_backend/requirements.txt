@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+boto3
+sqlalchemy
+geoalchemy2
+psycopg[binary]
+python-dotenv
+passlib[bcrypt]
+openai
+celery[redis]
+flower

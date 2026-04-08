@@ -1,87 +1,33 @@
-/**
- * Wejhetna App - React Native + FastAPI test connection
- */
+// App.tsx
+import { I18nextProvider } from "react-i18next";
+import i18n, { loadAppLanguage } from "./src/i18n";
 
-import React, {useEffect, useState} from 'react';
-import {
-  StatusBar,
-  StyleSheet,
-  useColorScheme,
-  View,
-  Text,
-} from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import React, { useEffect, useState } from "react";
+import { NavigationContainer } from "@react-navigation/native";
+import AppNavigator from "./src/navigation/AppNavigator";
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+export default function App() {
+  const [ready, setReady] = useState(false);
 
-  return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
-  );
-}
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-  const [backendStatus, setBackendStatus] = useState<string>('Loading...');
-
+  // Load saved language when app starts
   useEffect(() => {
-    const fetchBackendStatus = async () => {
-      try {
-        // באמולטור אנדרואיד, localhost של המחשב הוא 10.0.2.2
-        const response = await fetch('http://10.0.2.2:8000/health');
-        const json = await response.json();
-        setBackendStatus(json.status ?? 'Unknown');
-      } catch (error) {
-        console.error('Error connecting to backend:', error);
-        setBackendStatus('Error connecting to backend');
-      }
+    const initLang = async () => {
+      const savedLang = await loadAppLanguage();
+      await i18n.changeLanguage(savedLang);
+      setReady(true);
     };
-
-    fetchBackendStatus();
+    initLang();
   }, []);
 
+  if (!ready) {
+    return null; // פה אפשר לשים Splash אם תרצי
+  }
+
   return (
-    <View
-      style={[
-        styles.container,
-        {
-          paddingTop: safeAreaInsets.top,
-          paddingBottom: safeAreaInsets.bottom,
-        },
-      ]}>
-      <Text style={styles.title}>Wejhetna App</Text>
-      <Text style={styles.label}>Backend status:</Text>
-      <Text style={styles.status}>{backendStatus}</Text>
-    </View>
+    <I18nextProvider i18n={i18n}>
+      <NavigationContainer>
+        <AppNavigator />
+      </NavigationContainer>
+    </I18nextProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 18,
-    marginBottom: 8,
-  },
-  status: {
-    fontSize: 20,
-    fontWeight: '600',
-  },
-});
-
-export default App;

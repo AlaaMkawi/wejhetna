@@ -1,0 +1,13 @@
+wejhetna_backend/venv/
+wejhetna_backend/.venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+wejhetna_backend\uploads
+node_modules/
+wejhetna_backend/uploads/
+
+wejhetna_backend/.env
+.env
+
