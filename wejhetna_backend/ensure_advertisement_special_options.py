@@ -73,11 +73,11 @@ def main() -> None:
                     name_en="Online Business",
                 )
             )
+            db.commit()
             print("Inserted city: Online Business")
         else:
             print("City 'Online Business' already present")
 
-        db.commit()
     finally:
         db.close()
 

@@ -18,8 +18,6 @@ from models import Location, Place
 from db import Base, engine, SessionLocal
 from deps import get_db
 import models
-import smtplib
-from email.message import EmailMessage
 import os
 import re
 import boto3
@@ -128,69 +126,24 @@ app = FastAPI(
 Base.metadata.create_all(bind=engine)
 
 
-def send_email(to_email: str, subject: str, body: str):
+def send_email(to_email: str, subject: str, body: str, *, flow: str = "send_email") -> None:
     """
     Queue a transactional email on Celery (tasks.send_email).
     Used by verification, password reset, admin approval/rejection, etc.
-    Uses send_email_task.delay() (same binding the worker registered). If enqueue fails,
-    falls back to synchronous SMTP.
+
+    Primary path: ``email_dispatch.enqueue_transactional_email`` → Celery task
+    ``tasks.send_email``. If enqueue fails, the dispatcher falls back to synchronous SMTP
+    (same ``email_settings`` as the worker).
+
+    ``flow`` identifies the call site in logs only; subject and body are unchanged.
     """
+    from email_dispatch import enqueue_transactional_email
+
     print(
-        f"[API] send_email: enqueue tasks.send_email to={to_email!r} "
-        f"subject_len={len(subject)} body_len={len(body)}"
+        f"[API] send_email: flow={flow!r} handoff to EMAIL_DISPATCH "
+        f"to={to_email!r} subject_len={len(subject)} body_len={len(body)}"
     )
-    try:
-        from tasks import send_email_task
-
-        async_result = send_email_task.delay(to_email, subject, body)
-        print(
-            f"[API] send_email: Celery delay OK name={send_email_task.name!r} "
-            f"celery_task_id={async_result.id!r} state={async_result.state!r} "
-            f"to={to_email!r}"
-        )
-        return
-    except Exception as e:
-        import traceback
-
-        print(
-            f"[API] send_email: CRITICAL Celery delay(send_email_task) failed "
-            f"to={to_email!r}, falling back to sync SMTP. Error: {e}"
-        )
-        traceback.print_exc()
-
-    from email_settings import get_smtp_host_port, get_smtp_login, log_smtp_diagnostics
-
-    log_smtp_diagnostics(prefix="[API send_email sync fallback]")
-    email_user, email_pass = get_smtp_login()
-    if not email_user or not email_pass:
-        print("Email config missing, skipping real send.")
-        print("=== EMAIL (FAKE) ===")
-        print("To:", to_email)
-        print("Subject:", subject)
-        print("Body:", body)
-        print("=============")
-        return
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = email_user
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    try:
-        host, port = get_smtp_host_port()
-        with smtplib.SMTP_SSL(host, port) as smtp:
-            smtp.login(email_user, email_pass)
-            smtp.send_message(msg)
-        print("Email sent to", to_email)
-    except Exception as e:
-        print("Error sending email:", e)
-        # still print for debugging
-        print("=== EMAIL (FAILED TO SEND) ===")
-        print("To:", to_email)
-        print("Subject:", subject)
-        print("Body:", body)
-        print("=============")
+    enqueue_transactional_email(to_email, subject, body, flow=flow)
 
 
 def enqueue_admin_status_email(
@@ -212,7 +165,12 @@ def enqueue_admin_status_email(
         f"(tasks.send_email) to={to_email!r} status={status!r} request_type={request_type!r} "
         f"subject_len={len(subject)} body_len={len(body)}"
     )
-    send_email(to_email, subject, body)
+    send_email(
+        to_email,
+        subject,
+        body,
+        flow=f"admin_status_email:{request_type}:{status}",
+    )
     print(
         f"[API] enqueue_admin_status_email: send_email handoff finished "
         f"to={to_email!r} status={status!r} request_type={request_type!r}"
@@ -372,7 +330,7 @@ Wejhetna Team"""
 مع تحياتنا،
 فريق وجهتنا"""
 
-    send_email(to_email, subject, body)
+    send_email(to_email, subject, body, flow=f"verification_email:{language}")
 
 
 def create_verification_code(user_id: int, email: str, db: Session) -> EmailVerification:
@@ -462,7 +420,7 @@ Wejhetna Team"""
 مع تحياتنا،
 فريق وجهتنا"""
 
-    send_email(to_email, subject, body)
+    send_email(to_email, subject, body, flow=f"password_reset_email:{language}")
 
 
 class RegularUserSignup(BaseModel):

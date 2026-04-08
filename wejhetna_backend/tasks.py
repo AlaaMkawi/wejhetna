@@ -6,6 +6,15 @@ From FastAPI (e.g. inside a route), after ensuring celery_app is configured:
     ping.delay()
 """
 import os
+import sys
+from pathlib import Path
+
+# Local package imports (email_settings, etc.) must resolve even if CWD is not wejhetna_backend.
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from email_settings_loader import get_email_settings
 
 from celery_app import celery_app
 
@@ -15,26 +24,24 @@ _SMTP_FORCE_PLAINTEXT_CREDS = False
 _SMTP_FORCE_USER = os.getenv("EMAIL_USER", "")
 _SMTP_FORCE_PASS = ""
 
-# --- TEMP TEST ONLY #2 — isolation: hardcoded smtp.login ONLY in worker, then return (no email sent) ---
-# If True: ignores .env for this task call; tests whether Google accepts literals below. Restart worker after edit.
-# Set False for normal operation. Do not commit a real password.
+# --- TEMP TEST ONLY #2 — isolation: smtp.login ONLY in worker, then return (no email sent) ---
+# If True: set user/pass below for a local test. Set False for normal operation. Do not commit secrets.
 _SMTP_TEMP_HARDCODE_ISOLATION_TEST = False
 _SMTP_TEMP_HARDCODE_USER = os.getenv("EMAIL_USER", "")
-_SMTP_TEMP_HARDCODE_PASS = "fvuldxihksuuccbc"
+_SMTP_TEMP_HARDCODE_PASS = ""
 
 
 def _smtp_deliver(to_email: str, subject: str, body: str) -> None:
     """Shared SMTP send used by all email tasks (runs inside the worker)."""
+    # Load project SMTP settings before stdlib ``email`` imports so tracebacks stay accurate.
+    es = get_email_settings()
     import smtplib
     from email.message import EmailMessage
-
-    from email_settings import (
-        dotenv_file_abs_path,
-        describe_email_pass_env_shape,
-        get_smtp_host_port,
-        get_smtp_login,
-        log_smtp_diagnostics,
-    )
+    dotenv_file_abs_path = es.dotenv_file_abs_path
+    describe_email_pass_env_shape = es.describe_email_pass_env_shape
+    get_smtp_host_port = es.get_smtp_host_port
+    get_smtp_login = es.get_smtp_login
+    log_smtp_diagnostics = es.log_smtp_diagnostics
 
     if _SMTP_TEMP_HARDCODE_ISOLATION_TEST:
         host, port = get_smtp_host_port()
@@ -117,19 +124,24 @@ def ping() -> dict:
     return {"ok": True, "message": "pong"}
 
 
-@celery_app.task(name="tasks.send_email")
-def send_email_task(to_email: str, subject: str, body: str) -> None:
+@celery_app.task(name="tasks.send_email", bind=True)
+def send_email_task(self, to_email: str, subject: str, body: str) -> None:
     """
     Send an email via Gmail SMTP (verification, password reset, admin approve/reject, etc.).
     Subject/body are built in the API; this task only delivers.
     """
+    task_id = getattr(getattr(self, "request", None), "id", None)
     print(
-        f"[CELERY tasks.send_email] RUNNING to={to_email!r} "
+        f"[CELERY tasks.send_email] RUNNING task_id={task_id!r} to={to_email!r} "
         f"subject_len={len(subject)} body_len={len(body)}"
     )
     try:
         _smtp_deliver(to_email, subject, body)
-        print(f"[CELERY tasks.send_email] DONE to={to_email!r}")
+        print(
+            f"[CELERY tasks.send_email] SUCCESS task_id={task_id!r} to={to_email!r}"
+        )
     except Exception as e:
-        print(f"[CELERY tasks.send_email] FAILED to={to_email!r}: {e}")
+        print(
+            f"[CELERY tasks.send_email] FAILED task_id={task_id!r} to={to_email!r}: {e}"
+        )
         raise
