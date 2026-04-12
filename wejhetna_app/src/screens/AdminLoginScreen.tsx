@@ -10,10 +10,12 @@ import {
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../navigation/types";
 import { API_BASE_URL } from "../../config";
+import { useTranslation } from "react-i18next";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminLogin">;
 
 export default function AdminLoginScreen({ navigation }: Props) {
+  const { t } = useTranslation();
   const [usernameOrEmail, setUsernameOrEmail] = useState("admin");
   const [password, setPassword] = useState("Admin123!");
   const [loading, setLoading] = useState(false);
@@ -23,7 +25,7 @@ export default function AdminLoginScreen({ navigation }: Props) {
     setError(null);
 
     if (!usernameOrEmail.trim() || !password.trim()) {
-      setError("Please enter username/email and password");
+      setError(t("login_missing_fields") || "Please enter username/email and password");
       return;
     }
 
@@ -41,19 +43,19 @@ export default function AdminLoginScreen({ navigation }: Props) {
       const json = await res.json();
 
       if (!res.ok) {
-        setError(json.detail || "Login failed");
+        setError(json.detail || t("login_failed") || "Login failed");
         return;
       }
 
       if (json.role !== "ADMIN") {
-        setError("This user is not an admin");
+        setError(t("not_admin_account") || "This user is not an admin");
         return;
       }
 
       // ✅ לוגין מוצלח – מעבר לדף הבית של האדמין
       navigation.navigate("AdminPanel");
     } catch (e: any) {
-      setError("Network error: " + (e?.message || "unknown error"));
+      setError(`${t("network_error") || "Network error"}: ${e?.message || (t("unknown_error") || "unknown error")}`);
     } finally {
       setLoading(false);
     }
@@ -61,13 +63,13 @@ export default function AdminLoginScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Admin Login</Text>
+      <Text style={styles.title}>{t("admin_login") || "Admin Login"}</Text>
 
       <TextInput
         style={styles.input}
         value={usernameOrEmail}
         onChangeText={setUsernameOrEmail}
-        placeholder="Username or email"
+        placeholder={t("username_or_email") || "Username or email"}
         autoCapitalize="none"
       />
 
@@ -75,14 +77,14 @@ export default function AdminLoginScreen({ navigation }: Props) {
         style={styles.input}
         value={password}
         onChangeText={setPassword}
-        placeholder="Password"
+        placeholder={t("password") || "Password"}
         secureTextEntry
       />
 
       {loading ? (
         <ActivityIndicator />
       ) : (
-        <Button title="Login" onPress={handleLogin} />
+        <Button title={t("login") || "Login"} onPress={handleLogin} />
       )}
 
       {error && <Text style={styles.error}>{error}</Text>}

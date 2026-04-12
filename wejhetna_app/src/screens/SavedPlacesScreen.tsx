@@ -20,6 +20,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { RootStackParamList } from "../navigation/types";
 import { getSavedPlaces, PlaceForMap, unsavePlace } from "../api/places";
 import i18n from "../i18n";
+import { formatApiImageUri } from "../utils/imageUrl";
 
 const DARK_TEAL = "#0f5b63";
 type NavType = NativeStackNavigationProp<RootStackParamList>;
@@ -236,6 +237,7 @@ export default function SavedPlacesScreen() {
         ) : (
           savedPlaces.map((place) => {
             const placeIcon = getPlaceIcon(place);
+            const thumbUri = formatApiImageUri(place.main_image_url);
             
             return (
               <TouchableOpacity
@@ -244,9 +246,9 @@ export default function SavedPlacesScreen() {
                 onPress={() => handlePlacePress(place)}
               >
                 {/* Place Image */}
-                {place.main_image_url ? (
+                {thumbUri ? (
                   <Image
-                    source={{ uri: place.main_image_url }}
+                    source={{ uri: thumbUri }}
                     style={styles.placeImage}
                     resizeMode="cover"
                   />

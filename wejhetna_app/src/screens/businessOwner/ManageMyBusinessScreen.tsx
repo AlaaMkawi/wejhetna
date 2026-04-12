@@ -35,6 +35,13 @@ import i18n from "../../i18n";
 import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "../MessageModal";
 import { API_BASE_URL } from "../../../config";
+import { uploadAssetToS3Presigned } from "../../api/upload";
+import {
+  collectBusinessImageUrls,
+  formatApiImageUri,
+  getValidImageUrl,
+  logPlaceImageRenderDebug,
+} from "../../utils/imageUrl";
 
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
@@ -98,6 +105,7 @@ export default function ManageMyBusinessScreen() {
   const [selectedImageIndex, setSelectedImageIndex] = useState<number | null>(null);
   const [imageErrors, setImageErrors] = useState<{ [key: number]: boolean }>({});
   const [imageLoading, setImageLoading] = useState<{ [key: number]: boolean }>({});
+  const [uploadingImageTokens, setUploadingImageTokens] = useState<{ [token: string]: boolean }>({});
   const scrollViewRef = useRef<any>(null);
   
   // Message modal state
@@ -124,13 +132,25 @@ export default function ManageMyBusinessScreen() {
   const [pickerType, setPickerType] = useState<"startHour" | "startPeriod" | "endHour" | "endPeriod" | null>(null);
   const [pickerDay, setPickerDay] = useState<string>("");
   
-  // Generate hour options (1:00 to 12:00)
-  const hourOptions = Array.from({ length: 12 }, (_, i) => {
-    const hour = i + 1;
-    return `${hour.toString().padStart(2, "0")}:00`;
-  });
+  // Generate time options (01:00 to 12:45, 15-minute steps)
+  const hourOptions = React.useMemo(() => {
+    const minutes = ["00", "15", "30", "45"];
+    const out: string[] = [];
+    for (let h = 1; h <= 12; h++) {
+      for (const m of minutes) {
+        out.push(`${String(h).padStart(2, "0")}:${m}`);
+      }
+    }
+    return out;
+  }, []);
   
   const periodOptions = ["AM", "PM"];
+  
+  const formatPeriodLabel = (period: "AM" | "PM" | string): string => {
+    if (period === "AM") return t("am") || "AM";
+    if (period === "PM") return t("pm") || "PM";
+    return period;
+  };
   
   // Open picker modal
   const openPicker = (day: string, type: "startHour" | "startPeriod" | "endHour" | "endPeriod") => {
@@ -214,7 +234,7 @@ const parseOpeningHours = React.useCallback(
   // Format hours for display
   const formatHours = (hours: HourData): string => {
     if (!hours) return "";
-    return `${hours.startHour} ${hours.startPeriod} - ${hours.endHour} ${hours.endPeriod}`;
+    return `${hours.startHour} ${formatPeriodLabel(hours.startPeriod)} - ${hours.endHour} ${formatPeriodLabel(hours.endPeriod)}`;
   };
   
   // Check if business is currently open
@@ -289,44 +309,10 @@ const parseOpeningHours = React.useCallback(
         );
         setSocialLink(profileData.place.social_links || "");
         setAnnouncement(profileData.place.announcement || "");
-        // Load business images if available
-        // Use business_images_urls if available, otherwise fallback to main_image_url
-        const images: string[] = [];
-        
-        // Handle business_images_urls - check if it's an array, if not, try to parse it
-        let parsedBusinessImages: string[] = [];
-        if (profileData.place.business_images_urls) {
-          if (Array.isArray(profileData.place.business_images_urls)) {
-            parsedBusinessImages = profileData.place.business_images_urls;
-          } else if (typeof profileData.place.business_images_urls === 'string') {
-            // If it's a string, try to parse it as JSON (defensive)
-            try {
-              const parsed = JSON.parse(profileData.place.business_images_urls);
-              if (Array.isArray(parsed)) {
-                parsedBusinessImages = parsed;
-              } else {
-                console.warn("business_images_urls is a string but not a valid JSON array:", profileData.place.business_images_urls);
-              }
-            } catch (e) {
-              console.warn("Failed to parse business_images_urls as JSON:", profileData.place.business_images_urls, e);
-            }
-          } else {
-            console.warn("business_images_urls is not an array or string:", typeof profileData.place.business_images_urls, profileData.place.business_images_urls);
-          }
-        }
-        
-        if (parsedBusinessImages.length > 0) {
-          images.push(...parsedBusinessImages);
-        } else if (profileData.place.main_image_url) {
-          // Fallback to main_image_url for backward compatibility
-          images.push(profileData.place.main_image_url);
-        }
-        // Filter out duplicates, empty strings, null, and undefined
-        const uniqueImages = Array.from(new Set(
-          images
-            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
-            .map(img => img.trim())
-        ));
+        const uniqueImages = collectBusinessImageUrls(
+          profileData.place.business_images_urls,
+          profileData.place.main_image_url
+        );
         
         // Debug logging
         if (__DEV__) {
@@ -336,7 +322,7 @@ const parseOpeningHours = React.useCallback(
           console.log("Filtered unique images:", uniqueImages);
           console.log("API_BASE_URL:", API_BASE_URL);
           uniqueImages.forEach((img, idx) => {
-            const formatted = formatImageUri(img);
+            const formatted = formatApiImageUri(img);
             console.log(`Image ${idx}:`, {
               original: img,
               formatted: formatted,
@@ -480,14 +466,11 @@ const parseOpeningHours = React.useCallback(
           }
         }
         setEditingField(null);
-        const currentLanguage = i18n.language || "ar";
-        const successTitle = currentLanguage === "ar" ? "نجح" : currentLanguage === "he" ? "הצלחה" : "Success";
-        const successMessage = currentLanguage === "ar"
-          ? "تم التحديث بنجاح"
-          : currentLanguage === "he"
-          ? "עודכן בהצלחה"
-          : "Updated successfully";
-        showMessage("success", successTitle, successMessage);
+        showMessage(
+          "success",
+          t("success") || "Success",
+          t("updated_successfully") || "Updated successfully"
+        );
         return true;
       }
 
@@ -496,42 +479,56 @@ const parseOpeningHours = React.useCallback(
 
       setEditingField(null);
 
-      const currentLanguage = i18n.language || "ar";
-      const successTitle = currentLanguage === "ar" ? "نجح" : currentLanguage === "he" ? "הצלחה" : "Success";
-      const successMessage = currentLanguage === "ar"
-        ? "تم التحديث بنجاح"
-        : currentLanguage === "he"
-        ? "עודכן בהצלחה"
-        : "Updated successfully";
-      showMessage("success", successTitle, successMessage);
+      showMessage(
+        "success",
+        t("success") || "Success",
+        t("updated_successfully") || "Updated successfully"
+      );
       return true;
     } catch (error: any) {
       console.error("Error updating field:", error);
-      const currentLanguage = i18n.language || "ar";
-      const errorTitle = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
-      const errorMessage = error.message || (currentLanguage === "ar"
-        ? "فشل التحديث"
-        : currentLanguage === "he"
-        ? "העדכון נכשל"
-        : "Failed to update");
-      showMessage("error", errorTitle, errorMessage);
+      showMessage(
+        "error",
+        t("error") || "Error",
+        error.message || t("failed_to_update") || "Failed to update"
+      );
       return false;
     } finally {
       setUpdating(false);
     }
   }
 
+  /** Same sanitization as EditPlace submit: drop placeholders and invalid sentinels before PUT /admin/places */
+  function sanitizeBusinessImagesForApi(images: string[]): {
+    business_images_urls: string[] | null;
+    main_image_url: string | null;
+  } {
+    const cleaned = images
+      .filter(
+        (u) =>
+          typeof u === "string" &&
+          u.length > 0 &&
+          !u.startsWith("__uploading__")
+      )
+      .map((u) => getValidImageUrl(u))
+      .filter((u): u is string => u != null);
+    if (cleaned.length === 0) {
+      return { business_images_urls: null, main_image_url: null };
+    }
+    return {
+      business_images_urls: cleaned,
+      main_image_url: getValidImageUrl(cleaned[0]),
+    };
+  }
+
   // Handle image upload
   async function handleAddPhoto() {
     if (businessImages.length >= 20) {
-      const currentLanguage = i18n.language || "ar";
-      const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
-      const message = currentLanguage === "ar"
-        ? "الحد الأقصى 20 صورة مسموح"
-        : currentLanguage === "he"
-        ? "מקסימום 20 תמונות מותר"
-        : "Maximum 20 photos allowed";
-      showMessage("error", title, message);
+      showMessage(
+        "error",
+        t("error") || "Error",
+        t("max_photos_reached") || "Maximum 20 photos allowed"
+      );
       return;
     }
 
@@ -540,8 +537,10 @@ const parseOpeningHours = React.useCallback(
         mediaType: "photo",
         quality: 0.8,
         selectionLimit: 1,
+        includeBase64: true,
       },
       async (res) => {
+        if (__DEV__) console.log("[UPLOAD] picker response:", res);
         if (res.didCancel || res.errorCode) {
           return;
         }
@@ -549,52 +548,76 @@ const parseOpeningHours = React.useCallback(
         const asset = res.assets?.[0];
         if (!asset || !asset.uri) return;
 
-        // Show image immediately using local URI (instant feedback)
-        const localImageUri = asset.uri;
-        const tempImages = [...businessImages, localImageUri];
-        setBusinessImages(tempImages);
+        // Insert a placeholder token immediately; avoid rendering a broken intermediate Image
+        const placeholderToken = `__uploading__${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        setBusinessImages((prev) => [...prev, placeholderToken]);
+        setUploadingImageTokens((prev) => ({ ...prev, [placeholderToken]: true }));
         setUploadingImage(true);
 
         // Upload in background
         (async () => {
           try {
-            const formData = new FormData();
-            formData.append("file", {
-              uri: asset.uri,
-              name: asset.fileName || "upload.jpg",
-              type: asset.type || "image/jpeg",
-            } as any);
-
-            const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-              method: "POST",
-              headers: { "Content-Type": "multipart/form-data" },
-              body: formData,
-            });
-
-            if (!uploadRes.ok) {
-              throw new Error("Upload failed");
+            // Small defer to avoid immediate-select race from the picker
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            await new Promise<void>((resolve) => setTimeout(resolve, 150));
+            let fileUrl: string | null = null;
+            let lastError: any = null;
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              try {
+                fileUrl = await uploadAssetToS3Presigned({
+                  uri: asset.uri,
+                  fileName: asset.fileName,
+                  type: asset.type,
+                  base64: (asset as any).base64,
+                });
+                lastError = null;
+                break;
+              } catch (err: any) {
+                lastError = err;
+                const msg = err?.message || String(err);
+                if (attempt < 2 && /Network request failed/i.test(msg)) {
+                  await new Promise<void>((r) => setTimeout(r, 300));
+                  continue;
+                }
+                break;
+              }
+            }
+            if (lastError) {
+              throw lastError;
             }
 
-            const json = await uploadRes.json();
-            if (json.file_url) {
-              // Replace local URI with server URL
-              const finalImages = [...businessImages, json.file_url];
-              setBusinessImages(finalImages);
-              // Save to backend in background
-              saveBusinessImages(finalImages).catch((error) => {
-                console.error("Background save error:", error);
-                const currentLanguage = i18n.language || "ar";
-                const title = currentLanguage === "ar" ? "تحذير" : currentLanguage === "he" ? "אזהרה" : "Warning";
-                const message = currentLanguage === "ar"
-                  ? "تمت إضافة الصورة لكن فشل الحفظ. يرجى المحاولة مرة أخرى."
-                  : currentLanguage === "he"
-                  ? "התמונה נוספה אבל השמירה נכשלה. אנא נסה שוב."
-                  : "Image added but failed to save. Please try again.";
-                showMessage("error", title, message);
+            if (fileUrl) {
+              if (__DEV__) console.log("[UPLOAD] file_url:", fileUrl);
+              // Replace placeholder with final S3 URL (avoid stale state)
+              setBusinessImages((prev) => {
+                const next = prev.map((img) => (img === placeholderToken ? fileUrl : img));
+                // Save to backend in background
+                saveBusinessImages(next).catch((error) => {
+                  console.error("Background save error:", error);
+                  const currentLanguage = i18n.language || "ar";
+                  const title = currentLanguage === "ar" ? "تحذير" : currentLanguage === "he" ? "אזהרה" : "Warning";
+                  const message = currentLanguage === "ar"
+                    ? "تمت إضافة الصورة لكن فشل الحفظ. يرجى المحاولة مرة أخرى."
+                    : currentLanguage === "he"
+                    ? "התמונה נוספה אבל השמירה נכשלה. אנא נסה שוב."
+                    : "Image added but failed to save. Please try again.";
+                  showMessage("error", title, message);
+                });
+                return next;
+              });
+              setUploadingImageTokens((prev) => {
+                const next = { ...prev };
+                delete next[placeholderToken];
+                return next;
               });
             } else {
-              // Remove the local image if upload failed
-              setBusinessImages(businessImages);
+              // Remove the placeholder if upload failed
+              setBusinessImages((prev) => prev.filter((img) => img !== placeholderToken));
+              setUploadingImageTokens((prev) => {
+                const next = { ...prev };
+                delete next[placeholderToken];
+                return next;
+              });
               const currentLanguage = i18n.language || "ar";
               const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
               const message = currentLanguage === "ar"
@@ -606,8 +629,13 @@ const parseOpeningHours = React.useCallback(
             }
           } catch (e: any) {
             console.log("Upload error", e?.message || e);
-            // Remove the local image if upload failed
-            setBusinessImages(businessImages);
+            // Remove the placeholder if upload failed
+            setBusinessImages((prev) => prev.filter((img) => img !== placeholderToken));
+            setUploadingImageTokens((prev) => {
+              const next = { ...prev };
+              delete next[placeholderToken];
+              return next;
+            });
             const currentLanguage = i18n.language || "ar";
             const title = currentLanguage === "ar" ? "خطأ" : currentLanguage === "he" ? "שגיאה" : "Error";
             const message = currentLanguage === "ar"
@@ -629,18 +657,13 @@ const parseOpeningHours = React.useCallback(
     if (!place) return;
 
     try {
-      // Backend now fully supports business_images_urls field
+      const { business_images_urls, main_image_url } =
+        sanitizeBusinessImagesForApi(images);
       const updateData: any = {
-        business_images_urls: images.length > 0 ? images : null,
+        business_images_urls,
+        main_image_url,
       };
-      
-      // Also update main_image_url to first image for backward compatibility
-      if (images.length > 0) {
-        updateData.main_image_url = images[0];
-      } else {
-        updateData.main_image_url = null;
-      }
-      
+
       await updatePlace(place.id, updateData);
       
       // Never reload to prevent scroll reset - state is already updated
@@ -705,82 +728,10 @@ const parseOpeningHours = React.useCallback(
     return t(dayKey) || day;
   }
 
-  // Helper function to format image URI - ensure it's a valid URL
-  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
-  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
-  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
-  function formatImageUri(uri: string): string {
-    if (!uri || !uri.trim()) {
-      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
-      return "";
-    }
-    
-    const trimmedUri = uri.trim();
-    
-    try {
-      // If it's already a full URL with the correct base, return as is
-      if (trimmedUri.startsWith(API_BASE_URL)) {
-        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
-        return trimmedUri;
-      }
-      
-      // If it's already a full URL (http:// or https://), extract just the path
-      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
-        // Manually extract the path from the URL
-        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
-        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
-        if (urlMatch && urlMatch[1]) {
-          const path = urlMatch[1];
-          const formatted = `${API_BASE_URL}${path}`;
-          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
-          return formatted;
-        }
-        // If regex fails, try to find /uploads/ in the string
-        const uploadsIndex = trimmedUri.indexOf("/uploads/");
-        if (uploadsIndex !== -1) {
-          const path = trimmedUri.substring(uploadsIndex);
-          const formatted = `${API_BASE_URL}${path}`;
-          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
-          return formatted;
-        }
-        // If we can't extract path, try the original URL (might work if same network)
-        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
-        return trimmedUri;
-      }
-      
-      // If it's a relative path starting with /, prepend API_BASE_URL
-      if (trimmedUri.startsWith("/")) {
-        const formatted = `${API_BASE_URL}${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // If it doesn't start with /, assume it's a filename and add /uploads/
-      // This handles cases where backend might return just "filename.jpg"
-      if (!trimmedUri.includes("/")) {
-        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // Otherwise, try to prepend API_BASE_URL
-      const formatted = `${API_BASE_URL}/${trimmedUri}`;
-      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
-      return formatted;
-    } catch (error) {
-      // If URL parsing fails, try to construct a valid URL
-      console.warn("Error formatting image URI:", trimmedUri, error);
-      if (trimmedUri.startsWith("/")) {
-        return `${API_BASE_URL}${trimmedUri}`;
-      }
-      return `${API_BASE_URL}/uploads/${trimmedUri}`;
-    }
-  }
-
   // Handle image load error
   const handleImageError = (error: any, index: number) => {
     const originalUri = businessImages[index];
-    const formattedUri = formatImageUri(originalUri);
+    const formattedUri = formatApiImageUri(originalUri);
     console.warn(`❌ Image ${index} failed to load:`, {
       original: originalUri,
       formatted: formattedUri,
@@ -807,7 +758,7 @@ const parseOpeningHours = React.useCallback(
   // Handle image load success
   const handleImageLoad = (index: number) => {
     if (__DEV__) {
-      console.log(`✅ Image ${index} loaded successfully:`, formatImageUri(businessImages[index]));
+      console.log(`✅ Image ${index} loaded successfully:`, formatApiImageUri(businessImages[index]));
     }
     setImageLoading((prev) => ({ ...prev, [index]: false }));
     setImageErrors((prev) => {
@@ -820,7 +771,7 @@ const parseOpeningHours = React.useCallback(
   // Handle image load start
   const handleImageLoadStart = (index: number) => {
     if (__DEV__) {
-      console.log(`🔄 Image ${index} loading:`, formatImageUri(businessImages[index]));
+      console.log(`🔄 Image ${index} loading:`, formatApiImageUri(businessImages[index]));
     }
     setImageLoading((prev) => ({ ...prev, [index]: true }));
   };
@@ -1408,30 +1359,30 @@ const parseOpeningHours = React.useCallback(
             </Text>
           </View>
 
+          {/* Table Header */}
+          <View style={styles.hoursHeaderRow}>
+            <Text style={[styles.hoursHeaderCell, styles.hoursHeaderDay]}>
+              {t("day") || "Day"}
+            </Text>
+            <Text style={[styles.hoursHeaderCell, styles.hoursHeaderHours]}>
+              {t("hours") || "Hours"}
+            </Text>
+            <Text style={[styles.hoursHeaderCell, styles.hoursHeaderStatus]}>
+              {t("status") || "Status"}
+            </Text>
+          </View>
+
           {Object.entries(openingHours).map(([day, hours]) => {
             const isOpen = hours !== null;
             const currentlyOpen = isOpen && isCurrentlyOpen(day, hours);
             return (
               <View key={day} style={styles.hoursRow}>
-                <View style={styles.dayRow}>
-                  {isOpen && (
-                    <View style={styles.dayIndicators}>
-                      <View style={styles.dayDot} />
-                      <View style={styles.dayDot} />
-                      <View style={styles.dayDot} />
-                    </View>
-                  )}
-
-                  <Text style={styles.dayText}>{getDayName(day)}</Text>
-
-                  {currentlyOpen && (
-                    <View style={[styles.statusBadge, styles.statusOpen]}>
-                      <Text style={styles.statusText}>
-                        {t("open_now") || "Open now"}
-                      </Text>
-                    </View>
-                  )}
+                <View style={styles.hoursDayCol}>
+                  <Text style={styles.dayText} numberOfLines={1}>
+                    {getDayName(day)}
+                  </Text>
                 </View>
+
                 {editingField === "opening_hours" ? (
                   <View style={styles.hoursPickerContainer}>
                     {hours ? (
@@ -1451,7 +1402,7 @@ const parseOpeningHours = React.useCallback(
                             onPress={() => openPicker(day, "startPeriod")}
                           >
                             <Text style={styles.pickerButtonText} numberOfLines={1}>
-                              {hours.startPeriod}
+                              {formatPeriodLabel(hours.startPeriod)}
                             </Text>
                             <Ionicons name="chevron-down" size={12} color={DARK_TEAL} style={{ marginLeft: 2 }} />
                           </TouchableOpacity>
@@ -1470,7 +1421,7 @@ const parseOpeningHours = React.useCallback(
                             onPress={() => openPicker(day, "endPeriod")}
                           >
                             <Text style={styles.pickerButtonText} numberOfLines={1}>
-                              {hours.endPeriod}
+                              {formatPeriodLabel(hours.endPeriod)}
                             </Text>
                             <Ionicons name="chevron-down" size={12} color={DARK_TEAL} style={{ marginLeft: 2 }} />
                           </TouchableOpacity>
@@ -1508,10 +1459,34 @@ const parseOpeningHours = React.useCallback(
                     )}
                   </View>
                 ) : (
-                  <Text style={styles.hoursText}>
-                    {hours ? formatHours(hours) : t("closed") || "Closed"}
-                  </Text>
+                  <View style={styles.hoursValueCol}>
+                    <Text style={styles.hoursText} numberOfLines={1}>
+                      {hours ? formatHours(hours) : t("closed") || "Closed"}
+                    </Text>
+                  </View>
                 )}
+
+                <View style={styles.hoursStatusCol}>
+                  {currentlyOpen ? (
+                    <View style={[styles.statusBadge, styles.statusOpen]}>
+                      <Text style={styles.statusText}>
+                        {t("open_now") || "Open now"}
+                      </Text>
+                    </View>
+                  ) : isOpen ? (
+                    <View style={[styles.statusBadge, styles.statusClosed]}>
+                      <Text style={styles.statusText}>
+                        {t("open") || "Open"}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.statusBadge, styles.statusClosed]}>
+                      <Text style={styles.statusText}>
+                        {t("closed") || "Closed"}
+                      </Text>
+                    </View>
+                  )}
+                </View>
               </View>
             );
           })}
@@ -1597,16 +1572,50 @@ const parseOpeningHours = React.useCallback(
           </View>
 
           <View style={styles.photoGallery}>
+            {place &&
+              (() => {
+                const fromApi = collectBusinessImageUrls(
+                  place.business_images_urls,
+                  place.main_image_url
+                );
+                logPlaceImageRenderDebug(
+                  "ManageMyBusiness:gallery",
+                  place,
+                  fromApi
+                );
+                if (__DEV__) {
+                  console.log("[PlaceImageDebug ManageMyBusiness:businessImagesState]", {
+                    placeId: place.id,
+                    businessImagesState: businessImages,
+                    stateUrisForImage: businessImages.map((u) => formatApiImageUri(u)),
+                  });
+                }
+                return null;
+              })()}
             {/* Display existing photos */}
             {businessImages.map((imageUri, index) => {
               const hasError = imageErrors[index];
               const isLoading = imageLoading[index];
-              const formattedUri = formatImageUri(imageUri);
+              const isUploadingThis = !!uploadingImageTokens[imageUri];
+              const formattedUri = formatApiImageUri(imageUri);
               
               // Skip rendering if URI is invalid
-              if (!imageUri || !formattedUri) {
-                return null;
+              if (isUploadingThis) {
+                return (
+                  <View key={`image-uploading-${index}`} style={styles.photoItem}>
+                    <View style={styles.photoContainer}>
+                      <View style={[styles.photo, { backgroundColor: "rgba(255,255,255,0.08)", alignItems: "center", justifyContent: "center" }]}>
+                        <ActivityIndicator size="small" color="#fff" />
+                        <Text style={[styles.photoErrorText, { marginTop: 8, color: "#fff" }]}>
+                          {t("uploading") || "Uploading..."}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                );
               }
+
+              if (!imageUri || !formattedUri) return null;
               
               return (
                 <View key={`image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoItem}>
@@ -1698,7 +1707,7 @@ const parseOpeningHours = React.useCallback(
               <Ionicons name="close" size={32} color="#fff" />
             </TouchableOpacity>
             {selectedImageIndex !== null && businessImages[selectedImageIndex] && (() => {
-              const fullScreenUri = formatImageUri(businessImages[selectedImageIndex]);
+              const fullScreenUri = formatApiImageUri(businessImages[selectedImageIndex]);
               return (
                 <Image
                   source={{ uri: fullScreenUri }}
@@ -1978,15 +1987,38 @@ const styles = StyleSheet.create({
   },
   hoursRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#f0f0f0",
+    gap: 10,
   },
-  dayRow: {
+  hoursHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e8eef0",
+    gap: 10,
+  },
+  hoursHeaderCell: {
+    fontSize: 12,
+    color: "#3b4b4f",
+    fontWeight: "700",
+  },
+  hoursHeaderDay: { width: 82 },
+  hoursHeaderHours: { flex: 1 },
+  hoursHeaderStatus: { width: 92, textAlign: "right" },
+  hoursDayCol: {
+    width: 82,
+  },
+  hoursValueCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  hoursStatusCol: {
+    width: 92,
+    alignItems: "flex-end",
   },
   dayIndicators: {
     flexDirection: "row",
@@ -2007,15 +2039,17 @@ const styles = StyleSheet.create({
   hoursText: {
     fontSize: 14,
     color: "#000",
+    flexShrink: 1,
   },
   hoursPickerContainer: {
     flex: 1,
-    marginLeft: 12,
+    minWidth: 0,
   },
   pickerRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    flexWrap: "wrap",
   },
   pickerButton: {
     flex: 1,
@@ -2030,6 +2064,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     minHeight: 32,
     maxHeight: 32,
+    minWidth: 74,
   },
   pickerButtonPeriod: {
     width: 50,

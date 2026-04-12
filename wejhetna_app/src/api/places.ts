@@ -1,5 +1,6 @@
 // src/api/places.ts
 import { API_BASE_URL as BASE_URL } from "../../config";
+import { normalizePlaceImageFields } from "../utils/imageUrl";
 
 export type City = {
   id: number;
@@ -285,7 +286,8 @@ export async function createAdminPlace(data: any) {
 export async function fetchAllPlaces(): Promise<PlaceForMap[]> {
   const res = await fetch(`${BASE_URL}/admin/places`);
   if (!res.ok) throw new Error("Failed to fetch places");
-  return res.json();
+  const data: PlaceForMap[] = await res.json();
+  return data.map((p) => normalizePlaceImageFields(p));
 }
 
 // =======================

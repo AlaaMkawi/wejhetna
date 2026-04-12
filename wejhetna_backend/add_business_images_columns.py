@@ -19,10 +19,9 @@ except ImportError:
     try:
         from db import DATABASE_URL
     except ImportError:
-        # Fallback: try from environment or use default
-        DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql+psycopg2://postgres:123@localhost:5432/wejhetna_db"
+        DATABASE_URL = os.getenv("DATABASE_URL")
         if not DATABASE_URL:
-            print("❌ Error: Could not find DATABASE_URL. Please check database.py or db.py")
+            print("❌ Error: DATABASE_URL is not set. Please create a .env file or set an environment variable.")
             exit(1)
 
 def add_columns():

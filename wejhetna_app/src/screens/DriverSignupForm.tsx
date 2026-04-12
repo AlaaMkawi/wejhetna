@@ -15,6 +15,7 @@ import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "./MessageModal"; // 👈 pretty popup
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { API_BASE_URL } from "../../config";
+import { uploadAssetToS3Presigned } from "../api/upload";
 
 const MINT = "#9bd3d8";
 const DARK_TEAL = "#0f5b63";
@@ -169,59 +170,56 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
     setUrl: (url: string) => void,
     setUploading: (loading: boolean) => void
   ) => {
+    if (
+      uploadingDriverLicense ||
+      uploadingCarLicense ||
+      uploadingCarInsurance ||
+      uploadingCarPhoto1 ||
+      uploadingCarPhoto2
+    ) {
+      console.log("[UPLOAD] blocked: already uploading");
+      return;
+    }
     launchImageLibrary({ 
       mediaType: "photo",
       quality: 0.7, // Reduce image quality to save memory
       maxWidth: 1920, // Limit max width
       maxHeight: 1920, // Limit max height
+      includeBase64: true,
     }, async (res) => {
+      console.log("[UPLOAD] picker response:", res);
       if (res.didCancel || res.errorCode) {
-        console.log("User cancelled or error:", res.errorMessage);
+        console.log("[UPLOAD] picker cancelled/error:", res.errorCode, res.errorMessage);
         return;
       }
 
       const asset = res.assets?.[0];
-      if (!asset || !asset.uri) return;
+      if (!asset || !asset.uri) {
+        console.log("[UPLOAD] invalid picker asset:", asset);
+        showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: invalid picker asset");
+        return;
+      }
 
       setUploading(true);
       try {
+        console.log("[UPLOAD] selected asset uri:", asset.uri);
+        // Small defer to avoid immediate-select race
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => setTimeout(resolve, 150));
         const formData = new FormData();
         formData.append("file", {
           uri: asset.uri,
           name: asset.fileName || "upload.jpg",
           type: asset.type || "image/jpeg",
         } as any);
-
-        const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-          method: "POST",
-          headers: { "Content-Type": "multipart/form-data" },
-          body: formData,
+        const fileUrl = await uploadAssetToS3Presigned({
+          uri: asset.uri,
+          fileName: asset.fileName,
+          type: asset.type,
+          base64: (asset as any).base64,
         });
-
-        // Check if response is OK
-        if (!uploadRes.ok) {
-          const errorText = await uploadRes.text();
-          console.log("Upload failed:", uploadRes.status, errorText);
-          showModal("error", t("error") || "Error", t("upload_failed") || `Failed to upload image: ${uploadRes.status}`);
-          return;
-        }
-
-        const json = await uploadRes.json();
-        
-        // Validate response has file_url
-        if (json && json.file_url) {
-          // Ensure the URL uses the correct base URL (in case backend returns wrong one)
-          let finalUrl = json.file_url;
-          // If backend returned emulator URL but we're on physical device, fix it
-          if (finalUrl.includes("10.0.2.2") && !API_BASE_URL.includes("10.0.2.2")) {
-            finalUrl = finalUrl.replace("http://10.0.2.2:8000", API_BASE_URL);
-          }
-          setUrl(finalUrl);
-          console.log("Upload successful:", finalUrl);
-        } else {
-          console.log("Invalid upload response:", json);
-          showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: Invalid response");
-        }
+        setUrl(fileUrl);
+        console.log("[UPLOAD] success file_url:", fileUrl);
       } catch (e: any) {
         console.log("Upload error", e?.message || e);
         showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: " + (e?.message || "Unknown error"));

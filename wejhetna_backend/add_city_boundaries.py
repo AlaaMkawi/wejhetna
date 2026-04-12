@@ -24,8 +24,10 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    # Fallback אם אין .env
-    DATABASE_URL = "postgresql+psycopg2://postgres:123@localhost:5432/wejhetna_db"
+    raise RuntimeError(
+        "DATABASE_URL is not set. Create a .env file (or set an environment variable) "
+        "with your PostgreSQL connection string."
+    )
 from geoalchemy2 import Geography
 from sqlalchemy import func, cast
 from geoalchemy2 import Geometry

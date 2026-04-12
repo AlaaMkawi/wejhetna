@@ -34,7 +34,8 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
-import { API_BASE_URL } from "../../../config";
+//import { API_BASE_URL } from "../../../config";
+import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -390,79 +391,6 @@ export default function RegularHomeScreen({}: Props) {
 
   // Opening hours expand state
   const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
-
-  // Helper function to format image URI - ensure it's a valid URL
-  // This function extracts the path from any URL format and rebuilds it with the correct API_BASE_URL
-  // This is important because backend might return URLs with different hosts (e.g., 192.168.0.192 for physical device)
-  // but emulator needs 10.0.2.2, so we always rebuild with the frontend's API_BASE_URL
-  const formatImageUri = (uri: string): string => {
-    if (!uri || !uri.trim()) {
-      if (__DEV__) console.warn("formatImageUri: Empty URI provided");
-      return "";
-    }
-    
-    const trimmedUri = uri.trim();
-    
-    try {
-      // If it's already a full URL with the correct base, return as is
-      if (trimmedUri.startsWith(API_BASE_URL)) {
-        if (__DEV__) console.log("formatImageUri: Already correct base URL:", trimmedUri);
-        return trimmedUri;
-      }
-      
-      // If it's already a full URL (http:// or https://), extract just the path
-      if (trimmedUri.startsWith("http://") || trimmedUri.startsWith("https://")) {
-        // Manually extract the path from the URL
-        // Example: "http://192.168.0.192:8000/uploads/file.jpg" -> "/uploads/file.jpg"
-        const urlMatch = trimmedUri.match(/https?:\/\/[^/]+(\/.*)/);
-        if (urlMatch && urlMatch[1]) {
-          const path = urlMatch[1];
-          const formatted = `${API_BASE_URL}${path}`;
-          if (__DEV__) console.log("formatImageUri: Extracted path from URL:", trimmedUri, "->", formatted);
-          return formatted;
-        }
-        // If regex fails, try to find /uploads/ in the string
-        const uploadsIndex = trimmedUri.indexOf("/uploads/");
-        if (uploadsIndex !== -1) {
-          const path = trimmedUri.substring(uploadsIndex);
-          const formatted = `${API_BASE_URL}${path}`;
-          if (__DEV__) console.log("formatImageUri: Found /uploads/ in URL:", trimmedUri, "->", formatted);
-          return formatted;
-        }
-        // If we can't extract path, try the original URL (might work if same network)
-        if (__DEV__) console.warn("formatImageUri: Could not extract path, using original:", trimmedUri);
-        return trimmedUri;
-      }
-      
-      // If it's a relative path starting with /, prepend API_BASE_URL
-      if (trimmedUri.startsWith("/")) {
-        const formatted = `${API_BASE_URL}${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Relative path:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-      
-      // If it doesn't start with /, assume it's a filename and add /uploads/
-      // This handles cases where backend might return just "filename.jpg"
-      if (!trimmedUri.includes("/")) {
-        const formatted = `${API_BASE_URL}/uploads/${trimmedUri}`;
-        if (__DEV__) console.log("formatImageUri: Filename only:", trimmedUri, "->", formatted);
-        return formatted;
-      }
-   
-      
-      // Otherwise, try to prepend API_BASE_URL
-      const formatted = `${API_BASE_URL}/${trimmedUri}`;
-      if (__DEV__) console.log("formatImageUri: Fallback:", trimmedUri, "->", formatted);
-      return formatted;
-    } catch (error) {
-      // If URL parsing fails, try to construct a valid URL
-      console.warn("Error formatting image URI:", trimmedUri, error);
-      if (trimmedUri.startsWith("/")) {
-        return `${API_BASE_URL}${trimmedUri}`;
-      }
-      return `${API_BASE_URL}/uploads/${trimmedUri}`;
-    }
-  };
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -1710,13 +1638,10 @@ export default function RegularHomeScreen({}: Props) {
 
             {/* Image Gallery - Horizontal Scroll */}
             {(() => {
-              // Get all images: business_images_urls first, then main_image_url as fallback
-              const allImages: string[] = [];
-              if (selectedPlace.business_images_urls && selectedPlace.business_images_urls.length > 0) {
-                allImages.push(...selectedPlace.business_images_urls);
-              } else if (selectedPlace.main_image_url) {
-                allImages.push(selectedPlace.main_image_url);
-              }
+              const allImages = collectBusinessImageUrls(
+                selectedPlace.business_images_urls,
+                selectedPlace.main_image_url
+              );
 
               if (allImages.length > 0) {
                 return (
@@ -1727,35 +1652,37 @@ export default function RegularHomeScreen({}: Props) {
                       contentContainerStyle={styles.imageScrollContent}
                       style={styles.imageScrollView}
                     >
-                      {allImages.map((imageUri, index) => (
-                        <TouchableOpacity
-                          key={index}
-                          onPress={() => {
-                            setSelectedPhotoIndex(index);
-                            setPhotoModalVisible(true);
-                            // Scroll to selected photo after modal opens
-                            setTimeout(() => {
-                              photoScrollViewRef.current?.scrollTo({
-                                x: index * SCREEN_WIDTH,
-                                animated: false,
-                              });
-                            }, 100);
-                          }}
-                          style={styles.imageGridItem}
-                        >
-                          <Image 
-                            source={{ uri: imageUri }}
-                            style={styles.gridImage}
-                            resizeMode="cover"
-                          />
-                        </TouchableOpacity>
-                      ))}
+                      {allImages.map((imageUri, index) => {
+                        const uri = formatApiImageUri(imageUri);
+                        if (!uri) return null;
+                        return (
+                          <TouchableOpacity
+                            key={index}
+                            onPress={() => {
+                              setSelectedPhotoIndex(index);
+                              setPhotoModalVisible(true);
+                              setTimeout(() => {
+                                photoScrollViewRef.current?.scrollTo({
+                                  x: index * SCREEN_WIDTH,
+                                  animated: false,
+                                });
+                              }, 100);
+                            }}
+                            style={styles.imageGridItem}
+                          >
+                            <Image
+                              source={{ uri }}
+                              style={styles.gridImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        );
+                      })}
                     </ScrollView>
                   </View>
                 );
-              } else {
-                return null; // Don't show anything if no images
               }
+              return null;
             })()}
 
             {/* Details Section - Card Style */}
@@ -1946,38 +1873,10 @@ export default function RegularHomeScreen({}: Props) {
 
       {/* Photo Gallery Full Screen Modal */}
       {selectedPlace && (() => {
-        const allImages: string[] = [];
-        
-        // Handle business_images_urls - check if it's an array, if not, try to parse it
-        let businessImages: string[] = [];
-        if (selectedPlace.business_images_urls) {
-          if (Array.isArray(selectedPlace.business_images_urls)) {
-            businessImages = selectedPlace.business_images_urls;
-          } else if (typeof selectedPlace.business_images_urls === 'string') {
-            // If it's a string, try to parse it as JSON (defensive)
-            try {
-              const parsed = JSON.parse(selectedPlace.business_images_urls);
-              if (Array.isArray(parsed)) {
-                businessImages = parsed;
-              }
-            } catch (e) {
-              console.warn("Failed to parse business_images_urls as JSON in modal:", selectedPlace.business_images_urls, e);
-            }
-          }
-        }
-        
-        if (businessImages.length > 0) {
-          allImages.push(...businessImages);
-        } else if (selectedPlace.main_image_url) {
-          allImages.push(selectedPlace.main_image_url);
-        }
-
-        // Filter out duplicates, empty strings, null, and undefined
-        const uniqueImages = Array.from(new Set(
-          allImages
-            .filter(img => img != null && typeof img === 'string' && img.trim().length > 0)
-            .map(img => img.trim())
-        ));
+        const uniqueImages = collectBusinessImageUrls(
+          selectedPlace.business_images_urls,
+          selectedPlace.main_image_url
+        );
 
         if (uniqueImages.length === 0) return null;
 
@@ -2007,7 +1906,8 @@ export default function RegularHomeScreen({}: Props) {
                 style={styles.photoModalScrollView}
               >
                 {uniqueImages.map((imageUri, index) => {
-                  const formattedUri = formatImageUri(imageUri);
+                  const formattedUri = formatApiImageUri(imageUri);
+                  if (!formattedUri) return null;
                   return (
                     <View key={`modal-image-${index}-${imageUri?.substring(0, 20) || index}`} style={styles.photoModalImageContainer}>
                       <Image
@@ -2022,7 +1922,6 @@ export default function RegularHomeScreen({}: Props) {
                               error: e?.nativeEvent?.error || e
                             });
                           }
-                          // Don't show alert for every failed image, just log it
                         }}
                         onLoad={() => {
                           if (__DEV__) {
@@ -2034,7 +1933,6 @@ export default function RegularHomeScreen({}: Props) {
                   );
                 })}
               </ScrollView>
-              {/* Photo counter */}
               <View style={styles.photoCounter}>
                 <Text style={styles.photoCounterText}>
                   {selectedPhotoIndex + 1} / {uniqueImages.length}

@@ -1,2 +1,2 @@
 // config.ts
-export const API_BASE_URL = "http://10.71.124.109:8000";
+export const API_BASE_URL = "http://172.19.37.241:8000";

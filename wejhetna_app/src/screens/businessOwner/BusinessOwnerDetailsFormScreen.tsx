@@ -30,6 +30,7 @@ import {
   BusinessOwnerPlaceRequestPayload,
 } from "../../api/businessOwnerApi";
 import MessageModal from "../MessageModal";
+import { uploadAssetToS3Presigned } from "../../api/upload";
 
 const DARK_TEAL = "#0f5b63";
 import { API_BASE_URL } from "../../../config";
@@ -73,6 +74,7 @@ export default function BusinessOwnerDetailsFormScreen() {
   const [businessImagesUrls, setBusinessImagesUrls] = useState<string[]>([]);
   const [uploadingLicense, setUploadingLicense] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const [cities, setCities] = useState<City[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -94,6 +96,8 @@ export default function BusinessOwnerDetailsFormScreen() {
   const [modalType, setModalType] = useState<"error" | "success">("error");
   const [modalTitle, setModalTitle] = useState("");
   const [modalMessage, setModalMessage] = useState("");
+
+  const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   const showModal = (
     type: "error" | "success",
@@ -216,43 +220,98 @@ export default function BusinessOwnerDetailsFormScreen() {
     setUrl: (url: string) => void,
     setUploading: (loading: boolean) => void
   ) => {
+    // Prevent double-taps/races between press and picker callback
+    if (uploadingLicense || uploadingImages) {
+      console.log("[UPLOAD] blocked: already uploading");
+      return;
+    }
+    setUploadError(null);
+    console.log("[UPLOAD] started");
     launchImageLibrary({ 
       mediaType: "photo",
       quality: 0.7,
       maxWidth: 1920,
       maxHeight: 1920,
+      includeBase64: true,
     }, async (res) => {
+      console.log("[UPLOAD] picker response:", res);
+      if (!res) {
+        const msg = "Picker returned empty response";
+        console.log("[UPLOAD] error state set (picker):", msg);
+        setUploadError(msg);
+        return;
+      }
       if (res.didCancel || res.errorCode) {
-        console.log("User cancelled or error:", res.errorMessage);
+        console.log("[UPLOAD] picker cancelled/error:", res.errorCode, res.errorMessage);
         return;
       }
 
-      const asset = res.assets?.[0];
-      if (!asset || !asset.uri) return;
+      if (!Array.isArray(res.assets) || res.assets.length === 0) {
+        const msg = "Picker returned no assets";
+        console.log("[UPLOAD] error state set (picker):", msg);
+        setUploadError(msg);
+        return;
+      }
+
+      const asset = res.assets[0];
+      if (!asset || !asset.uri) {
+        const msg = "Picker returned no asset URI";
+        console.log("[UPLOAD] error state set (picker):", msg);
+        setUploadError(msg);
+        return;
+      }
 
       setUploading(true);
       try {
-        const formData = new FormData();
-        formData.append("file", {
-          uri: asset.uri,
-          name: asset.fileName || "upload.jpg",
-          type: asset.type || "image/jpeg",
-        } as any);
+        console.log("[UPLOAD] selected asset uri:", asset.uri);
+        // Small defer to let the picker/asset URI settle (fixes immediate-select race)
+        await wait(0);
+        await wait(150);
+        let lastError: any = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            console.log("[UPLOAD] presign+put started (attempt):", attempt);
+            const fileUrl = await uploadAssetToS3Presigned({
+              uri: asset.uri,
+              fileName: asset.fileName,
+              type: asset.type,
+              base64: (asset as any).base64,
+            });
+            console.log("[UPLOAD] file_url:", fileUrl);
+            console.log("[UPLOAD] state updated with file_url");
+            setUrl(fileUrl);
+            lastError = null;
+            break;
+          } catch (err: any) {
+            lastError = err;
+            const msg = err?.message || String(err);
+            console.log("[UPLOAD] attempt failed:", attempt, msg);
+            // Retry only for the common fast-pick fetch failure
+            if (attempt < 2 && /Network request failed/i.test(msg)) {
+              await wait(300);
+              continue;
+            }
+            break;
+          }
+        }
 
-        const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-          method: "POST",
-          headers: { "Content-Type": "multipart/form-data" },
-          body: formData,
-        });
-        const json = await uploadRes.json();
-        if (json.file_url) {
-          setUrl(json.file_url);
-        } else {
-          Alert.alert("Error", "Failed to upload image");
+        if (lastError) {
+          const msg = lastError?.message || String(lastError);
+          console.log("[UPLOAD] error state set (final):", msg);
+          setUploadError(msg);
+          Alert.alert(
+            t("error") || "Error",
+            `${t("upload_failed") || "Upload failed"}: ${msg}`
+          );
         }
       } catch (e: any) {
-        console.log("Upload error", e?.message || e);
-        Alert.alert("Error", "Failed to upload image: " + (e?.message || "Unknown error"));
+        const msg = e?.message || String(e);
+        console.log("[UPLOAD] error state set (exception):", msg);
+        setUploadError(msg);
+        Alert.alert(
+          t("error") || "Error",
+          `${t("upload_failed") || "Upload failed"}: ${e?.message || (t("unknown_error") || "Unknown error")}`
+        );
       } finally {
         setUploading(false);
       }
@@ -264,42 +323,96 @@ export default function BusinessOwnerDetailsFormScreen() {
   };
 
   const handleUploadBusinessImage = () => {
+    if (uploadingImages || uploadingLicense) {
+      console.log("[UPLOAD] blocked: already uploading");
+      return;
+    }
+    setUploadError(null);
+    console.log("[UPLOAD] started (business image)");
     launchImageLibrary({ 
       mediaType: "photo",
       quality: 0.7,
       maxWidth: 1920,
       maxHeight: 1920,
+      includeBase64: true,
     }, async (res) => {
+      console.log("[UPLOAD] picker response:", res);
+      if (!res) {
+        const msg = "Picker returned empty response";
+        console.log("[UPLOAD] error state set (picker):", msg);
+        setUploadError(msg);
+        return;
+      }
       if (res.didCancel || res.errorCode) {
+        console.log("[UPLOAD] picker cancelled/error:", res.errorCode, res.errorMessage);
         return;
       }
 
-      const asset = res.assets?.[0];
-      if (!asset || !asset.uri) return;
+      if (!Array.isArray(res.assets) || res.assets.length === 0) {
+        const msg = "Picker returned no assets";
+        console.log("[UPLOAD] error state set (picker):", msg);
+        setUploadError(msg);
+        return;
+      }
+
+      const asset = res.assets[0];
+      if (!asset || !asset.uri) {
+        const msg = "Picker returned no asset URI";
+        console.log("[UPLOAD] error state set (picker):", msg);
+        setUploadError(msg);
+        return;
+      }
 
       setUploadingImages(true);
       try {
-        const formData = new FormData();
-        formData.append("file", {
-          uri: asset.uri,
-          name: asset.fileName || "upload.jpg",
-          type: asset.type || "image/jpeg",
-        } as any);
+        console.log("[UPLOAD] selected asset uri:", asset.uri);
+        // Small defer to let the picker/asset URI settle (fixes immediate-select race)
+        await wait(0);
+        await wait(150);
+        let lastError: any = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            console.log("[UPLOAD] presign+put started (attempt):", attempt);
+            const fileUrl = await uploadAssetToS3Presigned({
+              uri: asset.uri,
+              fileName: asset.fileName,
+              type: asset.type,
+              base64: (asset as any).base64,
+            });
+            console.log("[UPLOAD] file_url:", fileUrl);
+            console.log("[UPLOAD] state updated with file_url");
+            setBusinessImagesUrls((prev) => [...prev, fileUrl]);
+            lastError = null;
+            break;
+          } catch (err: any) {
+            lastError = err;
+            const msg = err?.message || String(err);
+            console.log("[UPLOAD] attempt failed:", attempt, msg);
+            if (attempt < 2 && /Network request failed/i.test(msg)) {
+              await wait(300);
+              continue;
+            }
+            break;
+          }
+        }
 
-        const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-          method: "POST",
-          headers: { "Content-Type": "multipart/form-data" },
-          body: formData,
-        });
-        const json = await uploadRes.json();
-        if (json.file_url) {
-          setBusinessImagesUrls([...businessImagesUrls, json.file_url]);
-        } else {
-          Alert.alert("Error", "Failed to upload image");
+        if (lastError) {
+          const msg = lastError?.message || String(lastError);
+          console.log("[UPLOAD] error state set (final):", msg);
+          setUploadError(msg);
+          Alert.alert(
+            t("error") || "Error",
+            `${t("upload_failed") || "Upload failed"}: ${msg}`
+          );
         }
       } catch (e: any) {
-        console.log("Upload error", e?.message || e);
-        Alert.alert("Error", "Failed to upload image: " + (e?.message || "Unknown error"));
+        const msg = e?.message || String(e);
+        console.log("[UPLOAD] error state set (exception):", msg);
+        setUploadError(msg);
+        Alert.alert(
+          t("error") || "Error",
+          `${t("upload_failed") || "Upload failed"}: ${e?.message || (t("unknown_error") || "Unknown error")}`
+        );
       } finally {
         setUploadingImages(false);
       }
@@ -307,7 +420,7 @@ export default function BusinessOwnerDetailsFormScreen() {
   };
 
   const handleRemoveBusinessImage = (index: number) => {
-    setBusinessImagesUrls(businessImagesUrls.filter((_, i) => i !== index));
+    setBusinessImagesUrls((prev) => prev.filter((_, i) => i !== index));
   };
 
   const hasPhone = phone.length > 0;
@@ -328,42 +441,46 @@ export default function BusinessOwnerDetailsFormScreen() {
     isCategoryValid &&
     isPhoneValid;
 
-  const canSubmit = isFormValid && !submitting;
+  const canSubmit = isFormValid && !submitting && !uploadingLicense && !uploadingImages;
 
   async function handleSubmit() {
+    if (uploadingLicense || uploadingImages) {
+      Alert.alert(t("error") || "Error", t("please_wait_for_upload") || "Please wait for the upload to finish");
+      return;
+    }
     if (!isNameValid) {
-      Alert.alert("Error", "Business name (English) is required");
+      Alert.alert(t("error") || "Error", t("business_name_english_required") || "Business name (English) is required");
       return;
     }
     if (!isNameArValid) {
-      Alert.alert("Error", "Business name (Arabic) is required");
+      Alert.alert(t("error") || "Error", t("business_name_arabic_required") || "Business name (Arabic) is required");
       return;
     }
     if (!isNameHeValid) {
-      Alert.alert("Error", "Business name (Hebrew) is required");
+      Alert.alert(t("error") || "Error", t("business_name_hebrew_required") || "Business name (Hebrew) is required");
       return;
     }
 
     if (!isCityValid) {
-      Alert.alert("Error", "Please select a city");
+      Alert.alert(t("error") || "Error", t("please_select_city") || "Please select a city");
       return;
     }
 
     if (!isCategoryValid) {
-      Alert.alert("Error", "Please select a category");
+      Alert.alert(t("error") || "Error", t("please_select_category") || "Please select a category");
       return;
     }
 
     if (!isPhoneValid) {
       Alert.alert(
-        "Error",
-        "Phone number (if provided) must be 9 or 10 digits"
+        t("error") || "Error",
+        t("phone_must_be_9_or_10_digits") || "Phone number (if provided) must be 9 or 10 digits"
       );
       return;
     }
 
     if (!lat || !lon) {
-      Alert.alert("Error", "Location is required");
+      Alert.alert(t("error") || "Error", t("location_required") || "Location is required");
       return;
     }
 
@@ -694,6 +811,7 @@ export default function BusinessOwnerDetailsFormScreen() {
                       source={{ uri: businessLicenseUrl }} 
                       style={styles.imagePreview}
                       resizeMode="cover"
+                      onLoad={() => console.log("[PREVIEW] businessLicenseUrl:", businessLicenseUrl)}
                     />
                     <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
                   </View>
@@ -732,6 +850,7 @@ export default function BusinessOwnerDetailsFormScreen() {
                       source={{ uri: url }} 
                       style={styles.businessImage}
                       resizeMode="cover"
+                      onLoad={() => console.log("[PREVIEW] businessImagesUrls url:", url)}
                     />
                     <TouchableOpacity
                       style={styles.removeImageButton}

@@ -32,6 +32,8 @@ import {
 } from "../api/places";
 
 import { API_BASE_URL } from "../../config";
+import { uploadAssetToS3Presigned } from "../api/upload";
+import { getValidImageUrl, formatApiImageUri } from "../utils/imageUrl";
 
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
@@ -111,7 +113,7 @@ export default function EditPlaceScreen() {
         setPhone(foundPlace.phone || "");
         setOpeningHours(foundPlace.opening_hours || "");
         setSocialLinks(foundPlace.social_links || "");
-        setMainImageUrl(foundPlace.main_image_url || "");
+        setMainImageUrl(getValidImageUrl(foundPlace.main_image_url) ?? "");
       } catch (error: any) {
         Alert.alert(
           t("error") || "שגיאה",
@@ -187,40 +189,38 @@ export default function EditPlaceScreen() {
   }
 
   async function handleUploadImage() {
+    if (uploadingImage) return;
     launchImageLibrary(
       {
         mediaType: "photo",
         quality: 0.8,
         selectionLimit: 1,
+        includeBase64: true,
       },
       async (res) => {
+        console.log("[UPLOAD] picker response:", res);
         if (res.didCancel || res.errorCode) {
           return;
         }
 
         const asset = res.assets?.[0];
-        if (!asset || !asset.uri) return;
+        if (!asset || !asset.uri) {
+          Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
+          return;
+        }
 
         setUploadingImage(true);
         try {
-          const formData = new FormData();
-          formData.append("file", {
+          // Small defer to avoid immediate-select race
+          await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
+          await new Promise<void>((resolve) => setTimeout(() => resolve(), 150));
+          const fileUrl = await uploadAssetToS3Presigned({
             uri: asset.uri,
-            name: asset.fileName || "upload.jpg",
-            type: asset.type || "image/jpeg",
-          } as any);
-
-          const uploadRes = await fetch(`${API_BASE_URL}/files/upload`, {
-            method: "POST",
-            headers: { "Content-Type": "multipart/form-data" },
-            body: formData,
+            fileName: asset.fileName,
+            type: asset.type,
+            base64: (asset as any).base64,
           });
-          const json = await uploadRes.json();
-          if (json.file_url) {
-            setMainImageUrl(json.file_url);
-          } else {
-            Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
-          }
+          setMainImageUrl(fileUrl);
         } catch (e: any) {
           console.log("Upload error", e?.message || e);
           Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
@@ -270,7 +270,7 @@ export default function EditPlaceScreen() {
         description: description.trim() ? description.trim() : null,
         phone: hasPhone && phone.trim() ? phone.trim() : null,
         opening_hours: openingHours.trim() ? openingHours.trim() : null,
-        main_image_url: mainImageUrl && mainImageUrl.trim() ? mainImageUrl.trim() : null,
+        main_image_url: getValidImageUrl(mainImageUrl),
         social_links: socialLinks.trim() ? socialLinks.trim() : null,
       };
 
@@ -346,6 +346,8 @@ export default function EditPlaceScreen() {
   if (!place) {
     return null;
   }
+
+  const mainImagePreviewUri = mainImageUrl ? formatApiImageUri(mainImageUrl) : "";
 
   return (
     <View style={styles.wrapper}>
@@ -538,10 +540,10 @@ export default function EditPlaceScreen() {
               >
                 {uploadingImage ? (
                   <ActivityIndicator color={DARK_TEAL} />
-                ) : mainImageUrl ? (
+                ) : mainImagePreviewUri ? (
                   <View style={styles.imagePreviewContainer}>
                     <Image 
-                      source={{ uri: mainImageUrl }} 
+                      source={{ uri: mainImagePreviewUri }} 
                       style={styles.imagePreview}
                       resizeMode="cover"
                     />

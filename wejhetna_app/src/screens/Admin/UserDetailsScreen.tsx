@@ -17,6 +17,7 @@ import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import { API_BASE_URL } from "../../../config";
+import { formatApiImageUri } from "../../utils/imageUrl";
 
 const DARK_TEAL = "#0f5b63";
 
@@ -420,20 +421,21 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
     }
 
     const place = businessData.place;
+    const mainImageUri = formatApiImageUri(place.main_image_url);
 
     return (
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t("business_info") || "Business Information"}</Text>
         
-        {place.main_image_url && (
+        {mainImageUri ? (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("main_image") || "Main Image"}</Text>
             <Image
-              source={{ uri: place.main_image_url }}
+              source={{ uri: mainImageUri }}
               style={styles.documentImage}
             />
           </View>
-        )}
+        ) : null}
 
         <View style={styles.infoCard}>
           <Text style={styles.infoLabel}>{t("name") || "Name"}</Text>

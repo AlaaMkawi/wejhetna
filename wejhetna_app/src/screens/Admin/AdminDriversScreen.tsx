@@ -59,12 +59,12 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
       const res = await fetch(`${API_BASE_URL}/admin/drivers/pending`);
       const json = await res.json();
       if (!res.ok) {
-        setError(json.detail || "Failed to load drivers");
+        setError(json.detail || t("failed_to_load_drivers") || "Failed to load drivers");
       } else {
         setDrivers(json);
       }
     } catch (e: any) {
-      setError("Network error: " + e.message);
+      setError(`${t("network_error") || "Network error"}: ${e.message}`);
     } finally {
       setLoading(false);
     }
