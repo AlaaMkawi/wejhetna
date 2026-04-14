@@ -71,6 +71,73 @@ export function minDistanceToPolylineMeters(
   return min;
 }
 
+export type SnapToRoutePointResult = {
+  /** meters */
+  distanceMeters: number;
+  /** nearest point on the polyline */
+  point: { lat: number; lon: number };
+  /** index of segment start */
+  segmentIndex: number;
+  /** 0..1 interpolation along segment */
+  t: number;
+};
+
+/**
+ * Finds the nearest point on a route polyline to (lat, lon) using planar projection.
+ * Useful for simple map-matching/snapping of the *displayed* user dot to the route.
+ */
+export function snapToPolylinePoint(
+  lat: number,
+  lon: number,
+  coords: RouteLineStringCoords
+): SnapToRoutePointResult | null {
+  if (coords.length < 2) return null;
+
+  let bestDist = Infinity;
+  let bestSeg = 0;
+  let bestT = 0;
+
+  for (let i = 0; i < coords.length - 1; i++) {
+    const [lon1, lat1] = coords[i];
+    const [lon2, lat2] = coords[i + 1];
+    const refLat = (lat1 + lat2 + lat) / 3;
+    const mPerDegLat = 111320;
+    const mPerDegLon = 111320 * Math.cos((refLat * Math.PI) / 180);
+    const ax = 0;
+    const ay = 0;
+    const bx = (lon2 - lon1) * mPerDegLon;
+    const by = (lat2 - lat1) * mPerDegLat;
+    const px = (lon - lon1) * mPerDegLon;
+    const py = (lat - lat1) * mPerDegLat;
+    const abx = bx - ax;
+    const aby = by - ay;
+    const apx = px - ax;
+    const apy = py - ay;
+    const ab2 = abx * abx + aby * aby;
+    const t = ab2 < 1e-6 ? 0 : Math.max(0, Math.min(1, (apx * abx + apy * aby) / ab2));
+    const qx = ax + t * abx;
+    const qy = ay + t * aby;
+    const d = Math.hypot(px - qx, py - qy);
+    if (d < bestDist) {
+      bestDist = d;
+      bestSeg = i;
+      bestT = t;
+    }
+  }
+
+  const [lonA, latA] = coords[bestSeg];
+  const [lonB, latB] = coords[bestSeg + 1];
+  const snapLon = lonA + bestT * (lonB - lonA);
+  const snapLat = latA + bestT * (latB - latA);
+
+  return {
+    distanceMeters: bestDist,
+    point: { lat: snapLat, lon: snapLon },
+    segmentIndex: bestSeg,
+    t: bestT,
+  };
+}
+
 export type SnapResult = {
   trimmed: RouteLineStringCoords;
   /** Meters remaining along trimmed path (sum of segment lengths). */

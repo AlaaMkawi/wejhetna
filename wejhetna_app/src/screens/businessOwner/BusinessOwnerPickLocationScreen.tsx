@@ -16,7 +16,7 @@ import Ionicons from "react-native-vector-icons/Ionicons";
 import { RootStackParamList } from "../../navigation/types";
 import { checkNearbyForOwner } from "../../api/businessOwnerApi";
 import { checkLocationInServiceCities } from "../../api/places";
-import Geolocation from "@react-native-community/geolocation";
+import { NativeGeolocation as Geolocation } from "../../utils/nativeGeolocation";
 
 const DARK_TEAL = "#0f5b63";
 

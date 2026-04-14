@@ -42,6 +42,7 @@ export async function openDrivingRoutePreview({
 
   try {
     const permissionOk = await ensureForegroundLocationForNavigation();
+    console.log("[GPS][routePreview] permissionOk", permissionOk);
     if (!permissionOk) {
       Alert.alert(
         t("location_required_title"),
@@ -51,9 +52,14 @@ export async function openDrivingRoutePreview({
     }
 
     const freshLocation = await getCurrentPositionForRoute();
+    console.log("[GPS][routePreview] freshLocation", freshLocation);
     setUserLocation?.(freshLocation);
 
+    console.log("[GPS][routePreview] boundaryCheck start", {
+      destination: { lat: destination.lat, lon: destination.lon },
+    });
     const boundaryCheck = await checkLocationInServiceCities(destination.lat, destination.lon);
+    console.log("[GPS][routePreview] boundaryCheck result", boundaryCheck);
     if (!boundaryCheck.is_within) {
       Alert.alert(
         t("location_outside_service_area"),
@@ -62,7 +68,16 @@ export async function openDrivingRoutePreview({
       return;
     }
 
+    console.log("[GPS][routePreview] osrm start", {
+      origin: freshLocation,
+      destination: { lat: destination.lat, lon: destination.lon },
+    });
     const osrm = await fetchOsrmDrivingRoute(freshLocation, destination);
+    console.log("[GPS][routePreview] osrm ok", {
+      distanceMeters: osrm.distanceMeters,
+      durationSeconds: osrm.durationSeconds,
+      coords: osrm.coordinates?.length,
+    });
 
     const routeInfoData = {
       distance: osrm.distanceMeters,
@@ -73,6 +88,11 @@ export async function openDrivingRoutePreview({
 
     const routeCoords = lineStringToFeatureCollection(osrm.coordinates);
 
+    console.log("[GPS][routePreview] navigate RouteDetails", {
+      userLocation: freshLocation,
+      destination: { lat: destination.lat, lon: destination.lon },
+      navigationPhase: "preview",
+    });
     navigation.navigate("RouteDetails", {
       routeInfo: routeInfoData,
       destination,
@@ -83,6 +103,7 @@ export async function openDrivingRoutePreview({
   } catch (error: unknown) {
     const err = error as { code?: number; message?: string };
     console.error("Route error:", err?.message || String(error));
+    console.log("[GPS][routePreview] error details", { code: err?.code, message: err?.message });
     const code = err?.code;
     if (code === 1) {
       Alert.alert(t("location_required_title"), t("location_required_for_navigation"));
