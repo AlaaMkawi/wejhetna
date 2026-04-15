@@ -1,0 +1,16 @@
+{
+  "files.exclude": {
+    "**/node_modules": true
+  },
+  "search.exclude": {
+    "**/node_modules": true
+  },
+  "java.import.exclusions": [
+    "**/node_modules/**",
+    "**/android/build/**",
+    "**/ios/Pods/**"
+  ],
+  "files.watcherExclude": {
+    "**/node_modules/**": true
+  }
+}

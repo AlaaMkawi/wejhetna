@@ -9,6 +9,8 @@ from sqlalchemy import (
     Boolean,
     cast,
     Float,
+    text,
+    Index,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, column_property
@@ -53,6 +55,13 @@ class OwnerPlaceRequestStatus(str, enum.Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
+
+class AdvertisementStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 # ========== TABLES ==========
 
 class User(Base):
@@ -81,6 +90,7 @@ class User(Base):
     # relationships
     driver_profile = relationship("DriverProfile", back_populates="user", uselist=False)
     saved_places = relationship("SavedPlace", back_populates="user")
+    advertisements = relationship("Advertisement", back_populates="user")
 
 
 class DriverProfile(Base):
@@ -203,6 +213,7 @@ class City(Base):
 
     # קשר 1–ל־הרבה: לעיר אחת יש הרבה PLACES
     places = relationship("Place", back_populates="city")
+    advertisements = relationship("Advertisement", back_populates="city")
 
 class Category(Base):
     __tablename__ = "categories"
@@ -226,6 +237,8 @@ class Category(Base):
 
     # קשר 1–ל־הרבה: קטגוריה אחת → הרבה Places
     places = relationship("Place", back_populates="category")
+    advertisements = relationship("Advertisement", back_populates="category")
+
 class Place(Base):
     __tablename__ = "places"
 
@@ -358,6 +371,39 @@ class BusinessOwnerPlaceRequest(Base):
     city = relationship("City")
     category = relationship("Category")
     reviewed_by_admin = relationship("User", foreign_keys=[reviewed_by_admin_id])
+
+
+class Advertisement(Base):
+    __tablename__ = "advertisements"
+    __table_args__ = (
+        Index("idx_advertisements_status", "status"),
+        Index("idx_advertisements_city_id", "city_id"),
+        Index("idx_advertisements_category_id", "category_id"),
+        Index("idx_advertisements_expires_at", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    image_url = Column(Text, nullable=False)
+    image_key = Column(String, nullable=False)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
+    city_id = Column(Integer, ForeignKey("cities.id"), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(
+        Enum(AdvertisementStatus),
+        nullable=False,
+        default=AdvertisementStatus.PENDING,
+    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("NOW() + INTERVAL '7 days'"),
+    )
+
+    user = relationship("User", back_populates="advertisements")
+    category = relationship("Category", back_populates="advertisements")
+    city = relationship("City", back_populates="advertisements")
 
 
 class EmailVerification(Base):

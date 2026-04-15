@@ -14,9 +14,15 @@ Future integration points (not wired here):
 - Elasticsearch: instantiate the client inside the task or a small helper used only from tasks.
 """
 import os
+import sys
+from pathlib import Path
+
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from celery import Celery
-from celery.signals import task_failure, task_prerun, worker_ready
+from celery.signals import task_failure, task_postrun, task_prerun, worker_ready
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -68,5 +74,18 @@ def _log_task_failure(sender=None, task_id=None, exception=None, **kwargs) -> No
     name = getattr(sender, "name", repr(sender)) if sender is not None else "?"
     print(
         f"[CELERY] task_failure: id={task_id!r} name={name!r} exception={exception!r}"
+    )
+
+
+@task_postrun.connect
+def _log_task_postrun(
+    sender=None, task_id=None, task=None, state=None, retval=None, **kwargs
+) -> None:
+    """Email task completion line (avoid spamming logs for every periodic/internal task)."""
+    name = getattr(task, "name", None) or getattr(sender, "name", repr(sender))
+    if name != "tasks.send_email":
+        return
+    print(
+        f"[CELERY] task_postrun (email): id={task_id!r} name={name!r} state={state!r}"
     )
 

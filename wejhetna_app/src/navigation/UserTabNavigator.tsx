@@ -18,9 +18,15 @@ import Animated, {
 import RegularHomeScreen from '../screens/RegularAccount/RegularHomeScreen';
 import DriverHomeScreen from '../screens/DriverAccount/DriverHomeScreen';
 import BusinessOwnerHomeScreen from '../screens/businessOwner/BusinessOwnerHomeScreen';
+import AdvertisementsScreen from '../screens/AdvertisementsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import ManageMyBusinessScreen from '../screens/businessOwner/ManageMyBusinessScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { requestForegroundLocationPermission } from '../utils/locationPermission';
+import {
+  shouldRunLoginLocationPrompt,
+  markLoginLocationPromptStarted,
+} from '../utils/locationSession';
 
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
@@ -45,6 +51,7 @@ const ICONS_MAP: { [key: string]: { name: string; color: string } } = {
   Home: { name: 'home', color: HOME_ICON_COLOR },
   Search: { name: 'search', color: SEARCH_ICON_COLOR },
   ManageBusiness: { name: 'business', color: HOME_ICON_COLOR },
+  AdvertisementsTab: { name: 'megaphone', color: HOME_ICON_COLOR },
   Profile: { name: 'person', color: PROFILE_ICON_COLOR },
 };
 
@@ -140,6 +147,9 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
             displayIconName = focused ? 'person' : 'person-outline';
           } else if (name === 'ManageBusiness') {
             displayIconName = focused ? 'business' : 'business-outline';
+          } else if (iconName.endsWith('-outline')) {
+            // Prevent invalid names like "xxx-outline-outline" which show a ? icon.
+            displayIconName = iconName;
           }
 
           return (
@@ -199,6 +209,14 @@ export default function UserTabNavigator() {
     loadAndSaveUserData();
   }, []);
 
+  React.useEffect(() => {
+    if (!shouldRunLoginLocationPrompt()) {
+      return;
+    }
+    markLoginLocationPromptStarted();
+    requestForegroundLocationPermission().catch(() => {});
+  }, []);
+
   // Determine which home screen to use based on role
   const HomeScreenComponent = React.useMemo(() => {
     if (loading) return RegularHomeScreen; // Default while loading
@@ -233,6 +251,10 @@ export default function UserTabNavigator() {
         <Tab.Screen
           name="Search"
           component={RegularHomeScreen}
+        />
+        <Tab.Screen
+          name="AdvertisementsTab"
+          component={AdvertisementsScreen}
         />
         <Tab.Screen
           name="Profile"
@@ -272,6 +294,10 @@ export default function UserTabNavigator() {
           initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
         />
       )}
+      <Tab.Screen
+        name="AdvertisementsTab"
+        component={AdvertisementsScreen}
+      />
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}

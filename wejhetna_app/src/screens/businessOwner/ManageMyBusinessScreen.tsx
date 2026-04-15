@@ -22,6 +22,12 @@ import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from "react-i18next";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "react-native-vector-icons/Ionicons";
+import {
+  isOpenNowFromRanges,
+  DayName,
+  parseOpeningHoursToSlotMap,
+  formatHourSlotForStorage,
+} from "../../utils/openingHours";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { RootStackParamList } from "../../navigation/types";
@@ -194,42 +200,33 @@ export default function ManageMyBusinessScreen() {
     return hourOptions;
   };
   
-  // Parse opening hours string from database
-const parseOpeningHours = React.useCallback(
-  (hoursString: string | null | undefined): { [key: string]: HourData } => {
-    const defaultHours: { [key: string]: HourData } = {
-      Sunday: null,
-      Monday: null,
-      Tuesday: null,
-      Wednesday: null,
-      Thursday: null,
-      Friday: null,
-      Saturday: null,
-    };
-
-    if (!hoursString) return defaultHours;
-
-    const dayEntries = hoursString.split(",").map(s => s.trim());
-
-    dayEntries.forEach(entry => {
-      const match = entry.match(/(\w+):\s*(\d+):(\d+)\s*(AM|PM)\s*-\s*(\d+):(\d+)\s*(AM|PM)/i);
-      if (match) {
-        const [, day, startH, startM, startP, endH, endM, endP] = match;
-        const dayName = day.charAt(0).toUpperCase() + day.slice(1).toLowerCase();
-        if (defaultHours.hasOwnProperty(dayName)) {
-          defaultHours[dayName] = {
-            startHour: `${startH}:${startM}`,
-            startPeriod: startP.toUpperCase() as "AM" | "PM",
-            endHour: `${endH}:${endM}`,
-            endPeriod: endP.toUpperCase() as "AM" | "PM",
-          };
-        }
+  const parseOpeningHours = React.useCallback(
+    (hoursString: string | null | undefined): { [key: string]: HourData } => {
+      const slots = parseOpeningHoursToSlotMap(hoursString);
+      const out: { [key: string]: HourData } = {
+        Sunday: null,
+        Monday: null,
+        Tuesday: null,
+        Wednesday: null,
+        Thursday: null,
+        Friday: null,
+        Saturday: null,
+      };
+      for (const day of Object.keys(out) as DayName[]) {
+        const s = slots[day];
+        out[day] = s
+          ? {
+              startHour: s.startHour,
+              startPeriod: s.startPeriod,
+              endHour: s.endHour,
+              endPeriod: s.endPeriod,
+            }
+          : null;
       }
-    });
-    
-    return defaultHours;
-  },[]
-);
+      return out;
+    },
+    []
+  );
   
   // Format hours for display
   const formatHours = (hours: HourData): string => {
@@ -242,7 +239,6 @@ const parseOpeningHours = React.useCallback(
     if (!hours) return false;
     
     const now = new Date();
-    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
     const dayMap: { [key: string]: number } = {
       Sunday: 0,
       Monday: 1,
@@ -252,8 +248,6 @@ const parseOpeningHours = React.useCallback(
       Friday: 5,
       Saturday: 6,
     };
-    
-    if (dayMap[day] !== currentDay) return false;
     
     const [startH, startM] = hours.startHour.split(":").map(Number);
     const [endH, endM] = hours.endHour.split(":").map(Number);
@@ -266,9 +260,20 @@ const parseOpeningHours = React.useCallback(
     if (hours.endPeriod === "PM" && endH !== 12) endMinutes += 12 * 60;
     if (hours.endPeriod === "AM" && endH === 12) endMinutes -= 12 * 60;
     
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    
-    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    const startDayIdx = dayMap[day];
+    if (startDayIdx == null) return false;
+    const overnight = endMinutes <= startMinutes;
+    return isOpenNowFromRanges(
+      [
+        {
+          day: day as DayName,
+          startMinutes,
+          endMinutes,
+          overnight,
+        },
+      ],
+      now
+    );
   };
   
   const loadBusinessData = React.useCallback(async (forceReload: boolean = false) => {
@@ -416,11 +421,11 @@ const parseOpeningHours = React.useCallback(
           updateData.announcement = trimmedAnnouncement.length > 0 ? trimmedAnnouncement : null;
           break;
         case "opening_hours":
-          // Format opening hours string
+          // Persist canonical English AM/PM so parsing & "open now" stay in sync across locales
           const hoursString = Object.entries(openingHours)
             .map(([day, hours]) => {
               if (!hours) return null;
-              return `${day}: ${formatHours(hours)}`;
+              return `${day}: ${formatHourSlotForStorage(hours)}`;
             })
             .filter(Boolean)
             .join(", ");
@@ -429,6 +434,21 @@ const parseOpeningHours = React.useCallback(
       }
 
       await updatePlace(place.id, updateData);
+
+      if (field === "opening_hours") {
+        const saved = updateData.opening_hours ?? null;
+        if (place) {
+          setPlace({ ...place, opening_hours: saved });
+        }
+        setOpeningHours(parseOpeningHours(saved ?? undefined));
+        setEditingField(null);
+        showMessage(
+          "success",
+          t("success") || "Success",
+          t("updated_successfully") || "Updated successfully"
+        );
+        return true;
+      }
 
       // For announcement and description, don't reload - state is already updated and we want to keep scroll position
       if (field === "announcement" || field === "description") {

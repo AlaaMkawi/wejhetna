@@ -1,38 +1,17 @@
 # email_utils.py
-import os
-import smtplib
-from email.message import EmailMessage
-from dotenv import load_dotenv
+# Template helpers for transactional emails. Delivery always goes through Celery via email_dispatch.
 
-# ✅ load .env file
-load_dotenv()
 
-# ✅ FIXED env variables
-EMAIL_USER = os.getenv("EMAIL_USER")      # e.g. wejhetna.app@gmail.com
-EMAIL_PASS = os.getenv("EMAIL_PASS")      # Gmail App Password
+def _send_email(to_email: str, subject: str, body: str, *, flow: str) -> None:
+    from email_dispatch import enqueue_transactional_email
+
+    enqueue_transactional_email(to_email, subject, body, flow=flow)
 
 
 # ===============================
 # INTERNAL helper (DO NOT USE DIRECTLY)
 # ===============================
-def _send_email(to_email: str, subject: str, body: str):
-    if not EMAIL_USER or not EMAIL_PASS:
-        print("Email config missing, skipping email")
-        return
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_USER
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_USER, EMAIL_PASS)
-            smtp.send_message(msg)
-            print(f"Email sent to {to_email}")
-    except Exception as e:
-        print("Error sending email:", e)
+# (kept name for backward compatibility — enqueues Celery, does not open SMTP here)
 
 
 # ===============================
@@ -51,6 +30,7 @@ def send_driver_approved_email(to_email: str, full_name: str):
         to_email=to_email,
         subject="Wejhetna - your driver application was approved",
         body=body,
+        flow="email_utils.send_driver_approved_email",
     )
 
 
@@ -72,4 +52,5 @@ def send_verification_email(to_email: str, full_name: str, code: str):
         to_email=to_email,
         subject="Wejhetna - Email Verification Code",
         body=body,
+        flow="email_utils.send_verification_email",
     )

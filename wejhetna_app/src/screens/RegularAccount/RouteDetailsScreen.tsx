@@ -1,6 +1,6 @@
 // src/screens/RegularAccount/RouteDetailsScreen.tsx
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { Animated } from "react-native";
 import {
   View,
@@ -9,46 +9,218 @@ import {
   TouchableOpacity,
   StatusBar,
   Platform,
+  Modal,
 } from "react-native";
+import { emitLiveNavigationExit } from "../../navigation/navigationEvents";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
-import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import {
+  MapView,
+  Camera,
+  PointAnnotation,
+  ShapeSource,
+  LineLayer,
+} from "@maplibre/maplibre-react-native";
 import Geolocation from "@react-native-community/geolocation";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import i18n from "../../i18n";
-import { Modal} from "react-native";
+import { fetchOsrmDrivingRoute } from "../../services/navigation/osrmRoute";
+import {
+  lineStringToFeatureCollection,
+  type RouteCoordinatesFeatureCollection,
+} from "../../types/navigation";
+import type { RouteLineStringCoords } from "../../types/navigation";
+import {
+  haversineMeters,
+  minDistanceToPolylineMeters,
+  trimPolylineAheadOfUser,
+  bearingDegrees,
+} from "../../utils/routePolyline";
+import {
+  getFreshPositionForNavigationStart,
+  getNavigationRouteOrigin,
+} from "../../utils/locationPermission";
+import { createLatLonSmoother, smoothHeadingStep } from "../../utils/smoothGeoAnimation";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 const DARK_TEAL = "#0f5b63";
+const NAV_BLUE = "#4285F4";
+
+const OFF_ROUTE_THRESHOLD_M = 48;
+const ON_ROUTE_THRESHOLD_M = 28;
+const REROUTE_MIN_INTERVAL_MS = 4500;
+const ARRIVAL_RADIUS_M = 55;
+const SNAP_TRIM_M = 22;
+/** If live start position is this far from the preview-route origin, refetch OSRM from the fresh point. */
+const ROUTE_ORIGIN_DRIFT_REFETCH_M = 45;
 
 type RouteDetailsRoute = NativeStackScreenProps<RootStackParamList, "RouteDetails">;
 
 export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRoute) {
   const { t } = useTranslation();
-  const { routeInfo, destination, userLocation: initialUserLocation, routeCoordinates: initialRouteCoordinates } = route.params;
+  const {
+    routeInfo: initialRouteInfo,
+    destination,
+    userLocation: initialUserLocation,
+    routeCoordinates: initialRouteCoordinates,
+    navigationPhase: navigationPhaseParam,
+  } = route.params;
+
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
 
-  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(initialUserLocation);
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [watchId, setWatchId] = useState<number | null>(null);
+  const initialCoords: RouteLineStringCoords = useMemo(() => {
+    const c = initialRouteCoordinates?.features?.[0]?.geometry?.coordinates;
+    return Array.isArray(c) && c.length >= 2 ? c : [];
+  }, [initialRouteCoordinates]);
+
+  const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(
+    initialUserLocation
+  );
+  /** Smoothed position for marker + camera during live navigation (reduces jumps). */
+  const [smoothedUserLocation, setSmoothedUserLocation] = useState<{
+    lat: number;
+    lon: number;
+  }>(initialUserLocation);
+  const [displayHeading, setDisplayHeading] = useState<number | null>(null);
+  const [sessionPhase, setSessionPhase] = useState<"preview" | "active">(
+    navigationPhaseParam === "active" ? "active" : "preview"
+  );
+  const [displayRouteFC, setDisplayRouteFC] = useState<RouteCoordinatesFeatureCollection>(() =>
+    lineStringToFeatureCollection(
+      initialCoords.length >= 2
+        ? initialCoords
+        : [
+            [initialUserLocation.lon, initialUserLocation.lat],
+            [destination.lon, destination.lat],
+          ]
+    )
+  );
+
+  const [routeInfo, setRouteInfo] = useState(initialRouteInfo);
+  const [remainingSeconds, setRemainingSeconds] = useState(Math.max(0, initialRouteInfo.duration));
+  const watchIdRef = useRef<number | null>(null);
+  const hasArrivedRef = useRef(false);
   const [showFullRoute, setShowFullRoute] = useState(false);
   const [isFollowingUser, setIsFollowingUser] = useState(false);
   const [currentHeading, setCurrentHeading] = useState<number | null>(null);
   const [mapBearing, setMapBearing] = useState<number>(0);
-  const [hasArrived, setHasArrived] = useState(false);
   const [showArrivalModal, setShowArrivalModal] = useState(false);
-  
-  // Animation values for pulsing effect
+  const [rerouting, setRerouting] = useState(false);
+
   const pulseAnim1 = useRef(new Animated.Value(0)).current;
   const pulseAnim2 = useRef(new Animated.Value(0)).current;
-  
-  // Start pulse animations when navigating
+
+  const activeRouteCoordsRef = useRef<RouteLineStringCoords>(
+    initialCoords.length >= 2 ? [...initialCoords] : [...initialCoords]
+  );
+  const legDistanceRef = useRef(initialRouteInfo.distance);
+  const legDurationRef = useRef(initialRouteInfo.duration);
+  const lastRerouteAtRef = useRef(0);
+  const offRouteSinceRef = useRef<number | null>(null);
+  const isNavigatingRef = useRef(false);
+  const isFollowingRef = useRef(false);
+  const userLocationRef = useRef<{ lat: number; lon: number } | null>(initialUserLocation);
+  const destinationRef = useRef(destination);
+  const lastProgressAtRef = useRef(0);
+  const lastCameraMoveAtRef = useRef(0);
+  const headingForSmoothRef = useRef<number | null>(null);
+
+  const routeParamsKey = useMemo(() => {
+    const c0 = initialCoords.length >= 1 ? initialCoords[0] : null;
+    const routeHead = c0 ? `${c0[0].toFixed(5)}_${c0[1].toFixed(5)}` : "x";
+    return `${destination.lat.toFixed(5)}_${destination.lon.toFixed(5)}_${initialUserLocation.lat.toFixed(5)}_${initialUserLocation.lon.toFixed(5)}_${initialRouteInfo.distance}_${initialRouteInfo.duration}_${routeHead}`;
+  }, [
+    destination,
+    initialUserLocation,
+    initialRouteInfo.distance,
+    initialRouteInfo.duration,
+    initialCoords,
+  ]);
+
+  const locationSmoother = useMemo(() => createLatLonSmoother({ durationMs: 400 }), []);
+
+  /** New destination / new preview route: clear GPS watch, reset map state, avoid stale start point. */
+  // routeParamsKey encodes destination, user origin, route head, and leg stats — avoids extra runs from object identity churn.
   useEffect(() => {
-    if (isNavigating) {
+    const w = watchIdRef.current;
+    if (w != null) {
+      Geolocation.clearWatch(w);
+    }
+    watchIdRef.current = null;
+    locationSmoother.cancel();
+
+    const ul = initialUserLocation;
+    setUserLocation(ul);
+    userLocationRef.current = ul;
+    setSmoothedUserLocation(ul);
+    locationSmoother.initialize(ul);
+
+    const coords: RouteLineStringCoords =
+      initialCoords.length >= 2
+        ? [...initialCoords]
+        : [
+            [ul.lon, ul.lat],
+            [destination.lon, destination.lat],
+          ];
+    activeRouteCoordsRef.current = coords;
+    legDistanceRef.current = initialRouteInfo.distance;
+    legDurationRef.current = initialRouteInfo.duration;
+    setRouteInfo(initialRouteInfo);
+    setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+    setDisplayRouteFC(lineStringToFeatureCollection(coords));
+
+    setSessionPhase(navigationPhaseParam === "active" ? "active" : "preview");
+    hasArrivedRef.current = false;
+    setShowArrivalModal(false);
+    offRouteSinceRef.current = null;
+    headingForSmoothRef.current = null;
+    setDisplayHeading(null);
+    setCurrentHeading(null);
+    lastCameraMoveAtRef.current = 0;
+    setIsFollowingUser(false);
+    setShowFullRoute(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- synced via routeParamsKey above
+  }, [routeParamsKey, navigationPhaseParam, locationSmoother]);
+
+  /** After opening a route (or changing it), refine user dot from a fast GPS read without blocking the UI. */
+  useEffect(() => {
+    let alive = true;
+    getNavigationRouteOrigin()
+      .then((loc) => {
+        if (!alive) return;
+        setUserLocation(loc);
+        userLocationRef.current = loc;
+        setSmoothedUserLocation(loc);
+        locationSmoother.initialize(loc);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [routeParamsKey, locationSmoother]);
+
+  useEffect(() => {
+    destinationRef.current = destination;
+  }, [destination]);
+
+  useEffect(() => {
+    userLocationRef.current = userLocation;
+  }, [userLocation]);
+
+  useEffect(() => {
+    isNavigatingRef.current = sessionPhase === "active";
+  }, [sessionPhase]);
+
+  useEffect(() => {
+    isFollowingRef.current = isFollowingUser;
+  }, [isFollowingUser]);
+
+  useEffect(() => {
+    if (sessionPhase === "active") {
       const pulse1 = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim1, {
@@ -63,7 +235,6 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           }),
         ])
       );
-      
       const pulse2 = Animated.loop(
         Animated.sequence([
           Animated.delay(500),
@@ -79,81 +250,65 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           }),
         ])
       );
-      
       pulse1.start();
       pulse2.start();
-      
       return () => {
         pulse1.stop();
         pulse2.stop();
       };
     }
-  }, [isNavigating, pulseAnim1, pulseAnim2]);
+  }, [sessionPhase, pulseAnim1, pulseAnim2]);
 
-  // Calculate bounds to show entire route
-  useEffect(() => {
-    if (initialRouteCoordinates && initialRouteCoordinates.features.length > 0) {
-      const coordinates = initialRouteCoordinates.features[0].geometry.coordinates;
-      if (coordinates.length > 0) {
-        // Calculate bounding box including start and end points
-        let minLon = coordinates[0][0];
-        let maxLon = coordinates[0][0];
-        let minLat = coordinates[0][1];
-        let maxLat = coordinates[0][1];
-        
-        // Include all route coordinates
-        coordinates.forEach(([lon, lat]) => {
-          minLon = Math.min(minLon, lon);
-          maxLon = Math.max(maxLon, lon);
-          minLat = Math.min(minLat, lat);
-          maxLat = Math.max(maxLat, lat);
-        });
-
-        // Include user location if available
-        if (userLocation) {
-          minLon = Math.min(minLon, userLocation.lon);
-          maxLon = Math.max(maxLon, userLocation.lon);
-          minLat = Math.min(minLat, userLocation.lat);
-          maxLat = Math.max(maxLat, userLocation.lat);
-        }
-
-        // Include destination if available
-        if (destination) {
-          minLon = Math.min(minLon, destination.lon);
-          maxLon = Math.max(maxLon, destination.lon);
-          minLat = Math.min(minLat, destination.lat);
-          maxLat = Math.max(maxLat, destination.lat);
-        }
-
-        // Calculate center and zoom
-        const centerLon = (minLon + maxLon) / 2;
-        const centerLat = (minLat + maxLat) / 2;
-        
-        // Calculate zoom level based on bounds
-        const lonDiff = maxLon - minLon;
-        const latDiff = maxLat - minLat;
-        const maxDiff = Math.max(lonDiff, latDiff);
-        let zoomLevel = 13;
-        if (maxDiff < 0.01) zoomLevel = 15;
-        else if (maxDiff < 0.02) zoomLevel = 14;
-        else if (maxDiff < 0.05) zoomLevel = 13;
-        else zoomLevel = 12;
-
-        // Set camera after a short delay to ensure ref is ready - smoother initial setup
-        setTimeout(() => {
-          if (cameraRef.current && !isNavigating) {
-            cameraRef.current.setCamera({
-              centerCoordinate: [centerLon, centerLat],
-              zoomLevel: zoomLevel,
-              animationDuration: 1500, // Slower, smoother initial animation
-            });
-          }
-        }, 500);
+  const fitCameraToRoute = useCallback(
+    (coords: RouteLineStringCoords, padUser: boolean) => {
+      if (coords.length < 1 || !cameraRef.current) return;
+      let minLon = coords[0][0];
+      let maxLon = coords[0][0];
+      let minLat = coords[0][1];
+      let maxLat = coords[0][1];
+      coords.forEach(([lon, lat]) => {
+        minLon = Math.min(minLon, lon);
+        maxLon = Math.max(maxLon, lon);
+        minLat = Math.min(minLat, lat);
+        maxLat = Math.max(maxLat, lat);
+      });
+      const ul = userLocationRef.current;
+      if (padUser && ul) {
+        minLon = Math.min(minLon, ul.lon);
+        maxLon = Math.max(maxLon, ul.lon);
+        minLat = Math.min(minLat, ul.lat);
+        maxLat = Math.max(maxLat, ul.lat);
       }
-    }
-  }, [initialRouteCoordinates, userLocation, destination, isNavigating]);
+      if (destination) {
+        minLon = Math.min(minLon, destination.lon);
+        maxLon = Math.max(maxLon, destination.lon);
+        minLat = Math.min(minLat, destination.lat);
+        maxLat = Math.max(maxLat, destination.lat);
+      }
+      const centerLon = (minLon + maxLon) / 2;
+      const centerLat = (minLat + maxLat) / 2;
+      const maxDiff = Math.max(maxLon - minLon, maxLat - minLat);
+      let zoomLevel = 13;
+      if (maxDiff < 0.01) zoomLevel = 15;
+      else if (maxDiff < 0.02) zoomLevel = 14;
+      else if (maxDiff < 0.05) zoomLevel = 13;
+      else zoomLevel = 12;
+      cameraRef.current.setCamera({
+        centerCoordinate: [centerLon, centerLat],
+        zoomLevel,
+        animationDuration: 1200,
+      });
+    },
+    [destination]
+  );
 
-  // Format distance
+  useEffect(() => {
+    if (sessionPhase === "preview" && initialCoords.length > 0) {
+      const tmr = setTimeout(() => fitCameraToRoute(initialCoords, true), 400);
+      return () => clearTimeout(tmr);
+    }
+  }, [sessionPhase, initialCoords, fitCameraToRoute]);
+
   const formatDistance = (meters: number): string => {
     if (meters < 1000) {
       return `${Math.round(meters)} m`;
@@ -161,9 +316,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     return `${(meters / 1000).toFixed(1)} km`;
   };
 
-  // Format duration
   const formatDuration = (seconds: number): string => {
-    const minutes = Math.round(seconds / 60);
+    const minutes = Math.max(1, Math.round(seconds / 60));
     if (minutes < 60) {
       return `${minutes} min`;
     }
@@ -172,264 +326,365 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
   };
 
-  // Calculate distance between two coordinates in meters (Haversine formula)
+  const formatEtaClock = (date: Date): string => {
+    const locale = i18n.language === "he" ? "he-IL" : i18n.language === "ar" ? "ar" : "en-GB";
+    return date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  };
+
   const calculateDistance = (
     lat1: number,
     lon1: number,
     lat2: number,
     lon2: number
-  ): number => {
-    const R = 6371000; // Earth's radius in meters
-    const dLat = ((lat2 - lat1) * Math.PI) / 180;
-    const dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
+  ): number => haversineMeters(lat1, lon1, lat2, lon2);
 
-  // Show full route overview
-  const showFullRouteOverview = () => {
-    if (initialRouteCoordinates && initialRouteCoordinates.features.length > 0) {
-      const coordinates = initialRouteCoordinates.features[0].geometry.coordinates;
-      if (coordinates.length > 0) {
-        let minLon = coordinates[0][0];
-        let maxLon = coordinates[0][0];
-        let minLat = coordinates[0][1];
-        let maxLat = coordinates[0][1];
-        
-        coordinates.forEach(([lon, lat]) => {
-          minLon = Math.min(minLon, lon);
-          maxLon = Math.max(maxLon, lon);
-          minLat = Math.min(minLat, lat);
-          maxLat = Math.max(maxLat, lat);
-        });
+  const applyNewRoute = useCallback(
+    (coords: RouteLineStringCoords, distanceM: number, durationS: number) => {
+      activeRouteCoordsRef.current = [...coords];
+      legDistanceRef.current = distanceM;
+      legDurationRef.current = durationS;
+      setRouteInfo((prev) => ({
+        ...prev,
+        distance: distanceM,
+        duration: durationS,
+      }));
+      const rem = Math.max(0, durationS);
+      setRemainingSeconds(rem);
+      setDisplayRouteFC(lineStringToFeatureCollection(coords));
+    },
+    []
+  );
 
-        if (userLocation) {
-          minLon = Math.min(minLon, userLocation.lon);
-          maxLon = Math.max(maxLon, userLocation.lon);
-          minLat = Math.min(minLat, userLocation.lat);
-          maxLat = Math.max(maxLat, userLocation.lat);
-        }
-
-        if (destination) {
-          minLon = Math.min(minLon, destination.lon);
-          maxLon = Math.max(maxLon, destination.lon);
-          minLat = Math.min(minLat, destination.lat);
-          maxLat = Math.max(maxLat, destination.lat);
-        }
-
-        const centerLon = (minLon + maxLon) / 2;
-        const centerLat = (minLat + maxLat) / 2;
-        
-        const lonDiff = maxLon - minLon;
-        const latDiff = maxLat - minLat;
-        const maxDiff = Math.max(lonDiff, latDiff);
-        let zoomLevel = 13;
-        if (maxDiff < 0.01) zoomLevel = 15;
-        else if (maxDiff < 0.02) zoomLevel = 14;
-        else if (maxDiff < 0.05) zoomLevel = 13;
-        else zoomLevel = 12;
-
-        if (cameraRef.current) {
-          cameraRef.current.setCamera({
-            centerCoordinate: [centerLon, centerLat],
-            zoomLevel: zoomLevel,
-            animationDuration: 1200, // Smoother transition
-          });
-        }
-        setShowFullRoute(true);
-        setIsFollowingUser(false);
+  const maybeReroute = useCallback(
+    async (lat: number, lon: number) => {
+      const dest = destinationRef.current;
+      if (!dest) return;
+      const now = Date.now();
+      if (now - lastRerouteAtRef.current < REROUTE_MIN_INTERVAL_MS) return;
+      lastRerouteAtRef.current = now;
+      setRerouting(true);
+      try {
+        const res = await fetchOsrmDrivingRoute({ lat, lon: lon }, dest);
+        applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
+        lastProgressAtRef.current = 0;
+      } catch (e) {
+        console.warn("Reroute failed", e);
+      } finally {
+        setRerouting(false);
       }
-    }
-  };
+    },
+    [applyNewRoute]
+  );
 
-  // Start navigation (track movement)
-  const startNavigation = () => {
-    if (!userLocation || !destination) {
-      return;
+  const stopLiveNavigationAndReturnHome = useCallback(() => {
+    const w = watchIdRef.current;
+    if (w != null) {
+      Geolocation.clearWatch(w);
+    }
+    watchIdRef.current = null;
+    locationSmoother.cancel();
+    isNavigatingRef.current = false;
+    isFollowingRef.current = false;
+    offRouteSinceRef.current = null;
+    headingForSmoothRef.current = null;
+    setDisplayHeading(null);
+    setCurrentHeading(null);
+    hasArrivedRef.current = false;
+    setShowArrivalModal(false);
+    emitLiveNavigationExit();
+    navigation.goBack();
+  }, [locationSmoother, navigation]);
+
+  const startLiveNavigation = useCallback(() => {
+    if (!destination) return;
+
+    const wPrev = watchIdRef.current;
+    if (wPrev != null) {
+      Geolocation.clearWatch(wPrev);
+      watchIdRef.current = null;
     }
 
-    setIsNavigating(true);
-    setIsFollowingUser(true);
     setShowFullRoute(false);
-    setHasArrived(false); // Reset arrival state when starting new navigation
-    setShowArrivalModal(false); // Close modal if it was open
-    
-    // Immediately center on user when starting navigation - smoother transition
-    if (userLocation && cameraRef.current) {
+    hasArrivedRef.current = false;
+    setShowArrivalModal(false);
+    headingForSmoothRef.current = null;
+    setDisplayHeading(null);
+    lastProgressAtRef.current = 0;
+    lastCameraMoveAtRef.current = 0;
+
+    const beginLiveNav = async () => {
+      let fresh = userLocationRef.current ?? initialUserLocation;
+      try {
+        fresh = await getFreshPositionForNavigationStart();
+      } catch {
+        /* keep fallback above */
+      }
+
+      userLocationRef.current = fresh;
+      setUserLocation(fresh);
+      locationSmoother.initialize(fresh);
+      setSmoothedUserLocation(fresh);
+      locationSmoother.animateTo(fresh, (p) => setSmoothedUserLocation(p));
+
+      const driftM = haversineMeters(
+        fresh.lat,
+        fresh.lon,
+        initialUserLocation.lat,
+        initialUserLocation.lon
+      );
+
+      if (driftM > ROUTE_ORIGIN_DRIFT_REFETCH_M) {
+        try {
+          const res = await fetchOsrmDrivingRoute(fresh, destination);
+          applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
+        } catch (e) {
+          console.warn("Refetch route from fresh GPS failed", e);
+          const fallbackCoords: RouteLineStringCoords =
+            initialCoords.length >= 2
+              ? [...initialCoords]
+              : [
+                  [fresh.lon, fresh.lat],
+                  [destination.lon, destination.lat],
+                ];
+          activeRouteCoordsRef.current = fallbackCoords;
+          legDistanceRef.current = initialRouteInfo.distance;
+          legDurationRef.current = initialRouteInfo.duration;
+          setRouteInfo(initialRouteInfo);
+          setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+          setDisplayRouteFC(lineStringToFeatureCollection(fallbackCoords));
+        }
+      } else {
+        const coords: RouteLineStringCoords =
+          initialCoords.length >= 2
+            ? [...initialCoords]
+            : [
+                [fresh.lon, fresh.lat],
+                [destination.lon, destination.lat],
+              ];
+        activeRouteCoordsRef.current = coords;
+        legDistanceRef.current = initialRouteInfo.distance;
+        legDurationRef.current = initialRouteInfo.duration;
+        setRouteInfo(initialRouteInfo);
+        setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+        setDisplayRouteFC(lineStringToFeatureCollection(coords));
+      }
+
+      setSessionPhase("active");
+      setIsFollowingUser(true);
+
       setTimeout(() => {
         if (cameraRef.current) {
           cameraRef.current.setCamera({
-            centerCoordinate: [userLocation.lon, userLocation.lat],
+            centerCoordinate: [fresh.lon, fresh.lat],
             zoomLevel: 17.5,
-            animationDuration: 1000, // Slower, smoother transition
+            animationDuration: 520,
           });
         }
-      }, 200);
-    }
+      }, 80);
 
-    // Watch position updates with high accuracy
-    const id = Geolocation.watchPosition(
-      (position) => {
-        const { latitude, longitude, heading, accuracy } = position.coords;
-        const newLocation = { lat: latitude, lon: longitude };
-        setUserLocation(newLocation);
+      const id = Geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, heading, accuracy, speed } = position.coords;
+          const course = (position.coords as { course?: number }).course;
+          const newLocation = { lat: latitude, lon: longitude };
+          setUserLocation(newLocation);
+          userLocationRef.current = newLocation;
 
-        // Check if user has arrived at destination (within 50 meters)
-        if (destination && !hasArrived) {
-          const distanceToDestination = calculateDistance(
-            latitude,
-            longitude,
-            destination.lat,
-            destination.lon
-          );
-          
-          if (distanceToDestination <= 50) {
-            // User has arrived!
-            setHasArrived(true);
-            setShowArrivalModal(true);
-            // Stop navigation automatically when arriving
-            stopNavigation();
-          }
-        }
-
-        // Update heading for compass
-        if (heading !== null && heading !== undefined && !isNaN(heading)) {
-          setCurrentHeading(heading);
-        }
-
-        // Update map camera to follow user when navigating - with smoother, less frequent updates
-        if (cameraRef.current && isNavigating && isFollowingUser) {
-          // Use heading if available for better direction tracking
-          const cameraOptions: any = {
-            centerCoordinate: [longitude, latitude],
-            zoomLevel: 17.5, // Closer zoom for navigation
-            animationDuration: 800, // Smoother, slower following to reduce jitter
-          };
-
-          // Add bearing if heading is available (for rotation) - only if accuracy is good
-          if (heading !== null && heading !== undefined && !isNaN(heading) && accuracy && accuracy < 20) {
-            cameraOptions.bearing = heading;
-          }
-
-          // Only update camera if location changed significantly (reduces unnecessary movement)
-          if (userLocation) {
-            const latDiff = Math.abs(userLocation.lat - latitude);
-            const lonDiff = Math.abs(userLocation.lon - longitude);
-            const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111000; // Convert to meters
-            
-            // Only update if moved more than 5 meters (reduces jitter)
-            if (distance > 5) {
-              cameraRef.current.setCamera(cameraOptions);
+          const dest = destinationRef.current;
+          if (dest && !hasArrivedRef.current) {
+            const dDest = calculateDistance(latitude, longitude, dest.lat, dest.lon);
+            if (dDest <= ARRIVAL_RADIUS_M) {
+              hasArrivedRef.current = true;
+              setShowArrivalModal(true);
+              const wid = watchIdRef.current;
+              if (wid != null) {
+                Geolocation.clearWatch(wid);
+              }
+              watchIdRef.current = null;
+              locationSmoother.cancel();
+              setSessionPhase("preview");
+              setIsFollowingUser(false);
+              isNavigatingRef.current = false;
+              return;
             }
-          } else {
-            cameraRef.current.setCamera(cameraOptions);
           }
-        }
-      },
-      (error) => {
-        console.error("GPS tracking error:", error);
-        stopNavigation();
-      },
-      {
-        enableHighAccuracy: true, // Use GPS instead of network
-        timeout: 15000,
-        maximumAge: 1000, // Allow 1 second old location to reduce jitter
-        distanceFilter: 5, // Update every 5 meters (reduces map movement)
-      }
-    );
 
-    setWatchId(id);
-  };
+          let bearing: number | null = null;
+          const speedMps = speed != null && !Number.isNaN(speed) ? speed : 0;
+          if (speedMps > 1.2 && course != null && !Number.isNaN(course) && course >= 0) {
+            bearing = course;
+          } else if (heading != null && !Number.isNaN(heading) && heading >= 0) {
+            bearing = heading;
+          }
 
-  // Stop navigation
-  const stopNavigation = () => {
-    if (watchId !== null) {
-      Geolocation.clearWatch(watchId);
-      setWatchId(null);
-    }
-    setIsNavigating(false);
-    setIsFollowingUser(false);
-    // Don't reset hasArrived - keep it true if user arrived
-  };
+          const coords = activeRouteCoordsRef.current;
+          if (coords.length >= 2) {
+            const [lon1, lat1] = coords[1];
+            if (bearing === null) {
+              bearing = bearingDegrees(latitude, longitude, lat1, lon1);
+            }
+          }
+          if (bearing !== null) {
+            setCurrentHeading(bearing);
+            const sm = smoothHeadingStep(headingForSmoothRef.current, bearing, 0.38);
+            headingForSmoothRef.current = sm;
+            setDisplayHeading(sm);
+          }
 
-  // Toggle follow user mode
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const toggleFollowUser = () => {
-    if (isNavigating) {
-      setIsFollowingUser(!isFollowingUser);
-      if (!isFollowingUser && userLocation && cameraRef.current) {
-        // Center on user when enabling follow mode
-        cameraRef.current.setCamera({
-          centerCoordinate: [userLocation.lon, userLocation.lat],
-          zoomLevel: 17,
-          animationDuration: 500,
-        });
-      }
-    }
-  };
+          const distToRoute = minDistanceToPolylineMeters(latitude, longitude, coords);
+          if (distToRoute > OFF_ROUTE_THRESHOLD_M) {
+            if (offRouteSinceRef.current === null) {
+              offRouteSinceRef.current = Date.now();
+            } else if (Date.now() - offRouteSinceRef.current > 2800) {
+              offRouteSinceRef.current = null;
+              maybeReroute(latitude, longitude);
+            }
+          } else if (distToRoute < ON_ROUTE_THRESHOLD_M) {
+            offRouteSinceRef.current = null;
+          }
 
-  // Cleanup on unmount
+          const now = Date.now();
+          const shouldProgress =
+            coords.length >= 2 &&
+            (lastProgressAtRef.current === 0 || now - lastProgressAtRef.current > 3200);
+          if (shouldProgress) {
+            lastProgressAtRef.current = now;
+            const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
+              latitude,
+              longitude,
+              coords,
+              SNAP_TRIM_M
+            );
+            activeRouteCoordsRef.current = trimmed;
+            setDisplayRouteFC(lineStringToFeatureCollection(trimmed));
+            const legD = legDistanceRef.current;
+            const legT = legDurationRef.current;
+            const ratio =
+              legD > 50 ? Math.min(1, Math.max(0, remainingLengthMeters / legD)) : 0;
+            const remSec = Math.round(legT * ratio);
+            setRemainingSeconds(remSec);
+          }
+
+          locationSmoother.animateTo(newLocation, (p) => {
+            setSmoothedUserLocation(p);
+            const nav = isNavigatingRef.current;
+            const follow = isFollowingRef.current;
+            if (!cameraRef.current || !nav || !follow) return;
+            const camNow = Date.now();
+            if (camNow - lastCameraMoveAtRef.current < 360) return;
+            lastCameraMoveAtRef.current = camNow;
+            const brg = headingForSmoothRef.current;
+            const cameraOptions: Record<string, unknown> = {
+              centerCoordinate: [p.lon, p.lat],
+              zoomLevel: 17.2,
+              animationDuration: 400,
+            };
+            if (brg != null && (!accuracy || accuracy < 40)) {
+              cameraOptions.bearing = brg;
+            }
+            cameraRef.current.setCamera(cameraOptions);
+          });
+        },
+        (error) => {
+          console.error("GPS tracking error:", error);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 4000,
+          distanceFilter: 8,
+          interval: 3000,
+        } as Parameters<typeof Geolocation.watchPosition>[2]
+      );
+
+      watchIdRef.current = id;
+    };
+
+    beginLiveNav().catch((e) => console.warn("startLiveNavigation failed", e));
+  }, [
+    applyNewRoute,
+    destination,
+    initialCoords,
+    initialRouteInfo,
+    initialUserLocation,
+    locationSmoother,
+    maybeReroute,
+  ]);
+
   useEffect(() => {
     return () => {
-      if (watchId !== null) {
-        Geolocation.clearWatch(watchId);
+      const w = watchIdRef.current;
+      if (w != null) {
+        Geolocation.clearWatch(w);
       }
+      watchIdRef.current = null;
+      locationSmoother.cancel();
     };
-  }, [watchId]);
+  }, [locationSmoother]);
+
+  const showFullRouteOverview = () => {
+    const coords = activeRouteCoordsRef.current;
+    if (coords.length > 0) {
+      fitCameraToRoute(coords, true);
+      setShowFullRoute(true);
+      setIsFollowingUser(false);
+    }
+  };
+
+  const isPreview = sessionPhase === "preview";
+  const isActive = sessionPhase === "active";
+
+  const etaDate = new Date(Date.now() + remainingSeconds * 1000);
+
+  const onRegionWillChange = (feature: any) => {
+    try {
+      const isUser = feature?.properties?.isUserInteraction === true;
+      if (isActive && isUser) {
+        setIsFollowingUser(false);
+      }
+      const bearing = feature?.properties?.bearing ?? 0;
+      setMapBearing(bearing);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const headerTitle = isPreview
+    ? t("route_preview_title") || "Route preview"
+    : t("route_details") || "Route Details";
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
-      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Ionicons name="arrow-back" size={24} color={DARK_TEAL} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t("route_details") || "Route Details"}</Text>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.headerTitle}>{headerTitle}</Text>
       </View>
 
-      {/* Map */}
       <View style={styles.mapContainer}>
         <MapView
           ref={mapRef}
           style={styles.map}
           mapStyle={MAP_STYLE_URL}
-          scrollEnabled={!isFollowingUser || !isNavigating}
-          rotateEnabled={true}
+          scrollEnabled={!isActive || !isFollowingUser}
           pitchEnabled={false}
+          rotateEnabled={true}
           logoEnabled={false}
           attributionEnabled={false}
-          onRegionDidChange={(feature: any) => {
-            try {
-              const bearing = feature?.properties?.bearing || 0;
-              setMapBearing(bearing);
-            } catch (error) {
-              console.log("Error getting map bearing:", error);
-            }
-          }}
+          onRegionWillChange={onRegionWillChange}
         >
           <Camera
             ref={cameraRef}
             defaultSettings={{
-              centerCoordinate: userLocation ? [userLocation.lon, userLocation.lat] : [34.83, 31.24],
+              centerCoordinate: userLocation
+                ? [userLocation.lon, userLocation.lat]
+                : [34.83, 31.24],
               zoomLevel: 13,
             }}
             animationMode="flyTo"
           />
 
-          {/* Start Marker - Google Maps style (shown when not navigating) */}
-          {userLocation && !isNavigating && (
+          {userLocation && isPreview && (
             <PointAnnotation id="start_location" coordinate={[userLocation.lon, userLocation.lat]}>
               <View style={styles.startMarkerContainer}>
                 <View style={styles.startMarkerPin}>
@@ -445,12 +700,13 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             </PointAnnotation>
           )}
 
-          {/* User Location Marker - Google Maps style (shown when navigating) */}
-          {userLocation && isNavigating && (
-            <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+          {userLocation && isActive && (
+            <PointAnnotation
+              id="user_location"
+              coordinate={[smoothedUserLocation.lon, smoothedUserLocation.lat]}
+            >
               <View style={styles.userLocationMarkerContainer}>
-                {/* Pulsing circle effect */}
-                <Animated.View 
+                <Animated.View
                   style={[
                     styles.userLocationPulse,
                     {
@@ -467,9 +723,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                         },
                       ],
                     },
-                  ]} 
+                  ]}
                 />
-                <Animated.View 
+                <Animated.View
                   style={[
                     styles.userLocationPulse,
                     {
@@ -486,28 +742,29 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                         },
                       ],
                     },
-                  ]} 
+                  ]}
                 />
-                {/* Main location dot */}
                 <View style={styles.userLocationDot}>
                   <View style={styles.userLocationInnerDot} />
                 </View>
-                {/* Direction indicator when navigating - bigger and clearer */}
-                {currentHeading !== null && (
-                  <View 
-                    style={[
-                      styles.userLocationDirection,
-                      { transform: [{ rotate: `${currentHeading}deg` }] }
-                    ]}
-                  >
-                    <Ionicons name="navigate" size={18} color="#FFFFFF" />
-                  </View>
-                )}
+                <View
+                  style={[
+                    styles.userLocationDirection,
+                    {
+                      transform: [
+                        {
+                          rotate: `${(displayHeading ?? currentHeading ?? 0) - (mapBearing || 0)}deg`,
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                </View>
               </View>
             </PointAnnotation>
           )}
 
-          {/* End Marker (Destination) - Google Maps style */}
           {destination && (
             <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
               <View style={styles.endMarkerContainer}>
@@ -521,47 +778,42 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             </PointAnnotation>
           )}
 
-          {/* Route Line */}
-          {initialRouteCoordinates && (
-            <ShapeSource id="route" shape={initialRouteCoordinates}>
-              {/* Outline layer for better visibility when navigating */}
-              {isNavigating && (
+          {displayRouteFC && (
+            <ShapeSource id="route" shape={displayRouteFC}>
+              {isActive && (
                 <LineLayer
                   id="routeLineOutline"
                   style={{
-                    lineColor: "#1A73E8", // Darker blue outline
-                    lineWidth: 14, // Wider for outline effect
+                    lineColor: "#1A73E8",
+                    lineWidth: 14,
                     lineCap: "round",
                     lineJoin: "round",
                     lineOpacity: 0.4,
                   } as any}
                 />
               )}
-              {/* Main route line */}
               <LineLayer
                 id="routeLine"
                 style={{
-                  lineColor: isNavigating ? "#4285F4" : DARK_TEAL,
-                  lineWidth: isNavigating ? 10 : 5, // Much bigger and cleaner when navigating
+                  lineColor: isActive ? NAV_BLUE : DARK_TEAL,
+                  lineWidth: isActive ? 10 : 5,
                   lineCap: "round",
                   lineJoin: "round",
-                  lineOpacity: isNavigating ? 1.0 : 0.8, // Fully opaque when navigating
+                  lineOpacity: isActive ? 1 : 0.85,
                 } as any}
               />
             </ShapeSource>
           )}
         </MapView>
 
-        {/* Compass - Simple Google Maps style (Right side) */}
-        {mapBearing !== 0 && (
+        {mapBearing !== 0 && isActive && (
           <TouchableOpacity
             style={styles.compassButton}
             onPress={() => {
-              // Reset map rotation to 0
               if (cameraRef.current && userLocation) {
                 cameraRef.current.setCamera({
-                  centerCoordinate: [userLocation.lon, userLocation.lat],
-                  zoomLevel: cameraRef.current?.getZoomLevel?.() || 17,
+                  centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
+                  zoomLevel: 17,
                   bearing: 0,
                   animationDuration: 300,
                 });
@@ -571,12 +823,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             activeOpacity={0.8}
           >
             <View style={styles.compassIconContainer}>
-              <View 
-                style={[
-                  styles.compassIcon,
-                  { transform: [{ rotate: `${-mapBearing}deg` }] }
-                ]}
-              >
+              <View style={[styles.compassIcon, { transform: [{ rotate: `${-mapBearing}deg` }] }]}>
                 <View style={styles.compassNeedle}>
                   <View style={styles.compassNeedleRed} />
                   <View style={styles.compassNeedleWhite} />
@@ -586,47 +833,43 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           </TouchableOpacity>
         )}
 
-        {/* Re-center Button - Google Maps style (Lower left) */}
-        {isNavigating && userLocation && (
+        {isActive && userLocation && (
           <TouchableOpacity
             style={styles.recenterButton}
             onPress={() => {
               if (userLocation && cameraRef.current) {
                 setIsFollowingUser(true);
                 cameraRef.current.setCamera({
-                  centerCoordinate: [userLocation.lon, userLocation.lat],
+                  centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
                   zoomLevel: 17.5,
-                  bearing: currentHeading || 0,
-                  animationDuration: 800, // Smoother transition
+                  bearing: displayHeading ?? currentHeading ?? 0,
+                  animationDuration: 520,
                 });
               }
             }}
             activeOpacity={0.8}
           >
-            <Ionicons name="locate" size={20} color="#4285F4" />
+            <Ionicons name="locate" size={20} color={NAV_BLUE} />
             <Text style={styles.recenterButtonText}>{t("recenter") || "Re-centre"}</Text>
           </TouchableOpacity>
         )}
 
-        {/* Floating Action Buttons - Google Maps style (Right side) */}
         <View style={styles.floatingButtons}>
-          {/* Show Full Route / Overview Button */}
           <TouchableOpacity
             style={styles.floatingButton}
             onPress={() => {
               if (showFullRoute) {
-                // Return to user location or start following
-              if (isNavigating && userLocation) {
-                setIsFollowingUser(true);
-                if (cameraRef.current) {
-                  cameraRef.current.setCamera({
-                    centerCoordinate: [userLocation.lon, userLocation.lat],
-                    zoomLevel: 17.5,
-                    bearing: currentHeading || 0,
-                    animationDuration: 800, // Smoother transition
-                  });
+                if (isActive && userLocation) {
+                  setIsFollowingUser(true);
+                  if (cameraRef.current) {
+                    cameraRef.current.setCamera({
+                      centerCoordinate: [userLocation.lon, userLocation.lat],
+                      zoomLevel: 17.5,
+                      bearing: currentHeading ?? 0,
+                      animationDuration: 800,
+                    });
+                  }
                 }
-              }
                 setShowFullRoute(false);
               } else {
                 showFullRouteOverview();
@@ -634,24 +877,39 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             }}
             activeOpacity={0.8}
           >
-            <Ionicons 
-              name={showFullRoute ? "locate" : "expand-outline"} 
-              size={20} 
-              color={DARK_TEAL} 
-            />
+            <Ionicons name={showFullRoute ? "locate" : "expand-outline"} size={20} color={DARK_TEAL} />
           </TouchableOpacity>
         </View>
+
+        {rerouting && isActive && (
+          <View style={styles.reroutingPill}>
+            <Text style={styles.reroutingText}>{t("rerouting") || "Updating route…"}</Text>
+          </View>
+        )}
       </View>
 
-      {/* Compact Route Info Card */}
-      <View style={styles.routeInfoCard}>
-        {/* Route Type Indicator - Car */}
+      <View style={[styles.routeInfoCard, isPreview && styles.routeInfoCardPreview]}>
         <View style={styles.routeTypeIndicator}>
           <Ionicons name="car" size={20} color={DARK_TEAL} />
           <Text style={styles.routeTypeText}>{t("driving_route") || "Driving Route"}</Text>
         </View>
 
-        {/* Route Summary - Compact */}
+        <View style={styles.etaRow}>
+          <View style={styles.etaBlock}>
+            <Text style={styles.etaLabel}>{t("remaining_time") || "Remaining time"}</Text>
+            <Text style={styles.etaValue}>
+              {t("minutes_remaining_short", {
+                minutes: Math.max(1, Math.round(remainingSeconds / 60)),
+              })}
+            </Text>
+          </View>
+          <View style={styles.etaDivider} />
+          <View style={styles.etaBlock}>
+            <Text style={styles.etaLabel}>{t("eta_arrival") || "ETA"}</Text>
+            <Text style={styles.etaValue}>{formatEtaClock(etaDate)}</Text>
+          </View>
+        </View>
+
         <View style={styles.routeSummary}>
           <View style={styles.routeSummaryItem}>
             <Ionicons name="time-outline" size={18} color={DARK_TEAL} />
@@ -670,86 +928,61 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           </View>
         </View>
 
-        {/* Navigation Controls */}
-        <View style={styles.navigationControls}>
-          {!isNavigating ? (
-            <TouchableOpacity
-              style={styles.startNavigationButton}
-              onPress={startNavigation}
-            >
+        {isPreview && (
+          <View style={styles.previewActions}>
+            <TouchableOpacity style={styles.startNavigationButton} onPress={startLiveNavigation}>
               <Ionicons name="navigate" size={20} color="#FFFFFF" />
               <Text style={styles.startNavigationButtonText}>
                 {t("start_navigation") || "Start Navigation"}
               </Text>
             </TouchableOpacity>
-          ) : (
             <TouchableOpacity
-              style={styles.stopNavigationButton}
-              onPress={stopNavigation}
+              style={styles.backToPlaceButton}
+              onPress={() => navigation.goBack()}
             >
-              <Ionicons name="stop-circle" size={20} color="#FFFFFF" />
-              <Text style={styles.stopNavigationButtonText}>
-                {t("stop_navigation") || "Stop Navigation"}
-              </Text>
+              <Ionicons name="map-outline" size={20} color={DARK_TEAL} />
+              <Text style={styles.backToPlaceButtonText}>{t("return_to_map")}</Text>
             </TouchableOpacity>
-          )}
-        </View>
+          </View>
+        )}
+
+        {isActive && (
+          <TouchableOpacity
+            style={styles.stopNavigationButton}
+            onPress={stopLiveNavigationAndReturnHome}
+          >
+            <Ionicons name="stop-circle" size={20} color="#FFFFFF" />
+            <Text style={styles.stopNavigationButtonText}>{t("stop_navigation")}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
-      {/* Arrival Modal */}
       <Modal
         visible={showArrivalModal}
-        transparent={true}
+        transparent
         animationType="fade"
         onRequestClose={() => setShowArrivalModal(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.arrivalModalContainer}>
             <View style={styles.arrivalModalContent}>
-              {/* Success Icon */}
               <View style={styles.arrivalIconContainer}>
                 <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
               </View>
-              
-              {/* Title */}
               <Text style={styles.arrivalModalTitle}>
-                {i18n.language === "ar"
-                  ? "وصلت إلى وجهتك"
-                  : i18n.language === "he"
-                  ? "הגעת ליעד שלך"
-                  : "You Arrived at Your Destination"}
+                {t("arrived_at_destination_title") || "You arrived"}
               </Text>
-              
-              {/* Message */}
               <Text style={styles.arrivalModalMessage}>
-                {i18n.language === "ar"
-                  ? destination?.name
-                    ? `لقد وصلت إلى ${destination.name}`
-                    : "لقد وصلت إلى وجهتك بنجاح"
-                  : i18n.language === "he"
-                  ? destination?.name
-                    ? `הגעת ל${destination.name}`
-                    : "הגעת ליעד שלך בהצלחה"
-                  : destination?.name
-                  ? `You have arrived at ${destination.name}`
-                  : "You have successfully arrived at your destination"}
+                {destination?.name
+                  ? t("arrived_at_destination_named", { name: destination.name })
+                  : t("arrived_at_destination_body") || "You have reached your destination."}
               </Text>
-              
-              {/* Close Button */}
               <TouchableOpacity
                 style={styles.arrivalModalButton}
-                onPress={() => {
-                  setShowArrivalModal(false);
-                }}
+                onPress={() => setShowArrivalModal(false)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.arrivalModalButtonText}>
-                  {i18n.language === "ar"
-                    ? "حسناً"
-                    : i18n.language === "he"
-                    ? "אישור"
-                    : "OK"}
-                </Text>
+                <Text style={styles.arrivalModalButtonText}>{t("ok") || "OK"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -765,28 +998,22 @@ const styles = StyleSheet.create({
     backgroundColor: "#F2F2F7",
   },
   header: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
+    justifyContent: "center",
+    paddingHorizontal: 20,
     paddingTop: Platform.OS === "ios" ? 50 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
-    paddingBottom: 12,
+    paddingBottom: 14,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
     borderBottomColor: "#E5E7EB",
-  },
-  backButton: {
-    padding: 8,
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: DARK_TEAL,
-    flex: 1,
     textAlign: "center",
-  },
-  headerSpacer: {
-    width: 40,
+    width: "100%",
+    letterSpacing: -0.2,
   },
   mapContainer: {
     flex: 1,
@@ -794,7 +1021,20 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
-  // User Location Marker - Google Maps style (Bigger and more obvious)
+  reroutingPill: {
+    position: "absolute",
+    top: 16,
+    alignSelf: "center",
+    backgroundColor: "rgba(15,91,99,0.92)",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  reroutingText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 13,
+  },
   userLocationMarkerContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -806,7 +1046,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: "#4285F4",
+    backgroundColor: NAV_BLUE,
   },
   userLocationDot: {
     width: 32,
@@ -814,10 +1054,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: "#FFFFFF",
     borderWidth: 4,
-    borderColor: "#4285F4",
+    borderColor: NAV_BLUE,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#4285F4",
+    shadowColor: NAV_BLUE,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.5,
     shadowRadius: 8,
@@ -828,7 +1068,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: "#4285F4",
+    backgroundColor: NAV_BLUE,
   },
   userLocationDirection: {
     position: "absolute",
@@ -836,7 +1076,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#4285F4",
+    backgroundColor: NAV_BLUE,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 3,
@@ -848,7 +1088,6 @@ const styles = StyleSheet.create({
     elevation: 6,
     zIndex: 11,
   },
-  // Start Marker - Google Maps style
   startMarkerContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -910,7 +1149,6 @@ const styles = StyleSheet.create({
     color: "#4CAF50",
     letterSpacing: 0.2,
   },
-  // End Marker (Destination) - Google Maps style
   endMarkerContainer: {
     alignItems: "center",
     justifyContent: "center",
@@ -958,17 +1196,21 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: Platform.OS === "ios" ? 30 : 20,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: Platform.OS === "ios" ? 32 : 22,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 8,
-    maxHeight: "25%",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 12,
+    borderTopWidth: 1,
+    borderColor: "#E8EDF0",
+  },
+  routeInfoCardPreview: {
+    maxHeight: "42%",
   },
   routeTypeIndicator: {
     flexDirection: "row",
@@ -977,7 +1219,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#F0F9FF",
     paddingVertical: 8,
     paddingHorizontal: 12,
-    borderRadius: 10,
+    borderRadius: 12,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#E0F2FE",
@@ -988,6 +1230,40 @@ const styles = StyleSheet.create({
     color: DARK_TEAL,
     marginLeft: 6,
     letterSpacing: 0.3,
+  },
+  etaRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#EEF2F6",
+  },
+  etaBlock: {
+    flex: 1,
+    alignItems: "center",
+  },
+  etaDivider: {
+    width: 1,
+    backgroundColor: "#E5E7EB",
+    marginVertical: 4,
+  },
+  etaLabel: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600",
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  etaValue: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0f172a",
+    letterSpacing: -0.3,
   },
   routeSummary: {
     flexDirection: "row",
@@ -1024,23 +1300,39 @@ const styles = StyleSheet.create({
     backgroundColor: "#E5E7EB",
     marginHorizontal: 12,
   },
-  navigationControls: {
-    marginTop: 0,
+  previewActions: {
+    gap: 10,
   },
   startNavigationButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: DARK_TEAL,
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: 15,
+    borderRadius: 14,
     gap: 8,
   },
   startNavigationButtonText: {
     color: "#FFFFFF",
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "700",
     letterSpacing: 0.2,
+  },
+  backToPlaceButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 14,
+    borderRadius: 14,
+    gap: 8,
+    borderWidth: 2,
+    borderColor: "#D8E8EA",
+  },
+  backToPlaceButtonText: {
+    color: DARK_TEAL,
+    fontSize: 15,
+    fontWeight: "700",
   },
   stopNavigationButton: {
     flexDirection: "row",
@@ -1048,7 +1340,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#F44336",
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 14,
     gap: 8,
   },
   stopNavigationButtonText: {
@@ -1057,7 +1349,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 0.2,
   },
-  // Floating Action Buttons
   floatingButtons: {
     position: "absolute",
     right: 16,
@@ -1065,9 +1356,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   floatingButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
@@ -1079,7 +1370,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E5E7EB",
   },
-  // Compass - Simple Google Maps style (Right side)
   compassButton: {
     position: "absolute",
     right: 16,
@@ -1087,9 +1377,9 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   compassIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center",
@@ -1140,17 +1430,16 @@ const styles = StyleSheet.create({
     borderRightColor: "transparent",
     borderBottomColor: "#FFFFFF",
   },
-  // Re-center Button - Google Maps style (Lower left)
   recenterButton: {
     position: "absolute",
     left: 16,
-    bottom: 200,
+    bottom: 220,
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#FFFFFF",
     paddingVertical: 10,
     paddingHorizontal: 14,
-    borderRadius: 20,
+    borderRadius: 22,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -1162,10 +1451,9 @@ const styles = StyleSheet.create({
     marginLeft: 6,
     fontSize: 13,
     fontWeight: "600",
-    color: "#4285F4",
+    color: NAV_BLUE,
     letterSpacing: 0.2,
   },
-  // Arrival Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.5)",
@@ -1234,4 +1522,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 });
-

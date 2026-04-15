@@ -36,6 +36,11 @@ import SavedPlacesScreen from "../screens/SavedPlacesScreen";
 import UserTabNavigator from "./UserTabNavigator";
 import ManageMyBusinessScreen from "../screens/businessOwner/ManageMyBusinessScreen";
 import RouteDetailsScreen from "../screens/RegularAccount/RouteDetailsScreen";
+import CreateAdvertisementScreen from "../screens/CreateAdvertisementScreen";
+import AdvertisementsScreen from "../screens/AdvertisementsScreen";
+import AdvertisementDetailsScreen from "../screens/AdvertisementDetailsScreen";
+import AdminAdvertisementsPendingScreen from "../screens/Admin/AdminAdvertisementsPendingScreen";
+import AdminAdvertisementDetailsScreen from "../screens/Admin/AdminAdvertisementDetailsScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -237,6 +242,31 @@ export default function AppNavigator() {
   component={RouteDetailsScreen}
   options={{ headerShown: false }}
 />
+      <Stack.Screen
+        name="CreateAdvertisement"
+        component={CreateAdvertisementScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Advertisements"
+        component={AdvertisementsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="AdvertisementDetails"
+        component={AdvertisementDetailsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="AdminAdvertisementsPending"
+        component={AdminAdvertisementsPendingScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="AdminAdvertisementDetails"
+        component={AdminAdvertisementDetailsScreen}
+        options={{ headerShown: false }}
+      />
 
       </Stack.Navigator>
 

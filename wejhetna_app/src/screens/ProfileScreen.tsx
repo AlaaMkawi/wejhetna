@@ -20,6 +20,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Accordion from "../components/Accordion";
 import SimpleLanguageSwitcher from "../components/SimpleLanguageSwitcher";
 import { RootStackParamList } from "../navigation/types";
+import { notifyUserLoggedOut } from "../utils/locationSession";
 import {
   getUserProfile,
   getDriverProfile,
@@ -36,7 +37,8 @@ const MINT = "#9bd3d8";
 type NavType = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ProfileScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isRTL = i18n.dir() === "rtl";
   const navigation = useNavigation<NavType>();
   const route = useRoute();
   const [loading, setLoading] = useState(true);
@@ -152,6 +154,7 @@ export default function ProfileScreen() {
           style: "destructive",
           onPress: async () => {
             try {
+              notifyUserLoggedOut();
               // Clear ALL stored data
               await AsyncStorage.clear();
               
@@ -167,6 +170,7 @@ export default function ProfileScreen() {
               );
             } catch (error) {
               console.error("Logout error:", error);
+              notifyUserLoggedOut();
               // Even if there's an error, try to navigate to home
               const rootNavigation = navigation.getParent()?.getParent() || navigation.getParent() || navigation;
               rootNavigation.dispatch(
@@ -1021,6 +1025,43 @@ export default function ProfileScreen() {
               </Accordion>
             )}
 
+            {/* Advertisement request — regular, driver, business owner (shared Profile tab) */}
+            {userId &&
+            userProfile &&
+            (userProfile.role === "REGULAR" ||
+              userProfile.role === "DRIVER" ||
+              userProfile.role === "BUSINESS_OWNER") ? (
+              <View style={styles.adSection}>
+                <Text style={[styles.adSectionTitle, isRTL && styles.rtlText]}>
+                  {t("advertisements.profileSection")}
+                </Text>
+                <TouchableOpacity
+                  style={[styles.adRequestCard, isRTL && styles.adRequestCardRTL]}
+                  onPress={() => navigation.navigate("CreateAdvertisement")}
+                  activeOpacity={0.88}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("advertisements.requestAdvertisement")}
+                >
+                  <View style={styles.adRequestIconWrap}>
+                    <Ionicons name="megaphone-outline" size={26} color="#fff" />
+                  </View>
+                  <View style={[styles.adRequestTextBlock, isRTL && styles.adRequestTextBlockRTL]}>
+                    <Text style={[styles.adRequestTitle, isRTL && styles.rtlText]}>
+                      {t("advertisements.requestAdvertisement")}
+                    </Text>
+                    <Text style={[styles.adRequestSubtitle, isRTL && styles.rtlText]}>
+                      {t("advertisements.requestAdvertisementSubtitle")}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={isRTL ? "chevron-back" : "chevron-forward"}
+                    size={22}
+                    color="#94a3b8"
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
             {/* Saved Places */}
             <Accordion
               title={t("saved_places") || "מקומות שמורים"}
@@ -1488,6 +1529,76 @@ const styles = StyleSheet.create({
     color: "#999",
     marginTop: 12,
     fontStyle: "italic",
+  },
+  adSection: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 8,
+    marginBottom: 8,
+  },
+  adSectionTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#64748b",
+    letterSpacing: 0.2,
+    marginBottom: 12,
+  },
+  adRequestCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderRadius: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+    gap: 4,
+  },
+  adRequestCardRTL: {
+    flexDirection: "row-reverse",
+  },
+  adRequestIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: DARK_TEAL,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  adRequestTextBlock: {
+    flex: 1,
+    marginHorizontal: 14,
+    justifyContent: "center",
+  },
+  adRequestTextBlockRTL: {
+    marginHorizontal: 14,
+  },
+  adRequestTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0f172a",
+    letterSpacing: -0.2,
+  },
+  adRequestSubtitle: {
+    fontSize: 13,
+    color: "#64748b",
+    marginTop: 4,
+    lineHeight: 19,
+    fontWeight: "500",
+  },
+  rtlText: {
+    textAlign: "right",
+    writingDirection: "rtl",
   },
   languageSwitcherWrapper: {
     marginTop: 12,

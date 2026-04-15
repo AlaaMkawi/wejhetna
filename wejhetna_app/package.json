@@ -29,6 +29,8 @@
     "react-native-dotenv": "^3.4.11",
     "react-native-image-picker": "^8.2.1",
     "react-native-localize": "^3.6.0",
+    "react-native-nitro-modules": "^0.35.3",
+    "react-native-nitro-sqlite": "^9.6.0",
     "react-native-reanimated": "^4.3.0",
     "react-native-restart": "^0.0.27",
     "react-native-safe-area-context": "^5.6.2",

@@ -23,6 +23,10 @@ export default function NewUsersScreen({ route, navigation }: Props) {
   const businessScale = useRef(new Animated.Value(1)).current;
   const businessOpacity = useRef(new Animated.Value(1)).current;
 
+  // Advertisement review card
+  const adScale = useRef(new Animated.Value(1)).current;
+  const adOpacity = useRef(new Animated.Value(1)).current;
+
   const animatePress = (scale: Animated.Value, opacity: Animated.Value, callback: () => void) => {
     Animated.parallel([
       Animated.spring(scale, {
@@ -63,6 +67,12 @@ export default function NewUsersScreen({ route, navigation }: Props) {
   const handleBusinessRequestsPress = () => {
     animatePress(businessScale, businessOpacity, () => {
       navigation.navigate("AdminBusinessOwnerRequests", { adminUserId, role });
+    });
+  };
+
+  const handleAdvertisementReviewPress = () => {
+    animatePress(adScale, adOpacity, () => {
+      navigation.navigate("AdminAdvertisementsPending", { adminUserId, role });
     });
   };
 
@@ -134,6 +144,36 @@ export default function NewUsersScreen({ route, navigation }: Props) {
               <Text style={styles.cardTitle}>{t("business_owner_requests")}</Text>
               <Text style={styles.cardSubtitle}>
                 {t("view_and_manage_business_requests") || "View and manage business owner requests"}
+              </Text>
+            </View>
+          </View>
+          </Animated.View>
+        </TouchableOpacity>
+
+        {/* Advertisement review */}
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={handleAdvertisementReviewPress}
+        >
+          <Animated.View
+            style={[
+              styles.card,
+              {
+                transform: [{ scale: adScale }],
+                opacity: adOpacity,
+              },
+            ]}
+          >
+          <View style={styles.cardContent}>
+            <View style={styles.cardIconContainer}>
+              <View style={[styles.iconCircle, styles.adIconCircle]}>
+                <Ionicons name="megaphone-outline" size={32} color="#fff" />
+              </View>
+            </View>
+            <View style={styles.cardTextContainer}>
+              <Text style={styles.cardTitle}>{t("advertisements.admin.menuTitle")}</Text>
+              <Text style={styles.cardSubtitle}>
+                {t("advertisements.admin.menuSubtitle")}
               </Text>
             </View>
           </View>
@@ -215,6 +255,9 @@ const styles = StyleSheet.create({
   },
   businessIconCircle: {
     backgroundColor: SOFT_TEAL,
+  },
+  adIconCircle: {
+    backgroundColor: "#1d737a",
   },
   cardTextContainer: {
     flex: 1,

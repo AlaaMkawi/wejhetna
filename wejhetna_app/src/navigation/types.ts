@@ -52,6 +52,12 @@ export type RootStackParamList = {
     role: "ADMIN";
     request: import("../screens/Admin/AdminBusinessOwnerRequestsScreen").BusinessOwnerRequest;
   };
+  AdminAdvertisementsPending: { adminUserId: number; role: "ADMIN" };
+  AdminAdvertisementDetails: {
+    adminUserId: number;
+    role: "ADMIN";
+    advertisement: import("../api/advertisements").AdminPendingAdvertisement;
+  };
   ExistingUsers: { adminUserId: number; role: "ADMIN" };
   RejectedUsers: { adminUserId: number; role: "ADMIN" };
   UserDetails: {
@@ -92,6 +98,12 @@ export type RootStackParamList = {
     userId: number;
   };
   ManageMyBusiness: { fromMap?: boolean } | undefined;
+  CreateAdvertisement: undefined;
+  Advertisements: undefined;
+  AdvertisementDetails: {
+    advertisementId: number;
+    advertisements: import("../api/advertisements").PublicAdvertisement[];
+  };
   RouteDetails: {
     routeInfo: {
       distance: number;
@@ -112,6 +124,8 @@ export type RootStackParamList = {
         properties: Record<string, any>;
       }>;
     } | null;
+    /** When omitted, screen defaults to preview (map + summary before live navigation). */
+    navigationPhase?: "preview" | "active";
   };
 };
 export type AuthStackParamList = {
@@ -125,5 +139,6 @@ export type AdminTabParamList = {
   alreadyUsers: { adminUserId: number; role: "ADMIN" };
   AdminHome: { adminUserId: number; role: "ADMIN"; selectedPlaceId?: number };
   newUsers: { adminUserId: number; role: "ADMIN" };
+  AdvertisementsTab: { adminUserId: number; role: "ADMIN" };
   profileDummy: { adminUserId: number; role: "ADMIN" };
 };

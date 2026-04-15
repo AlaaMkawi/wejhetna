@@ -18,7 +18,13 @@ import AdminHomeScreen from '../screens/Admin/AdminHomeScreen';
 import NewUsersScreen from '../screens/Admin/NewUsersScreen';
 import UsersSelectorScreen from '../screens/Admin/UsersSelectorScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import AdvertisementsScreen from '../screens/AdvertisementsScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { requestForegroundLocationPermission } from '../utils/locationPermission';
+import {
+  shouldRunLoginLocationPrompt,
+  markLoginLocationPromptStarted,
+} from '../utils/locationSession';
 
 import Feather from 'react-native-vector-icons/Feather';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -48,6 +54,7 @@ const ICONS_MAP: { [key: string]: { name: string; Library: any; color: string } 
   alreadyUsers: { name: 'users', Library: Feather, color: USERS_ICON_COLOR },
   AdminHome: { name: 'location-sharp', Library: Ionicons, color: LOCATION_ICON_COLOR },
   newUsers: { name: 'user-plus', Library: Feather, color: NEW_USERS_ICON_COLOR },
+  AdvertisementsTab: { name: 'megaphone-outline', Library: Ionicons, color: LOCATION_ICON_COLOR },
   profileDummy: { name: 'person', Library: Ionicons, color: PROFILE_ICON_COLOR },
 };
 
@@ -180,6 +187,14 @@ export default function AdminTabNavigator({ route }: AdminTabsProps) {
     saveAdminData();
   }, [adminUserId, role]);
 
+  React.useEffect(() => {
+    if (!shouldRunLoginLocationPrompt()) {
+      return;
+    }
+    markLoginLocationPromptStarted();
+    requestForegroundLocationPermission().catch(() => {});
+  }, []);
+
   return (
     <Tab.Navigator
       id="AdminTabs"
@@ -213,6 +228,10 @@ export default function AdminTabNavigator({ route }: AdminTabsProps) {
         name="newUsers"
         component={NewUsersScreen}
         initialParams={{ adminUserId, role }}
+      />
+      <Tab.Screen
+        name="AdvertisementsTab"
+        component={AdvertisementsScreen}
       />
       <Tab.Screen
         name="profileDummy"
