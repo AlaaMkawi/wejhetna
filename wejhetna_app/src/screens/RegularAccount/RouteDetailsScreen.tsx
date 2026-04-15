@@ -1,7 +1,6 @@
 // src/screens/RegularAccount/RouteDetailsScreen.tsx
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { Animated } from "react-native";
 import {
   View,
   Text,
@@ -22,7 +21,7 @@ import {
   ShapeSource,
   LineLayer,
 } from "@maplibre/maplibre-react-native";
-import Geolocation from "@react-native-community/geolocation";
+import { NativeGeolocation } from "../../utils/nativeGeolocation";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import i18n from "../../i18n";
 import { fetchOsrmDrivingRoute } from "../../services/navigation/osrmRoute";
@@ -34,6 +33,7 @@ import type { RouteLineStringCoords } from "../../types/navigation";
 import {
   haversineMeters,
   minDistanceToPolylineMeters,
+  snapToPolylinePoint,
   trimPolylineAheadOfUser,
   bearingDegrees,
 } from "../../utils/routePolyline";
@@ -41,7 +41,13 @@ import {
   getFreshPositionForNavigationStart,
   getNavigationRouteOrigin,
 } from "../../utils/locationPermission";
-import { createLatLonSmoother, smoothHeadingStep } from "../../utils/smoothGeoAnimation";
+import { smoothHeadingStep } from "../../utils/smoothGeoAnimation";
+import {
+  createKalmanLatLonSmoother,
+  createWeightedEmaSmoother,
+  type SmoothedPoint,
+} from "../../utils/gpsSmoothing";
+import { NavigationMarker } from "../../components/map/NavigationMarker";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -56,6 +62,13 @@ const ARRIVAL_RADIUS_M = 55;
 const SNAP_TRIM_M = 22;
 /** If live start position is this far from the preview-route origin, refetch OSRM from the fresh point. */
 const ROUTE_ORIGIN_DRIFT_REFETCH_M = 45;
+const MAX_ACCEPTABLE_ACCURACY_M = 30;
+const MAX_IMPLIED_SPEED_MPS = 55; // ~198 km/h (reject obvious teleports)
+const MAX_JUMP_METERS = 80;
+const MAX_JUMP_WINDOW_S = 2.0;
+const SNAP_TO_ROUTE_THRESHOLD_M = 15;
+const USE_KALMAN_SMOOTHER = true;
+const GPS_DEBUG = true;
 
 type RouteDetailsRoute = NativeStackScreenProps<RootStackParamList, "RouteDetails">;
 
@@ -111,9 +124,6 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [rerouting, setRerouting] = useState(false);
 
-  const pulseAnim1 = useRef(new Animated.Value(0)).current;
-  const pulseAnim2 = useRef(new Animated.Value(0)).current;
-
   const activeRouteCoordsRef = useRef<RouteLineStringCoords>(
     initialCoords.length >= 2 ? [...initialCoords] : [...initialCoords]
   );
@@ -141,23 +151,37 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     initialCoords,
   ]);
 
-  const locationSmoother = useMemo(() => createLatLonSmoother({ durationMs: 400 }), []);
+  const gpsSmoother = useMemo(
+    () => (USE_KALMAN_SMOOTHER ? createKalmanLatLonSmoother() : createWeightedEmaSmoother()),
+    []
+  );
+  const lastGoodFixRef = useRef<{
+    lat: number;
+    lon: number;
+    ts: number;
+    accuracy?: number;
+    speed?: number;
+    bearing?: number;
+  } | null>(null);
+  const displayLocationRef = useRef<SmoothedPoint | null>(null);
 
   /** New destination / new preview route: clear GPS watch, reset map state, avoid stale start point. */
   // routeParamsKey encodes destination, user origin, route head, and leg stats — avoids extra runs from object identity churn.
   useEffect(() => {
     const w = watchIdRef.current;
     if (w != null) {
-      Geolocation.clearWatch(w);
+      NativeGeolocation.clearWatch(w);
     }
     watchIdRef.current = null;
-    locationSmoother.cancel();
+    // smoother is tick-based; just forget previous state
+    displayLocationRef.current = null;
 
     const ul = initialUserLocation;
     setUserLocation(ul);
     userLocationRef.current = ul;
     setSmoothedUserLocation(ul);
-    locationSmoother.initialize(ul);
+    gpsSmoother.reset(ul);
+    displayLocationRef.current = ul;
 
     const coords: RouteLineStringCoords =
       initialCoords.length >= 2
@@ -183,8 +207,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     lastCameraMoveAtRef.current = 0;
     setIsFollowingUser(false);
     setShowFullRoute(false);
+    lastGoodFixRef.current = null;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- synced via routeParamsKey above
-  }, [routeParamsKey, navigationPhaseParam, locationSmoother]);
+  }, [routeParamsKey, navigationPhaseParam, gpsSmoother]);
 
   /** After opening a route (or changing it), refine user dot from a fast GPS read without blocking the UI. */
   useEffect(() => {
@@ -195,13 +220,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         setUserLocation(loc);
         userLocationRef.current = loc;
         setSmoothedUserLocation(loc);
-        locationSmoother.initialize(loc);
+        gpsSmoother.reset(loc);
+        displayLocationRef.current = loc;
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [routeParamsKey, locationSmoother]);
+  }, [routeParamsKey, gpsSmoother]);
 
   useEffect(() => {
     destinationRef.current = destination;
@@ -219,45 +245,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     isFollowingRef.current = isFollowingUser;
   }, [isFollowingUser]);
 
-  useEffect(() => {
-    if (sessionPhase === "active") {
-      const pulse1 = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim1, {
-            toValue: 1,
-            duration: 2000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim1, {
-            toValue: 0,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      const pulse2 = Animated.loop(
-        Animated.sequence([
-          Animated.delay(500),
-          Animated.timing(pulseAnim2, {
-            toValue: 1,
-            duration: 2000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim2, {
-            toValue: 0,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulse1.start();
-      pulse2.start();
-      return () => {
-        pulse1.stop();
-        pulse2.stop();
-      };
-    }
-  }, [sessionPhase, pulseAnim1, pulseAnim2]);
+  // Removed pulsing animation for navigation marker (custom marker uses lightweight glow)
 
   const fitCameraToRoute = useCallback(
     (coords: RouteLineStringCoords, padUser: boolean) => {
@@ -379,10 +367,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const stopLiveNavigationAndReturnHome = useCallback(() => {
     const w = watchIdRef.current;
     if (w != null) {
-      Geolocation.clearWatch(w);
+      NativeGeolocation.clearWatch(w);
     }
     watchIdRef.current = null;
-    locationSmoother.cancel();
     isNavigatingRef.current = false;
     isFollowingRef.current = false;
     offRouteSinceRef.current = null;
@@ -393,14 +380,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     setShowArrivalModal(false);
     emitLiveNavigationExit();
     navigation.goBack();
-  }, [locationSmoother, navigation]);
+  }, [navigation]);
 
   const startLiveNavigation = useCallback(() => {
     if (!destination) return;
 
     const wPrev = watchIdRef.current;
     if (wPrev != null) {
-      Geolocation.clearWatch(wPrev);
+      NativeGeolocation.clearWatch(wPrev);
       watchIdRef.current = null;
     }
 
@@ -422,9 +409,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
       userLocationRef.current = fresh;
       setUserLocation(fresh);
-      locationSmoother.initialize(fresh);
       setSmoothedUserLocation(fresh);
-      locationSmoother.animateTo(fresh, (p) => setSmoothedUserLocation(p));
+      gpsSmoother.reset(fresh);
+      displayLocationRef.current = fresh;
 
       const driftM = haversineMeters(
         fresh.lat,
@@ -482,11 +469,57 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         }
       }, 80);
 
-      const id = Geolocation.watchPosition(
+      const id = NativeGeolocation.watchPosition(
         (position) => {
           const { latitude, longitude, heading, accuracy, speed } = position.coords;
           const course = (position.coords as { course?: number }).course;
+          const ts = typeof position.timestamp === "number" ? position.timestamp : Date.now();
+          const acc =
+            accuracy != null && !Number.isNaN(accuracy) ? Math.max(0, accuracy) : undefined;
+          if (GPS_DEBUG) {
+            console.log("[GPS][watch] raw", { latitude, longitude, acc, ts, heading, speed, course });
+          }
+
+          // 1) Stale / out-of-order rejection
+          const prevGood = lastGoodFixRef.current;
+          if (prevGood && ts <= prevGood.ts) {
+            if (GPS_DEBUG) console.log("[GPS][watch] Rejected: stale timestamp", { ts, prev: prevGood.ts });
+            return;
+          }
+
+          // 2) Accuracy gating (do not update UI/route with low-quality fixes)
+          if (acc != null && acc > MAX_ACCEPTABLE_ACCURACY_M) {
+            if (GPS_DEBUG) console.log("[GPS][watch] Rejected: accuracy too high", { acc });
+            return;
+          }
+
+          // 3) Jump / invalid movement filtering (teleports)
+          if (prevGood) {
+            const dtS = Math.max(0, (ts - prevGood.ts) / 1000);
+            if (dtS > 0.05) {
+              const dM = haversineMeters(prevGood.lat, prevGood.lon, latitude, longitude);
+              const impliedMps = dM / dtS;
+              if (
+                impliedMps > MAX_IMPLIED_SPEED_MPS ||
+                (dM > MAX_JUMP_METERS && dtS < MAX_JUMP_WINDOW_S)
+              ) {
+                if (GPS_DEBUG) {
+                  console.log("[GPS][watch] Rejected: jump detected", { dM, dtS, impliedMps });
+                }
+                return;
+              }
+            }
+          }
+
           const newLocation = { lat: latitude, lon: longitude };
+          lastGoodFixRef.current = {
+            lat: latitude,
+            lon: longitude,
+            ts,
+            accuracy: acc,
+            speed: speed != null && !Number.isNaN(speed) ? speed : undefined,
+          };
+
           setUserLocation(newLocation);
           userLocationRef.current = newLocation;
 
@@ -498,10 +531,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
               setShowArrivalModal(true);
               const wid = watchIdRef.current;
               if (wid != null) {
-                Geolocation.clearWatch(wid);
+                NativeGeolocation.clearWatch(wid);
               }
               watchIdRef.current = null;
-              locationSmoother.cancel();
               setSessionPhase("preview");
               setIsFollowingUser(false);
               isNavigatingRef.current = false;
@@ -515,6 +547,18 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             bearing = course;
           } else if (heading != null && !Number.isNaN(heading) && heading >= 0) {
             bearing = heading;
+          } else {
+            const prev = prevGood;
+            if (prev) {
+              const dtS = Math.max(0, (ts - prev.ts) / 1000);
+              // Heading from movement vector (better than nothing when platform heading is noisy/absent)
+              if (dtS >= 0.6) {
+                const movedM = haversineMeters(prev.lat, prev.lon, latitude, longitude);
+                if (movedM >= 3) {
+                  bearing = bearingDegrees(prev.lat, prev.lon, latitude, longitude);
+                }
+              }
+            }
           }
 
           const coords = activeRouteCoordsRef.current;
@@ -532,6 +576,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           }
 
           const distToRoute = minDistanceToPolylineMeters(latitude, longitude, coords);
+          if (GPS_DEBUG) console.log("[GPS][watch] distToRoute(raw)", distToRoute);
           if (distToRoute > OFF_ROUTE_THRESHOLD_M) {
             if (offRouteSinceRef.current === null) {
               offRouteSinceRef.current = Date.now();
@@ -541,6 +586,37 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             }
           } else if (distToRoute < ON_ROUTE_THRESHOLD_M) {
             offRouteSinceRef.current = null;
+          }
+
+          // 4) Smooth the *displayed* point (weighted by accuracy/speed)
+          const smoothed = gpsSmoother.update({
+            lat: latitude,
+            lon: longitude,
+            accuracy: acc,
+            speed: speedMps,
+            timestampMs: ts,
+          });
+
+          // 5) Optional snapping (display only): keep raw GPS for logic/off-route detection
+          let displayPoint: SmoothedPoint = smoothed;
+          if (acc == null || acc <= MAX_ACCEPTABLE_ACCURACY_M) {
+            const snapRes = snapToPolylinePoint(smoothed.lat, smoothed.lon, coords);
+            if (snapRes && snapRes.distanceMeters <= SNAP_TO_ROUTE_THRESHOLD_M) {
+              if (GPS_DEBUG) {
+                console.log("[GPS][watch] snapped", { d: snapRes.distanceMeters, point: snapRes.point });
+              }
+              displayPoint = snapRes.point;
+            }
+          }
+
+          // Reduce re-renders: only update state if display moved enough (~0.5m)
+          const prevDisp = displayLocationRef.current;
+          if (
+            !prevDisp ||
+            haversineMeters(prevDisp.lat, prevDisp.lon, displayPoint.lat, displayPoint.lon) >= 0.5
+          ) {
+            displayLocationRef.current = displayPoint;
+            setSmoothedUserLocation(displayPoint);
           }
 
           const now = Date.now();
@@ -565,36 +641,37 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             setRemainingSeconds(remSec);
           }
 
-          locationSmoother.animateTo(newLocation, (p) => {
-            setSmoothedUserLocation(p);
-            const nav = isNavigatingRef.current;
-            const follow = isFollowingRef.current;
-            if (!cameraRef.current || !nav || !follow) return;
+          // Camera follow (short animation; throttled; based on accepted fixes only)
+          const nav = isNavigatingRef.current;
+          const follow = isFollowingRef.current;
+          if (cameraRef.current && nav && follow) {
             const camNow = Date.now();
-            if (camNow - lastCameraMoveAtRef.current < 360) return;
-            lastCameraMoveAtRef.current = camNow;
-            const brg = headingForSmoothRef.current;
-            const cameraOptions: Record<string, unknown> = {
-              centerCoordinate: [p.lon, p.lat],
-              zoomLevel: 17.2,
-              animationDuration: 400,
-            };
-            if (brg != null && (!accuracy || accuracy < 40)) {
-              cameraOptions.bearing = brg;
+            if (camNow - lastCameraMoveAtRef.current >= 220) {
+              lastCameraMoveAtRef.current = camNow;
+              const brg = headingForSmoothRef.current;
+              const cameraOptions: Record<string, unknown> = {
+                centerCoordinate: [displayPoint.lon, displayPoint.lat],
+                zoomLevel: 17.2,
+                animationDuration: 250,
+              };
+              if (brg != null) {
+                cameraOptions.bearing = brg;
+              }
+              cameraRef.current.setCamera(cameraOptions);
             }
-            cameraRef.current.setCamera(cameraOptions);
-          });
+          }
         },
         (error) => {
           console.error("GPS tracking error:", error);
+          if (GPS_DEBUG) console.log("[GPS][watch] error callback", error);
         },
         {
           enableHighAccuracy: true,
-          timeout: 20000,
-          maximumAge: 4000,
-          distanceFilter: 8,
-          interval: 3000,
-        } as Parameters<typeof Geolocation.watchPosition>[2]
+          timeout: 15000,
+          maximumAge: 0,
+          distanceFilter: 2,
+          interval: 1000,
+        } as Parameters<any>[2]
       );
 
       watchIdRef.current = id;
@@ -607,7 +684,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     initialCoords,
     initialRouteInfo,
     initialUserLocation,
-    locationSmoother,
+    gpsSmoother,
     maybeReroute,
   ]);
 
@@ -615,12 +692,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     return () => {
       const w = watchIdRef.current;
       if (w != null) {
-        Geolocation.clearWatch(w);
+        NativeGeolocation.clearWatch(w);
       }
       watchIdRef.current = null;
-      locationSmoother.cancel();
     };
-  }, [locationSmoother]);
+  }, []);
 
   const showFullRouteOverview = () => {
     const coords = activeRouteCoordsRef.current;
@@ -652,6 +728,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const headerTitle = isPreview
     ? t("route_preview_title") || "Route preview"
     : t("route_details") || "Route Details";
+
+  const markerBearing = (displayHeading ?? currentHeading ?? 0) - (mapBearing || 0);
 
   return (
     <View style={styles.container}>
@@ -701,68 +779,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           )}
 
           {userLocation && isActive && (
-            <PointAnnotation
+            <NavigationMarker
               id="user_location"
               coordinate={[smoothedUserLocation.lon, smoothedUserLocation.lat]}
-            >
-              <View style={styles.userLocationMarkerContainer}>
-                <Animated.View
-                  style={[
-                    styles.userLocationPulse,
-                    {
-                      opacity: pulseAnim1.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.3, 0],
-                      }),
-                      transform: [
-                        {
-                          scale: pulseAnim1.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [1, 2],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
-                />
-                <Animated.View
-                  style={[
-                    styles.userLocationPulse,
-                    {
-                      opacity: pulseAnim2.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.3, 0],
-                      }),
-                      transform: [
-                        {
-                          scale: pulseAnim2.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [1, 2],
-                          }),
-                        },
-                      ],
-                    },
-                  ]}
-                />
-                <View style={styles.userLocationDot}>
-                  <View style={styles.userLocationInnerDot} />
-                </View>
-                <View
-                  style={[
-                    styles.userLocationDirection,
-                    {
-                      transform: [
-                        {
-                          rotate: `${(displayHeading ?? currentHeading ?? 0) - (mapBearing || 0)}deg`,
-                        },
-                      ],
-                    },
-                  ]}
-                >
-                  <Ionicons name="navigate" size={18} color="#FFFFFF" />
-                </View>
-              </View>
-            </PointAnnotation>
+              bearingDeg={markerBearing}
+            />
           )}
 
           {destination && (

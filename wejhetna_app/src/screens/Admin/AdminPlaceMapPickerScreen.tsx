@@ -23,7 +23,7 @@ import {
   checkLocationInServiceCities,
 } from "../../api/places";
 
-import Geolocation from "@react-native-community/geolocation";
+import { NativeGeolocation as Geolocation } from "../../utils/nativeGeolocation";
 import i18n from "../../i18n";
 
 const DARK_TEAL = "#0f5b63";

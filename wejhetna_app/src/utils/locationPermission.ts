@@ -1,8 +1,21 @@
 import { Platform, PermissionsAndroid } from "react-native";
-import Geolocation from "@react-native-community/geolocation";
+import { NativeGeolocation } from "./nativeGeolocation";
 import i18n from "../i18n";
+import { getAndroidLocationStatus } from "./androidLocationStatus";
 
 export type LatLon = { lat: number; lon: number };
+const GPS_DEBUG = true;
+
+function errSummary(e: unknown): { code?: number; message: string } {
+  const x = e as { code?: number; message?: string } | undefined;
+  return { code: x?.code, message: String(x?.message || e || "") };
+}
+
+function isNoProviderAvailableError(e: unknown): boolean {
+  const s = errSummary(e);
+  const m = s.message.toLowerCase();
+  return m.includes("no location provider") || m.includes("provider available") || m.includes("provider");
+}
 
 /**
  * Android only. On iOS, use requestForegroundLocationPermission — do not probe with getCurrentPosition
@@ -43,10 +56,10 @@ export async function requestForegroundLocationPermission(): Promise<boolean> {
 
   return await new Promise((resolve) => {
     try {
-      Geolocation.requestAuthorization(
-        () => resolve(true),
-        () => resolve(false)
-      );
+      NativeGeolocation.requestAuthorization((status: unknown) => {
+        // 'granted' / 'denied' / 'disabled' are common
+        resolve(String(status) === "granted");
+      });
     } catch {
       resolve(false);
     }
@@ -59,15 +72,23 @@ export async function requestForegroundLocationPermission(): Promise<boolean> {
  */
 export async function ensureForegroundLocationForNavigation(): Promise<boolean> {
   if (Platform.OS === "android") {
+    if (GPS_DEBUG) {
+      console.log("[GPS][perm] ensureForegroundLocationForNavigation android: checking FINE");
+    }
     if (await isForegroundLocationGranted()) {
+      if (GPS_DEBUG) console.log("[GPS][perm] already granted");
       return true;
     }
     const granted = await requestForegroundLocationPermission();
     if (!granted) {
+      if (GPS_DEBUG) console.log("[GPS][perm] request denied");
       return false;
     }
-    return isForegroundLocationGranted();
+    const ok = await isForegroundLocationGranted();
+    if (GPS_DEBUG) console.log("[GPS][perm] granted after request?", ok);
+    return ok;
   }
+  if (GPS_DEBUG) console.log("[GPS][perm] ensureForegroundLocationForNavigation ios: requestAuthorization");
   return requestForegroundLocationPermission();
 }
 
@@ -78,12 +99,96 @@ function getCurrentPositionOnce(options: {
   maximumAge: number;
 }): Promise<LatLon> {
   return new Promise((resolve, reject) => {
-    Geolocation.getCurrentPosition(
+    if (Platform.OS === "android") {
+      // Preflight provider check to avoid fatal native crashes on some devices/ROMs when no providers exist.
+      getAndroidLocationStatus()
+        .then((st) => {
+          if (GPS_DEBUG && st) console.log("[GPS][androidStatus]", st);
+          if (st && (!st.locationEnabled || (!st.gpsEnabled && !st.networkEnabled))) {
+            reject({ code: 2, message: "Location services are disabled (no provider enabled)." });
+            return;
+          }
+          if (st && !st.playServicesAvailable && GPS_DEBUG) {
+            console.log("[GPS][androidStatus] Google Play Services unavailable", st.playServicesStatus);
+          }
+          if (GPS_DEBUG) {
+            console.log("[GPS][getCurrentPosition] request", options);
+          }
+          NativeGeolocation.getCurrentPosition(
+            (position) => {
+              const { latitude, longitude } = position.coords;
+              if (GPS_DEBUG) {
+                console.log("[GPS][getCurrentPosition] success", {
+                  lat: latitude,
+                  lon: longitude,
+                  acc: position.coords.accuracy,
+                  ts: position.timestamp,
+                });
+              }
+              resolve({ lat: latitude, lon: longitude });
+            },
+            (error) => {
+              if (GPS_DEBUG) {
+                console.log("[GPS][getCurrentPosition] error", errSummary(error));
+              }
+              reject(error);
+            },
+            options
+          );
+        })
+        .catch((e) => {
+          if (GPS_DEBUG) console.log("[GPS][androidStatus] failed", errSummary(e));
+          // If status check fails, still attempt GPS call (don’t block).
+          if (GPS_DEBUG) {
+            console.log("[GPS][getCurrentPosition] request", options);
+          }
+          NativeGeolocation.getCurrentPosition(
+            (position) => {
+              const { latitude, longitude } = position.coords;
+              if (GPS_DEBUG) {
+                console.log("[GPS][getCurrentPosition] success", {
+                  lat: latitude,
+                  lon: longitude,
+                  acc: position.coords.accuracy,
+                  ts: position.timestamp,
+                });
+              }
+              resolve({ lat: latitude, lon: longitude });
+            },
+            (error) => {
+              if (GPS_DEBUG) {
+                console.log("[GPS][getCurrentPosition] error", errSummary(error));
+              }
+              reject(error);
+            },
+            options
+          );
+        });
+      return;
+    }
+
+    if (GPS_DEBUG) {
+      console.log("[GPS][getCurrentPosition] request", options);
+    }
+    NativeGeolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
+        if (GPS_DEBUG) {
+          console.log("[GPS][getCurrentPosition] success", {
+            lat: latitude,
+            lon: longitude,
+            acc: position.coords.accuracy,
+            ts: position.timestamp,
+          });
+        }
         resolve({ lat: latitude, lon: longitude });
       },
-      (error) => reject(error),
+      (error) => {
+        if (GPS_DEBUG) {
+          console.log("[GPS][getCurrentPosition] error", errSummary(error));
+        }
+        reject(error);
+      },
       options
     );
   });
@@ -135,36 +240,29 @@ export async function getCurrentPositionReliable(): Promise<LatLon> {
  * to the same tiers as getCurrentPositionReliable. Avoids long wait before the route line appears.
  */
 export async function getNavigationRouteOrigin(): Promise<LatLon> {
-  const fastTiers = [
-    { enableHighAccuracy: false, timeout: 4000, maximumAge: 20000 },
-    { enableHighAccuracy: false, timeout: 5500, maximumAge: 120000 },
-    { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 },
+  // For route building / navigation preview: prefer a **fresh** fix.
+  // Cached/last-known locations are a common cause of “off-road for 5–30s then correct”.
+  const tiers = [
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
   ];
-
   let lastError: unknown;
-  for (const opts of fastTiers) {
+  for (const opts of tiers) {
     try {
       return await getCurrentPositionOnce(opts);
     } catch (e: any) {
       lastError = e;
-      if (e?.code === 1) {
-        throw e;
-      }
+      if (e?.code === 1) throw e; // permission denied
     }
   }
-
-  for (const opts of [
-    { enableHighAccuracy: false, timeout: 22000, maximumAge: 120000 },
-    { enableHighAccuracy: true, timeout: 40000, maximumAge: 0 },
-  ]) {
-    try {
-      return await getCurrentPositionOnce(opts);
-    } catch (e: any) {
-      lastError = e;
-      if (e?.code === 1) {
-        throw e;
-      }
+  // If GPS provider is unavailable (common on some devices when high accuracy is forced),
+  // fall back to network provider WITHOUT allowing cached fixes.
+  if (isNoProviderAvailableError(lastError)) {
+    const fallback = { enableHighAccuracy: false, timeout: 20000, maximumAge: 0 };
+    if (GPS_DEBUG) {
+      console.log("[GPS][routeOrigin] highAccuracy provider unavailable; fallback to network", fallback);
     }
+    return await getCurrentPositionOnce(fallback);
   }
   throw lastError;
 }
@@ -173,10 +271,10 @@ export async function getNavigationRouteOrigin(): Promise<LatLon> {
  * Fresh fix for starting live navigation (avoid stale route origin). Short maxAge first, then tight.
  */
 export async function getFreshPositionForNavigationStart(): Promise<LatLon> {
+  // Starting live navigation must not rely on cached points.
   const tiers = [
-    { enableHighAccuracy: false, timeout: 5000, maximumAge: 8000 },
-    { enableHighAccuracy: false, timeout: 8000, maximumAge: 25000 },
-    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
   ];
   let lastError: unknown;
   for (const opts of tiers) {
@@ -188,6 +286,13 @@ export async function getFreshPositionForNavigationStart(): Promise<LatLon> {
         throw e;
       }
     }
+  }
+  if (isNoProviderAvailableError(lastError)) {
+    const fallback = { enableHighAccuracy: false, timeout: 20000, maximumAge: 0 };
+    if (GPS_DEBUG) {
+      console.log("[GPS][navStart] highAccuracy provider unavailable; fallback to network", fallback);
+    }
+    return await getCurrentPositionOnce(fallback);
   }
   throw lastError;
 }
