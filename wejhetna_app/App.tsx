@@ -4,6 +4,7 @@ import i18n, { loadAppLanguage } from "./src/i18n";
 
 import React, { useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import AppNavigator from "./src/navigation/AppNavigator";
 
 export default function App() {
@@ -25,9 +26,11 @@ export default function App() {
 
   return (
     <I18nextProvider i18n={i18n}>
-      <NavigationContainer>
-        <AppNavigator />
-      </NavigationContainer>
+      <SafeAreaProvider>
+        <NavigationContainer>
+          <AppNavigator />
+        </NavigationContainer>
+      </SafeAreaProvider>
     </I18nextProvider>
   );
 }

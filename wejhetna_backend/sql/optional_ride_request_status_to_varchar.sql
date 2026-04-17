@@ -1,0 +1,22 @@
+-- Automated by add_ride_request_tables.py (_ensure_status_column_is_varchar).
+-- Manual run (pgAdmin) if the script was not executed:
+--
+-- ALTER TABLE ride_requests ALTER COLUMN status DROP DEFAULT;
+-- ALTER TABLE ride_requests
+--   ALTER COLUMN status TYPE VARCHAR(32)
+--   USING (
+--     CASE status::text
+--       WHEN 'PENDING' THEN 'pending'
+--       WHEN 'ACCEPTED' THEN 'accepted'
+--       WHEN 'REJECTED' THEN 'rejected'
+--       WHEN 'CANCELLED' THEN 'cancelled'
+--       WHEN 'DRIVING_TO_CUSTOMER' THEN 'driving_to_customer'
+--       WHEN 'pending' THEN 'pending'
+--       WHEN 'accepted' THEN 'accepted'
+--       WHEN 'rejected' THEN 'rejected'
+--       WHEN 'cancelled' THEN 'cancelled'
+--       WHEN 'driving_to_customer' THEN 'driving_to_customer'
+--       ELSE 'pending'
+--     END
+--   );
+-- ALTER TABLE ride_requests ALTER COLUMN status SET DEFAULT 'pending';

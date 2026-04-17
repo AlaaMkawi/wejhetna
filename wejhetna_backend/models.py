@@ -62,6 +62,18 @@ class AdvertisementStatus(str, enum.Enum):
     REJECTED = "REJECTED"
 
 
+class RideRequestStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    # Driver tapped "Start driving" — navigating to pickup (legacy value kept for old rows)
+    ON_THE_WAY = "on_the_way"
+    DRIVING_TO_CUSTOMER = "driving_to_customer"
+    ARRIVED = "arrived"
+    IN_PROGRESS = "in_progress"
+
+
 # ========== TABLES ==========
 
 class User(Base):
@@ -91,6 +103,7 @@ class User(Base):
     driver_profile = relationship("DriverProfile", back_populates="user", uselist=False)
     saved_places = relationship("SavedPlace", back_populates="user")
     advertisements = relationship("Advertisement", back_populates="user")
+    driver_availability = relationship("DriverAvailability", back_populates="driver", uselist=False)
 
 
 class DriverProfile(Base):
@@ -317,6 +330,63 @@ class SavedPlace(Base):
     
     # תאריך שמירה
     saved_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DriverAvailability(Base):
+    __tablename__ = "driver_availability"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    is_available = Column(Boolean, nullable=False, default=False)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    driver = relationship("User", back_populates="driver_availability")
+    location = relationship("Location")
+
+
+class RideRequest(Base):
+    __tablename__ = "ride_requests"
+    __table_args__ = (
+        Index("idx_ride_requests_driver_status", "driver_user_id", "status"),
+        Index("idx_ride_requests_regular_status", "regular_user_id", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    regular_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    driver_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    pickup_lat = Column(Float, nullable=False)
+    pickup_lon = Column(Float, nullable=False)
+    destination_text = Column(String, nullable=False)
+    destination_lat = Column(Float, nullable=True)
+    destination_lon = Column(Float, nullable=True)
+
+    regular_phone = Column(String, nullable=False)
+    passengers_count = Column(Integer, nullable=False, default=1)
+    number_of_people = Column(Integer, nullable=True)
+    number_of_seats_required = Column(Integer, nullable=True)
+    eta_to_user = Column(Integer, nullable=True)
+    estimated_trip_time = Column(Integer, nullable=True)
+
+    # Store API values as plain strings ('pending', …). Native PG enums caused INSERT/SELECT 5xx.
+    status = Column(String(32), nullable=False, server_default=text("'pending'"))
+    status_note = Column(Text, nullable=True)
+    verification_code = Column(String(32), nullable=True)
+    verification_expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    regular_user = relationship("User", foreign_keys=[regular_user_id])
+    driver_user = relationship("User", foreign_keys=[driver_user_id])
 
 
 class BusinessOwnerPlaceRequest(Base):

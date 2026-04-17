@@ -16,7 +16,9 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import RegularHomeScreen from '../screens/RegularAccount/RegularHomeScreen';
+import RegularRideStatusScreen from '../screens/RegularAccount/RegularRideStatusScreen';
 import DriverHomeScreen from '../screens/DriverAccount/DriverHomeScreen';
+import DriverRideScreen from '../screens/DriverAccount/DriverRideScreen';
 import BusinessOwnerHomeScreen from '../screens/businessOwner/BusinessOwnerHomeScreen';
 import AdvertisementsScreen from '../screens/AdvertisementsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
@@ -49,7 +51,8 @@ const WHITE_COLOR = "#fff";
 
 const ICONS_MAP: { [key: string]: { name: string; color: string } } = {
   Home: { name: 'home', color: HOME_ICON_COLOR },
-  Search: { name: 'search', color: SEARCH_ICON_COLOR },
+  RideTracking: { name: 'navigate', color: SEARCH_ICON_COLOR },
+  DriverRequests: { name: 'car-sport', color: SEARCH_ICON_COLOR },
   ManageBusiness: { name: 'business', color: HOME_ICON_COLOR },
   AdvertisementsTab: { name: 'megaphone', color: HOME_ICON_COLOR },
   Profile: { name: 'person', color: PROFILE_ICON_COLOR },
@@ -249,8 +252,8 @@ export default function UserTabNavigator() {
           component={RegularHomeScreen}
         />
         <Tab.Screen
-          name="Search"
-          component={RegularHomeScreen}
+          name="RideTracking"
+          component={RegularRideStatusScreen}
         />
         <Tab.Screen
           name="AdvertisementsTab"
@@ -266,6 +269,7 @@ export default function UserTabNavigator() {
 
   // Determine tabs based on user role
   const isBusinessOwner = userRole === "BUSINESS_OWNER";
+  const isDriver = userRole === "DRIVER";
 
   return (
     <Tab.Navigator
@@ -287,11 +291,15 @@ export default function UserTabNavigator() {
           name="ManageBusiness"
           component={ManageMyBusinessScreen}
         />
+      ) : isDriver ? (
+        <Tab.Screen
+          name="DriverRequests"
+          component={DriverRideScreen}
+        />
       ) : (
         <Tab.Screen
-          name="Search"
-          component={HomeScreenComponent}
-          initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
+          name="RideTracking"
+          component={RegularRideStatusScreen}
         />
       )}
       <Tab.Screen

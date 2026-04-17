@@ -76,6 +76,15 @@ export type BoundaryCheckResult = {
   city_name_en: string | null;
 };
 
+/** When the boundary API is unreachable (ngrok 503, network blip), allow the flow to continue. */
+const BOUNDARY_CHECK_FALLBACK: BoundaryCheckResult = {
+  is_within: true,
+  city_id: null,
+  city_name_ar: null,
+  city_name_he: null,
+  city_name_en: null,
+};
+
 export async function checkLocationInServiceCities(
   lat: number,
   lon: number
@@ -83,21 +92,29 @@ export async function checkLocationInServiceCities(
   try {
     const res = await fetch(`${BASE_URL}/cities/check-boundary`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "ngrok-skip-browser-warning": "true",
+      },
       body: JSON.stringify({ lat, lon }),
     });
-    
+
     if (!res.ok) {
-      const errorText = await res.text();
-      console.error(`Boundary check failed: ${res.status} - ${errorText}`);
-      throw new Error(`Failed to check location boundary: ${res.status} ${errorText}`);
+      if (res.status === 503 || res.status === 502 || res.status === 504 || res.status >= 500) {
+        return BOUNDARY_CHECK_FALLBACK;
+      }
+      const errorText = await res.text().catch(() => "");
+      if (__DEV__) {
+        console.warn(`[check-boundary] HTTP ${res.status}`, errorText?.slice(0, 160));
+      }
+      throw new Error(`Failed to check location boundary: ${res.status}`);
     }
-    
+
     return res.json();
   } catch (error) {
-    // אם זה network error, נזרוק שגיאה ברורה יותר
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new Error("Cannot connect to server. Please check if the backend is running.");
+    if (error instanceof TypeError) {
+      return BOUNDARY_CHECK_FALLBACK;
     }
     throw error;
   }

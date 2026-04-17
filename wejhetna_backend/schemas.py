@@ -328,3 +328,100 @@ class AdvertisementAdminActionResponse(BaseModel):
     id: int
     status: str
     message: str
+
+
+class DriverAvailabilityUpdateRequest(BaseModel):
+    driver_user_id: int
+    is_available: bool
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+class DriverAvailabilityLocationUpdateRequest(BaseModel):
+    driver_user_id: int
+    lat: float
+    lon: float
+
+
+class NearbyAvailableDriverOut(BaseModel):
+    driver_user_id: int
+    full_name: str
+    username: str
+    lat: float
+    lon: float
+    distance_km: float
+
+
+class RideRequestCreateRequest(BaseModel):
+    regular_user_id: int
+    driver_user_id: int
+    pickup_lat: float
+    pickup_lon: float
+    destination_text: str
+    destination_lat: Optional[float] = None
+    destination_lon: Optional[float] = None
+    regular_phone: str
+    passengers_count: Optional[int] = Field(default=None, ge=1, le=12)
+    number_of_people: Optional[int] = Field(default=None, ge=1, le=12)
+    number_of_seats_required: Optional[int] = Field(default=None, ge=1, le=12)
+
+
+class RideRequestActionRequest(BaseModel):
+    driver_user_id: int
+    note: Optional[str] = None
+
+
+class RideRequestStatusOut(BaseModel):
+    id: int
+    status: str
+    message: str
+
+
+class RideRequestRegularOut(BaseModel):
+    id: int
+    driver_user_id: int
+    driver_full_name: str
+    driver_username: str
+    pickup_lat: float
+    pickup_lon: float
+    destination_text: str
+    passengers_count: int
+    number_of_people: Optional[int] = None
+    number_of_seats_required: Optional[int] = None
+    estimated_trip_time: Optional[int] = None
+    eta_to_user: Optional[int] = None  # minutes until driver reaches pickup (live while on the way)
+    distance_to_pickup_km: Optional[float] = None  # driver live position to pickup (when location known)
+    driver_live_lat: Optional[float] = None
+    driver_live_lon: Optional[float] = None
+    status: str
+    verification_code: Optional[str] = None  # set when driver arrived; passenger shares with driver
+    created_at: datetime
+    updated_at: datetime
+
+
+class RideVerifyCodeRequest(BaseModel):
+    ride_request_id: int = Field(..., ge=1)
+    driver_user_id: int = Field(..., ge=1)
+    verification_code: str = Field(..., min_length=4, max_length=16)
+
+
+class RideRequestDriverOut(BaseModel):
+    id: int
+    regular_user_id: int
+    regular_username: str
+    pickup_lat: float
+    pickup_lon: float
+    destination_text: str
+    destination_lat: Optional[float] = None
+    destination_lon: Optional[float] = None
+    passengers_count: int
+    number_of_people: Optional[int] = None
+    number_of_seats_required: Optional[int] = None
+    status: str
+    distance_to_pickup_km: Optional[float] = None
+    eta_to_pickup_min: Optional[int] = None
+    eta_to_user: Optional[int] = None
+    estimated_trip_time: Optional[int] = None
+    regular_phone: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime

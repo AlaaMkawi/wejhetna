@@ -1,18 +1,20 @@
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import or_, cast
 from sqlalchemy import func
 from schemas import LocationCreate, LocationResponse
 from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.context import CryptContext
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime, timezone, timedelta
 from fastapi import File, UploadFile, Form
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from uuid import uuid4
 import shutil
+import secrets
 from typing import List
 from models import Location, Place
 from db import Base, engine, SessionLocal
@@ -40,6 +42,9 @@ from models import (
     OwnerPlaceRequestStatus,
     EmailVerification,
     SavedPlace,
+    DriverAvailability,
+    RideRequest,
+    RideRequestStatus,
 )
 from schemas import (
     CityCreate,
@@ -64,6 +69,15 @@ from schemas import (
     AdvertisementPublicOut,
     AdminPendingAdvertisementOut,
     AdvertisementAdminActionResponse,
+    DriverAvailabilityUpdateRequest,
+    DriverAvailabilityLocationUpdateRequest,
+    NearbyAvailableDriverOut,
+    RideRequestCreateRequest,
+    RideRequestActionRequest,
+    RideRequestStatusOut,
+    RideRequestRegularOut,
+    RideRequestDriverOut,
+    RideVerifyCodeRequest,
 )
 import requests
 from dependencies import (
@@ -85,6 +99,7 @@ from services.advertisement_service import (
     AdvertisementS3ConfigError,
     AdvertisementS3UploadError,
 )
+from ride_notifications import enqueue_ride_in_progress, enqueue_verification_code_created
 
 
 def find_osm_poi(lat: float, lon: float):
@@ -273,6 +288,11 @@ def hash_password(password: str) -> str:
 def generate_verification_code() -> str:
     """Generate a random 6-digit verification code."""
     return str(random.randint(100000, 999999))
+
+
+def generate_ride_request_verification_code() -> str:
+    """Cryptographically strong 6-digit code for ride start verification (not predictable)."""
+    return str(secrets.randbelow(900_000) + 100_000)
 
 
 def send_verification_email(to_email: str, code: str, full_name: str = "", language: str = "ar"):
@@ -4429,3 +4449,641 @@ def check_if_place_saved(place_id: int, user_id: int, db: Session = Depends(get_
     )
     
     return {"is_saved": saved_place is not None}
+
+
+# =========================
+# RIDE REQUEST FLOW (V1)
+# =========================
+
+DEFAULT_NEARBY_DRIVER_RADIUS_M = 3000
+DEFAULT_DRIVER_LOCATION_MAX_AGE_MIN = 10
+DEFAULT_DRIVER_SPEED_KMPH = 30.0
+
+
+def _distance_km_between_points(db: Session, lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    distance_m = db.query(
+        func.ST_DistanceSphere(
+            func.ST_SetSRID(func.ST_MakePoint(lon1, lat1), 4326),
+            func.ST_SetSRID(func.ST_MakePoint(lon2, lat2), 4326),
+        )
+    ).scalar()
+    if not distance_m:
+        return 0.0
+    return round(float(distance_m) / 1000.0, 2)
+
+
+def _estimate_eta_minutes(distance_km: float) -> int:
+    if distance_km <= 0:
+        return 0
+    return max(1, int(round((distance_km / DEFAULT_DRIVER_SPEED_KMPH) * 60)))
+
+
+def _live_eta_minutes_driver_to_pickup(db: Session, ride: RideRequest) -> Optional[int]:
+    """Minutes from driver's latest location to the ride pickup point."""
+    av = (
+        db.query(DriverAvailability)
+        .filter(DriverAvailability.driver_user_id == ride.driver_user_id)
+        .first()
+    )
+    if not av or not av.location_id:
+        return ride.eta_to_user
+    loc = db.query(Location).filter(Location.id == av.location_id).first()
+    if not loc:
+        return ride.eta_to_user
+    try:
+        km = _distance_km_between_points(
+            db,
+            float(loc.lon),
+            float(loc.lat),
+            float(ride.pickup_lon),
+            float(ride.pickup_lat),
+        )
+        return _estimate_eta_minutes(km)
+    except Exception:
+        return ride.eta_to_user
+
+
+def _coerce_ride_request_status(status: Any) -> Optional[RideRequestStatus]:
+    """
+    ORM may load status as Enum, plain str (e.g. PostgreSQL enum), or mixed casing.
+    Python compares str to RideRequestStatus incorrectly — normalize before logic.
+    """
+    if isinstance(status, RideRequestStatus):
+        return status
+    if status is None:
+        return None
+    raw: Any = getattr(status, "value", status)
+    if isinstance(raw, RideRequestStatus):
+        return raw
+    if not isinstance(raw, str):
+        raw = str(raw)
+    key = raw.strip()
+    by_name = getattr(RideRequestStatus, key.upper(), None)
+    if by_name is not None:
+        return by_name
+    for m in RideRequestStatus:
+        if m.value == key:
+            return m
+    return None
+
+
+def _ride_request_status_str(ride: RideRequest) -> str:
+    """Pydantic expects lowercase API values (pending, accepted, …)."""
+    coerced = _coerce_ride_request_status(ride.status)
+    if coerced is not None:
+        return coerced.value
+    s = ride.status
+    if isinstance(s, str):
+        return s
+    return getattr(s, "value", str(s))
+
+
+@app.put("/drivers/availability", response_model=RideRequestStatusOut)
+def update_driver_availability(data: DriverAvailabilityUpdateRequest, db: Session = Depends(get_db)):
+    driver = db.query(User).filter(User.id == data.driver_user_id).first()
+    if not driver or driver.role != UserRole.DRIVER:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    if data.is_available and (data.lat is None or data.lon is None):
+        raise HTTPException(status_code=400, detail="Location is required when enabling availability")
+
+    availability = db.query(DriverAvailability).filter(
+        DriverAvailability.driver_user_id == data.driver_user_id
+    ).first()
+    if not availability:
+        availability = DriverAvailability(driver_user_id=data.driver_user_id)
+        db.add(availability)
+
+    availability.is_available = data.is_available
+    if data.lat is not None and data.lon is not None:
+        location = Location(
+            geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
+            source="DRIVER_AVAILABILITY",
+        )
+        db.add(location)
+        db.flush()
+        availability.location_id = location.id
+
+    db.commit()
+    return RideRequestStatusOut(
+        id=availability.id,
+        status="ok",
+        message="Driver availability updated",
+    )
+
+
+@app.get("/drivers/{driver_user_id}/availability")
+def get_driver_availability(driver_user_id: int, db: Session = Depends(get_db)):
+    driver = db.query(User).filter(User.id == driver_user_id).first()
+    if not driver or driver.role != UserRole.DRIVER:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    availability = db.query(DriverAvailability).filter(
+        DriverAvailability.driver_user_id == driver_user_id
+    ).first()
+    if not availability:
+        return {"is_available": False}
+    return {"is_available": bool(availability.is_available)}
+
+
+@app.post("/drivers/location", response_model=RideRequestStatusOut)
+def update_driver_location(data: DriverAvailabilityLocationUpdateRequest, db: Session = Depends(get_db)):
+    driver = db.query(User).filter(User.id == data.driver_user_id).first()
+    if not driver or driver.role != UserRole.DRIVER:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    availability = db.query(DriverAvailability).filter(
+        DriverAvailability.driver_user_id == data.driver_user_id
+    ).first()
+    if not availability:
+        availability = DriverAvailability(driver_user_id=data.driver_user_id, is_available=False)
+        db.add(availability)
+
+    location = Location(
+        geom=func.ST_SetSRID(func.ST_MakePoint(data.lon, data.lat), 4326),
+        source="DRIVER_LIVE_LOCATION",
+    )
+    db.add(location)
+    db.flush()
+    availability.location_id = location.id
+    db.commit()
+
+    return RideRequestStatusOut(id=availability.id, status="ok", message="Driver location updated")
+
+
+@app.get("/rides/nearby-drivers", response_model=List[NearbyAvailableDriverOut])
+def list_nearby_available_drivers(
+    regular_user_id: int,
+    lat: float,
+    lon: float,
+    radius_m: float = DEFAULT_NEARBY_DRIVER_RADIUS_M,
+    db: Session = Depends(get_db),
+):
+    regular_user = db.query(User).filter(User.id == regular_user_id).first()
+    if not regular_user or regular_user.role != UserRole.REGULAR:
+        raise HTTPException(status_code=404, detail="Regular user not found")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=DEFAULT_DRIVER_LOCATION_MAX_AGE_MIN)
+    rows = (
+        db.query(DriverAvailability, User, Location)
+        .join(User, DriverAvailability.driver_user_id == User.id)
+        .join(Location, DriverAvailability.location_id == Location.id)
+        .join(DriverProfile, DriverProfile.user_id == User.id)
+        .filter(
+            DriverAvailability.is_available.is_(True),
+            DriverAvailability.updated_at >= cutoff,
+            DriverProfile.driver_status == DriverStatus.APPROVED,
+            func.ST_DWithin(
+                Location.geom,
+                cast(
+                    func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326),
+                    Geography(geometry_type="POINT", srid=4326),
+                ),
+                radius_m,
+            ),
+        )
+        .all()
+    )
+
+    result: List[NearbyAvailableDriverOut] = []
+    for availability, user, location in rows:
+        distance_km = _distance_km_between_points(db, lon, lat, float(location.lon), float(location.lat))
+        result.append(
+            NearbyAvailableDriverOut(
+                driver_user_id=user.id,
+                full_name=user.full_name,
+                username=user.username,
+                lat=float(location.lat),
+                lon=float(location.lon),
+                distance_km=distance_km,
+            )
+        )
+    return result
+
+
+@app.post("/rides/requests", response_model=RideRequestStatusOut, status_code=201)
+def create_ride_request(data: RideRequestCreateRequest, db: Session = Depends(get_db)):
+    regular_user = db.query(User).filter(User.id == data.regular_user_id).first()
+    driver_user = db.query(User).filter(User.id == data.driver_user_id).first()
+    if not regular_user or regular_user.role != UserRole.REGULAR:
+        raise HTTPException(status_code=404, detail="Regular user not found")
+    if not driver_user or driver_user.role != UserRole.DRIVER:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    availability = db.query(DriverAvailability).filter(
+        DriverAvailability.driver_user_id == data.driver_user_id
+    ).first()
+    if not availability or not availability.is_available:
+        raise HTTPException(status_code=400, detail="Driver is not available")
+
+    number_of_people = data.number_of_people or data.passengers_count
+    number_of_seats_required = data.number_of_seats_required or data.passengers_count
+    if not number_of_people or not number_of_seats_required:
+        raise HTTPException(
+            status_code=400,
+            detail="number_of_people and number_of_seats_required are required",
+        )
+    if number_of_people <= 0 or number_of_seats_required <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="number_of_people and number_of_seats_required must be positive",
+        )
+
+    eta_to_user = None
+    estimated_trip_time = None
+    if availability.location_id:
+        driver_loc = db.query(Location).filter(Location.id == availability.location_id).first()
+        if driver_loc:
+            try:
+                driver_to_user_km = _distance_km_between_points(
+                    db,
+                    float(driver_loc.lon),
+                    float(driver_loc.lat),
+                    data.pickup_lon,
+                    data.pickup_lat,
+                )
+                eta_to_user = _estimate_eta_minutes(driver_to_user_km)
+            except Exception:
+                eta_to_user = None
+
+    if data.destination_lat is not None and data.destination_lon is not None:
+        try:
+            trip_distance_km = _distance_km_between_points(
+                db,
+                data.pickup_lon,
+                data.pickup_lat,
+                data.destination_lon,
+                data.destination_lat,
+            )
+            estimated_trip_time = _estimate_eta_minutes(trip_distance_km)
+        except Exception:
+            estimated_trip_time = None
+
+    ride = RideRequest(
+        regular_user_id=data.regular_user_id,
+        driver_user_id=data.driver_user_id,
+        pickup_lat=data.pickup_lat,
+        pickup_lon=data.pickup_lon,
+        destination_text=data.destination_text,
+        destination_lat=data.destination_lat,
+        destination_lon=data.destination_lon,
+        regular_phone=data.regular_phone,
+        passengers_count=number_of_people,
+        number_of_people=number_of_people,
+        number_of_seats_required=number_of_seats_required,
+        eta_to_user=eta_to_user,
+        estimated_trip_time=estimated_trip_time,
+        status=RideRequestStatus.PENDING.value,
+    )
+    db.add(ride)
+    try:
+        db.commit()
+        db.refresh(ride)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Could not save ride request",
+        )
+    return RideRequestStatusOut(
+        id=ride.id, status=_ride_request_status_str(ride), message="Ride request created"
+    )
+
+
+@app.get("/drivers/{driver_user_id}/ride-requests", response_model=List[RideRequestDriverOut])
+def list_driver_ride_requests(driver_user_id: int, db: Session = Depends(get_db)):
+    driver = db.query(User).filter(User.id == driver_user_id).first()
+    if not driver or driver.role != UserRole.DRIVER:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    rides = (
+        db.query(RideRequest, User)
+        .join(User, RideRequest.regular_user_id == User.id)
+        .filter(RideRequest.driver_user_id == driver_user_id)
+        .order_by(RideRequest.created_at.desc())
+        .all()
+    )
+
+    result: List[RideRequestDriverOut] = []
+    availability = db.query(DriverAvailability).filter(DriverAvailability.driver_user_id == driver_user_id).first()
+    driver_lat = None
+    driver_lon = None
+    if availability and availability.location_id:
+        loc = db.query(Location).filter(Location.id == availability.location_id).first()
+        if loc:
+            driver_lat = float(loc.lat)
+            driver_lon = float(loc.lon)
+
+    for ride, regular_user in rides:
+        distance_km = None
+        eta_min = ride.eta_to_user
+        if driver_lat is not None and driver_lon is not None:
+            try:
+                distance_km = _distance_km_between_points(
+                    db,
+                    driver_lon,
+                    driver_lat,
+                    float(ride.pickup_lon),
+                    float(ride.pickup_lat),
+                )
+                eta_min = _estimate_eta_minutes(distance_km)
+            except Exception:
+                distance_km = None
+                eta_min = ride.eta_to_user
+
+        status_str = _ride_request_status_str(ride)
+        is_phone_visible = status_str in (
+            RideRequestStatus.ACCEPTED.value,
+            RideRequestStatus.ON_THE_WAY.value,
+            RideRequestStatus.DRIVING_TO_CUSTOMER.value,
+            RideRequestStatus.ARRIVED.value,
+            RideRequestStatus.IN_PROGRESS.value,
+        )
+        result.append(
+            RideRequestDriverOut(
+                id=ride.id,
+                regular_user_id=ride.regular_user_id,
+                regular_username=regular_user.username,
+                pickup_lat=ride.pickup_lat,
+                pickup_lon=ride.pickup_lon,
+                destination_text=ride.destination_text,
+                destination_lat=ride.destination_lat,
+                destination_lon=ride.destination_lon,
+                passengers_count=ride.passengers_count,
+                number_of_people=ride.number_of_people or ride.passengers_count,
+                number_of_seats_required=ride.number_of_seats_required or ride.passengers_count,
+                status=status_str,
+                distance_to_pickup_km=distance_km,
+                eta_to_pickup_min=eta_min,
+                eta_to_user=ride.eta_to_user,
+                estimated_trip_time=ride.estimated_trip_time,
+                regular_phone=ride.regular_phone if is_phone_visible else None,
+                created_at=ride.created_at,
+                updated_at=ride.updated_at,
+            )
+        )
+    return result
+
+
+@app.get("/users/{user_id}/ride-requests/latest", response_model=Optional[RideRequestRegularOut])
+def get_regular_latest_ride_request(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.role != UserRole.REGULAR:
+        raise HTTPException(status_code=404, detail="Regular user not found")
+
+    row = (
+        db.query(RideRequest, User)
+        .join(User, RideRequest.driver_user_id == User.id)
+        .filter(RideRequest.regular_user_id == user_id)
+        .order_by(RideRequest.created_at.desc())
+        .first()
+    )
+    if not row:
+        return None
+
+    ride, driver = row
+    st = _coerce_ride_request_status(ride.status)
+
+    driver_live_lat: Optional[float] = None
+    driver_live_lon: Optional[float] = None
+    distance_to_pickup_km: Optional[float] = None
+    av = (
+        db.query(DriverAvailability)
+        .filter(DriverAvailability.driver_user_id == ride.driver_user_id)
+        .first()
+    )
+    if av and av.location_id:
+        loc = db.query(Location).filter(Location.id == av.location_id).first()
+        if loc:
+            driver_live_lat = float(loc.lat)
+            driver_live_lon = float(loc.lon)
+            if st in (
+                RideRequestStatus.ACCEPTED,
+                RideRequestStatus.ON_THE_WAY,
+                RideRequestStatus.DRIVING_TO_CUSTOMER,
+                RideRequestStatus.ARRIVED,
+            ):
+                try:
+                    distance_to_pickup_km = _distance_km_between_points(
+                        db,
+                        driver_live_lon,
+                        driver_live_lat,
+                        float(ride.pickup_lon),
+                        float(ride.pickup_lat),
+                    )
+                except Exception:
+                    distance_to_pickup_km = None
+
+    live_eta: Optional[int] = None
+    if st in (RideRequestStatus.ON_THE_WAY, RideRequestStatus.DRIVING_TO_CUSTOMER):
+        live_eta = _live_eta_minutes_driver_to_pickup(db, ride)
+    elif st == RideRequestStatus.ACCEPTED:
+        live_eta = _live_eta_minutes_driver_to_pickup(db, ride)
+        if live_eta is None:
+            live_eta = ride.eta_to_user
+    elif st == RideRequestStatus.ARRIVED:
+        live_eta = 0
+
+    code_for_passenger = None
+    if st == RideRequestStatus.ARRIVED and ride.verification_code:
+        code_for_passenger = ride.verification_code
+
+    return RideRequestRegularOut(
+        id=ride.id,
+        driver_user_id=ride.driver_user_id,
+        driver_full_name=driver.full_name,
+        driver_username=driver.username,
+        pickup_lat=float(ride.pickup_lat),
+        pickup_lon=float(ride.pickup_lon),
+        destination_text=ride.destination_text,
+        passengers_count=ride.passengers_count,
+        number_of_people=ride.number_of_people or ride.passengers_count,
+        number_of_seats_required=ride.number_of_seats_required or ride.passengers_count,
+        estimated_trip_time=ride.estimated_trip_time,
+        eta_to_user=live_eta,
+        distance_to_pickup_km=distance_to_pickup_km,
+        driver_live_lat=driver_live_lat,
+        driver_live_lon=driver_live_lon,
+        status=_ride_request_status_str(ride),
+        verification_code=code_for_passenger,
+        created_at=ride.created_at,
+        updated_at=ride.updated_at,
+    )
+
+
+@app.post("/rides/requests/{ride_request_id}/accept", response_model=RideRequestStatusOut)
+def accept_ride_request(ride_request_id: int, data: RideRequestActionRequest, db: Session = Depends(get_db)):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.driver_user_id != data.driver_user_id:
+        raise HTTPException(status_code=403, detail="Driver is not allowed to accept this request")
+    if _coerce_ride_request_status(ride.status) != RideRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only pending requests can be accepted")
+
+    active_existing = db.query(RideRequest).filter(
+        RideRequest.driver_user_id == data.driver_user_id,
+        RideRequest.status.in_(
+            [
+                RideRequestStatus.ACCEPTED.value,
+                RideRequestStatus.ON_THE_WAY.value,
+                RideRequestStatus.DRIVING_TO_CUSTOMER.value,
+                RideRequestStatus.ARRIVED.value,
+                RideRequestStatus.IN_PROGRESS.value,
+            ]
+        ),
+        RideRequest.id != ride.id,
+    ).first()
+    if active_existing:
+        raise HTTPException(status_code=400, detail="Driver already has an active ride request")
+
+    ride.status = RideRequestStatus.ACCEPTED.value
+    ride.status_note = data.note
+
+    db.query(RideRequest).filter(
+        RideRequest.driver_user_id == data.driver_user_id,
+        RideRequest.status == RideRequestStatus.PENDING.value,
+        RideRequest.id != ride.id,
+    ).update(
+        {
+            "status": RideRequestStatus.REJECTED.value,
+            "status_note": "Auto-rejected: another request accepted",
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+    return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Ride request accepted")
+
+
+@app.post("/rides/requests/{ride_request_id}/reject", response_model=RideRequestStatusOut)
+def reject_ride_request(ride_request_id: int, data: RideRequestActionRequest, db: Session = Depends(get_db)):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.driver_user_id != data.driver_user_id:
+        raise HTTPException(status_code=403, detail="Driver is not allowed to reject this request")
+    if _coerce_ride_request_status(ride.status) != RideRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Only pending requests can be rejected")
+
+    ride.status = RideRequestStatus.REJECTED.value
+    ride.status_note = data.note
+    db.commit()
+
+    return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Ride request rejected")
+
+
+@app.post("/rides/requests/{ride_request_id}/cancel", response_model=RideRequestStatusOut)
+def cancel_ride_request(ride_request_id: int, data: RideRequestActionRequest, db: Session = Depends(get_db)):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.driver_user_id != data.driver_user_id:
+        raise HTTPException(status_code=403, detail="Driver is not allowed to cancel this request")
+    st = _coerce_ride_request_status(ride.status)
+    if st not in (
+        RideRequestStatus.ACCEPTED,
+        RideRequestStatus.ON_THE_WAY,
+        RideRequestStatus.DRIVING_TO_CUSTOMER,
+        RideRequestStatus.ARRIVED,
+        RideRequestStatus.IN_PROGRESS,
+    ):
+        raise HTTPException(status_code=400, detail="Only accepted or driving requests can be cancelled")
+
+    ride.status = RideRequestStatus.CANCELLED.value
+    ride.status_note = data.note
+    db.commit()
+
+    return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Ride cancelled")
+
+
+@app.post("/rides/requests/{ride_request_id}/start-driving", response_model=RideRequestStatusOut)
+def start_driving_to_customer(ride_request_id: int, data: RideRequestActionRequest, db: Session = Depends(get_db)):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.driver_user_id != data.driver_user_id:
+        raise HTTPException(status_code=403, detail="Driver is not allowed to update this request")
+    if _coerce_ride_request_status(ride.status) != RideRequestStatus.ACCEPTED:
+        raise HTTPException(status_code=400, detail="Only accepted requests can start driving to customer")
+
+    live_eta = _live_eta_minutes_driver_to_pickup(db, ride)
+    if live_eta is not None:
+        ride.eta_to_user = live_eta
+
+    ride.status = RideRequestStatus.ON_THE_WAY.value
+    ride.status_note = data.note
+    db.commit()
+    db.refresh(ride)
+
+    return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Driver is on the way")
+
+
+RIDE_VERIFICATION_CODE_TTL_MINUTES = 30
+
+
+@app.post("/rides/requests/{ride_request_id}/arrived", response_model=RideRequestStatusOut)
+def mark_ride_arrived(ride_request_id: int, data: RideRequestActionRequest, db: Session = Depends(get_db)):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.driver_user_id != data.driver_user_id:
+        raise HTTPException(status_code=403, detail="Driver is not allowed to update this request")
+    st = _coerce_ride_request_status(ride.status)
+    if st == RideRequestStatus.ARRIVED:
+        return RideRequestStatusOut(
+            id=ride.id,
+            status=_ride_request_status_str(ride),
+            message="Driver already marked arrived",
+        )
+    if st not in (RideRequestStatus.ON_THE_WAY, RideRequestStatus.DRIVING_TO_CUSTOMER):
+        raise HTTPException(status_code=400, detail="Only on-the-way rides can be marked arrived")
+
+    now = datetime.now(timezone.utc)
+    code = generate_ride_request_verification_code()
+    ride.status = RideRequestStatus.ARRIVED.value
+    ride.verification_code = code
+    ride.verification_expires_at = now + timedelta(minutes=RIDE_VERIFICATION_CODE_TTL_MINUTES)
+    ride.status_note = data.note
+    ride.eta_to_user = 0
+    db.commit()
+    db.refresh(ride)
+
+    enqueue_verification_code_created(ride.id)
+
+    return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Driver arrived")
+
+
+@app.post("/rides/verify-code", response_model=RideRequestStatusOut)
+def verify_ride_start_code(data: RideVerifyCodeRequest, db: Session = Depends(get_db)):
+    ride = db.query(RideRequest).filter(RideRequest.id == data.ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.driver_user_id != data.driver_user_id:
+        raise HTTPException(status_code=403, detail="Driver is not allowed to verify this request")
+    st = _coerce_ride_request_status(ride.status)
+    if st != RideRequestStatus.ARRIVED:
+        raise HTTPException(status_code=400, detail="Ride is not waiting for verification code")
+
+    now = datetime.now(timezone.utc)
+    if ride.verification_expires_at is not None and ride.verification_expires_at < now:
+        ride.verification_code = None
+        ride.verification_expires_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code expired")
+
+    submitted = (data.verification_code or "").strip()
+    stored = (ride.verification_code or "").strip()
+    if not stored or submitted != stored:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    ride.status = RideRequestStatus.IN_PROGRESS.value
+    ride.verification_code = None
+    ride.verification_expires_at = None
+    ride.status_note = None
+    db.commit()
+    db.refresh(ride)
+
+    enqueue_ride_in_progress(ride.id)
+
+    return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Ride started")

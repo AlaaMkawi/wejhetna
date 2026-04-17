@@ -314,3 +314,16 @@ export function isLocationTimeoutOrUnavailableError(error: unknown): boolean {
     m.includes("location request timed out")
   );
 }
+
+/**
+ * Driver / ride flows: current fix with the same multi-attempt strategy as {@link getCurrentPositionReliable},
+ * returned in Geolocation-like shape (`coords.latitude` / `coords.longitude`).
+ */
+export async function requestCurrentPositionWithRetry(): Promise<{
+  coords: { latitude: number; longitude: number };
+}> {
+  const pos = await getCurrentPositionReliable();
+  return {
+    coords: { latitude: pos.lat, longitude: pos.lon },
+  };
+}

@@ -127,6 +127,11 @@ export type RootStackParamList = {
     /** When omitted, screen defaults to preview (map + summary before live navigation). */
     navigationPhase?: "preview" | "active";
   };
+  /** Full-screen live ride tracking (driver → pickup or passenger following driver). */
+  RideTrackingMap: {
+    mode: "driver" | "passenger";
+    rideRequestId: number;
+  };
 };
 export type AuthStackParamList = {
   Login: undefined;

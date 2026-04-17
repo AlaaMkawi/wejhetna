@@ -1,9 +1,10 @@
 // src/screens/RegularAccount/RegularHomeScreen.tsx
 
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   TouchableOpacity,
   Alert,
@@ -41,6 +42,15 @@ import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePrevie
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
 import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
 import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
+import {
+  createRideRequest,
+  getNearbyDrivers,
+  NearbyDriver,
+  parseStoredUserId,
+  rideApiDetailToTranslationKey,
+} from "../../api/rides";
+import { NEARBY_DRIVER_RADIUS_M, RIDE_STATUS_POLL_INTERVAL_MS, RIDE_UI_BUILD } from "../../../config";
+import { getUserProfile } from "../../api/profileApi";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -282,6 +292,25 @@ const getPlaceIcon = (place: PlaceForMap) => {
   return { type: 'default', color: '#4285F4' };
 };
 
+const haversineDistanceKm = (
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number
+): number => {
+  const toRad = (v: number) => (v * Math.PI) / 180;
+  const dLat = toRad(toLat - fromLat);
+  const dLon = toRad(toLon - fromLon);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(fromLat)) *
+      Math.cos(toRad(toLat)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(6371 * c * 100) / 100;
+};
+
 type Props = {
   navigation: any;
   route?: RouteProp<any, any>;
@@ -303,6 +332,18 @@ export default function RegularHomeScreen({}: Props) {
   const [isPlaceSaved, setIsPlaceSaved] = useState(false);
   const [savingPlace, setSavingPlace] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
+  const [userPhone, setUserPhone] = useState<string>("");
+  const [nearbyDrivers, setNearbyDrivers] = useState<NearbyDriver[]>([]);
+  const [selectedDriver, setSelectedDriver] = useState<NearbyDriver | null>(null);
+  const [ridePassengers, setRidePassengers] = useState<number>(1);
+  const [rideDestinationInput, setRideDestinationInput] = useState("");
+  const [rideFieldHighlight, setRideFieldHighlight] = useState({ pickup: false, destination: false });
+  const rideMapPickSkipRouteRef = useRef(false);
+  const pendingRideDriverRef = useRef<NearbyDriver | null>(null);
+  const [creatingRideRequest, setCreatingRideRequest] = useState(false);
+  /** Shown under send button after a failed POST (short hint for debugging). */
+  const [rideSendErrorHint, setRideSendErrorHint] = useState<string | null>(null);
+  const [ridePlaceSearchQuery, setRidePlaceSearchQuery] = useState("");
 
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
@@ -361,8 +402,21 @@ export default function RegularHomeScreen({}: Props) {
     async function loadUserId() {
       try {
         const storedUserId = await AsyncStorage.getItem("userId");
-        if (storedUserId) {
-          setUserId(parseInt(storedUserId, 10));
+        const parsedUserId = parseStoredUserId(storedUserId);
+        if (parsedUserId != null) {
+          setUserId(parsedUserId);
+          try {
+            const profile = await getUserProfile(parsedUserId);
+            if (profile.phone) {
+              setUserPhone(profile.phone);
+            }
+          } catch {
+            // fallback to AsyncStorage value when profile fetch fails
+          }
+        }
+        const storedPhone = await AsyncStorage.getItem("userPhone");
+        if (storedPhone) {
+          setUserPhone(storedPhone);
         }
       } catch (error) {
         console.error("Error loading user ID:", error);
@@ -415,6 +469,86 @@ export default function RegularHomeScreen({}: Props) {
     }
     load();
   }, [t]);
+
+  const refreshNearbyDrivers = useCallback(async () => {
+    if (!userId || !userLocation) return;
+    try {
+      const drivers = await getNearbyDrivers({
+        regular_user_id: userId,
+        lat: userLocation.lat,
+        lon: userLocation.lon,
+        radius_m: NEARBY_DRIVER_RADIUS_M,
+      });
+      setNearbyDrivers(drivers);
+    } catch {
+      setNearbyDrivers([]);
+    }
+  }, [userId, userLocation]);
+
+  /** Refresh driver markers and center the map on the user (helps testing / visibility). */
+  const focusNearbyDriversOnMap = useCallback(() => {
+    void refreshNearbyDrivers();
+    if (userLocation && cameraRef.current) {
+      cameraRef.current.setCamera({
+        centerCoordinate: [userLocation.lon, userLocation.lat],
+        zoomLevel: 14,
+        animationDuration: 900,
+      });
+    }
+  }, [refreshNearbyDrivers, userLocation]);
+
+  useEffect(() => {
+    refreshNearbyDrivers();
+  }, [refreshNearbyDrivers]);
+
+  useEffect(() => {
+    if (!selectedDriver) return;
+    if (destination?.name) {
+      setRideDestinationInput(destination.name);
+    }
+  }, [selectedDriver, destination?.lat, destination?.lon, destination?.name]);
+
+  useEffect(() => {
+    if (selectedDriver) {
+      setRideSendErrorHint(null);
+    }
+  }, [selectedDriver]);
+
+  useEffect(() => {
+    if (userLocation) {
+      setRideFieldHighlight((h) => (h.pickup ? { ...h, pickup: false } : h));
+    }
+  }, [userLocation]);
+
+  useEffect(() => {
+    if (selectedDriver) {
+      setRidePlaceSearchQuery("");
+    }
+  }, [selectedDriver]);
+
+  useEffect(() => {
+    if (!isPickingMapDestination || userLocation == null || !cameraRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        cameraRef.current.setCamera({
+          centerCoordinate: [userLocation.lon, userLocation.lat],
+          zoomLevel: 15.25,
+          animationDuration: 720,
+        });
+      } catch {
+        /* ignore */
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [isPickingMapDestination, userLocation]);
+
+  useEffect(() => {
+    if (!userId || !userLocation) return;
+    const interval = setInterval(() => {
+      void refreshNearbyDrivers();
+    }, RIDE_STATUS_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [userId, userLocation, refreshNearbyDrivers]);
 
   // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)
   useEffect(() => {
@@ -734,71 +868,73 @@ export default function RegularHomeScreen({}: Props) {
     }
   };
 
-  // Search places - comprehensive search across all fields
+  /** Same matching rules as the map search bar; reused for ride destination search. */
+  const filterPlacesByQuery = useCallback(
+    (query: string): PlaceForMap[] => {
+      if (!query || query.trim().length === 0 || !places?.length) {
+        return [];
+      }
+      const queryLower = query.toLowerCase().trim();
+      return places.filter((place) => {
+        try {
+          const nameMatch =
+            (place.name && typeof place.name === "string" && place.name.toLowerCase().includes(queryLower)) ||
+            (place.name_ar && typeof place.name_ar === "string" && place.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.name_he && typeof place.name_he === "string" && place.name_he.toLowerCase().includes(queryLower));
+          const descriptionMatch =
+            place.description &&
+            typeof place.description === "string" &&
+            place.description.toLowerCase().includes(queryLower);
+          const cityMatch =
+            (place.city?.name_ar && typeof place.city.name_ar === "string" && place.city.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_he && typeof place.city.name_he === "string" && place.city.name_he.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_en && typeof place.city.name_en === "string" && place.city.name_en.toLowerCase().includes(queryLower));
+          const categoryMatch =
+            (place.category?.name_ar && typeof place.category.name_ar === "string" && place.category.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_he && typeof place.category.name_he === "string" && place.category.name_he.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_en && typeof place.category.name_en === "string" && place.category.name_en.toLowerCase().includes(queryLower));
+          const phoneMatch =
+            place.phone &&
+            typeof place.phone === "string" &&
+            place.phone.replace(/[\s-]/g, "").includes(queryLower.replace(/[\s-]/g, ""));
+          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
+        } catch {
+          return false;
+        }
+      });
+    },
+    [places]
+  );
+
+  const rideModalPlaceResults = useMemo(
+    () => filterPlacesByQuery(ridePlaceSearchQuery).slice(0, 8),
+    [filterPlacesByQuery, ridePlaceSearchQuery]
+  );
+
   const handleSearch = (query: string) => {
     setSearchQuery(query);
-    
-    // If query is empty, clear results
     if (!query || query.trim().length === 0) {
       setSearchResults([]);
       return;
     }
-
-    // Make sure places are loaded
-    if (!places || places.length === 0) {
-      console.log("No places loaded yet");
+    if (!places?.length) {
       setSearchResults([]);
       return;
     }
+    setSearchResults(filterPlacesByQuery(query));
+  };
 
-    try {
-      const queryLower = query.toLowerCase().trim();
-      
-      // Filter places based on search query
-      const filtered = places.filter((place) => {
-        try {
-          // Search in name fields (English, Arabic, Hebrew)
-          const nameMatch = 
-            (place.name && typeof place.name === 'string' && place.name.toLowerCase().includes(queryLower)) ||
-            (place.name_ar && typeof place.name_ar === 'string' && place.name_ar.toLowerCase().includes(queryLower)) ||
-            (place.name_he && typeof place.name_he === 'string' && place.name_he.toLowerCase().includes(queryLower));
-          
-          // Search in description
-          const descriptionMatch = 
-            place.description && typeof place.description === 'string' && 
-            place.description.toLowerCase().includes(queryLower);
-          
-          // Search in city name
-          const cityMatch = 
-            (place.city?.name_ar && typeof place.city.name_ar === 'string' && place.city.name_ar.toLowerCase().includes(queryLower)) ||
-            (place.city?.name_he && typeof place.city.name_he === 'string' && place.city.name_he.toLowerCase().includes(queryLower)) ||
-            (place.city?.name_en && typeof place.city.name_en === 'string' && place.city.name_en.toLowerCase().includes(queryLower));
-          
-          // Search in category name
-          const categoryMatch = 
-            (place.category?.name_ar && typeof place.category.name_ar === 'string' && place.category.name_ar.toLowerCase().includes(queryLower)) ||
-            (place.category?.name_he && typeof place.category.name_he === 'string' && place.category.name_he.toLowerCase().includes(queryLower)) ||
-            (place.category?.name_en && typeof place.category.name_en === 'string' && place.category.name_en.toLowerCase().includes(queryLower));
-          
-          // Search in phone number (remove spaces/dashes for better matching)
-          const phoneMatch = 
-            place.phone && typeof place.phone === 'string' && 
-            place.phone.replace(/[\s-]/g, '').includes(queryLower.replace(/[\s-]/g, ''));
-          
-          // Return true if any field matches
-          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
-        } catch (err) {
-          console.error("Error filtering place:", err, place);
-          return false;
-        }
-      });
-      
-      console.log(`Search for "${query}" found ${filtered.length} results out of ${places.length} places`);
-      setSearchResults(filtered);
-    } catch (error) {
-      console.error("Search error:", error);
-      setSearchResults([]);
-    }
+  const applyPlaceToRideDestination = (place: PlaceForMap) => {
+    if (!place.location) return;
+    const name = getPlaceName(place);
+    setDestination({
+      lat: place.location.lat,
+      lon: place.location.lon,
+      name,
+    });
+    setRideDestinationInput(name);
+    setRidePlaceSearchQuery("");
+    setRideFieldHighlight((h) => ({ ...h, destination: false }));
   };
 
   const getRoute = async () => {
@@ -828,15 +964,88 @@ export default function RegularHomeScreen({}: Props) {
       const dest = { lat, lon, name: t("map_selected_destination_label") };
       setCustomPin(null);
       setDestination(dest);
-      await openDrivingRoutePreview({
-        navigation,
-        destination: dest,
-        t,
-        setRouteLoading,
-        setUserLocation,
-      });
+      setRideDestinationInput(dest.name || "");
+      if (rideMapPickSkipRouteRef.current) {
+        rideMapPickSkipRouteRef.current = false;
+        const pending = pendingRideDriverRef.current;
+        pendingRideDriverRef.current = null;
+        if (pending) {
+          setSelectedDriver(pending);
+        }
+      } else {
+        await openDrivingRoutePreview({
+          navigation,
+          destination: dest,
+          t,
+          setRouteLoading,
+          setUserLocation,
+        });
+      }
     } finally {
       pickMapTapInFlightRef.current = false;
+    }
+  };
+
+  const handleCreateRideRequest = async () => {
+    if (!userId || !selectedDriver) {
+      return;
+    }
+
+    const destinationText =
+      rideDestinationInput.trim() ||
+      (destination
+        ? destination.name?.trim() ||
+          `${destination.lat.toFixed(5)}, ${destination.lon.toFixed(5)}`
+        : "");
+
+    const missingPickup = !userLocation;
+    const missingDest = !destinationText;
+    setRideFieldHighlight({ pickup: missingPickup, destination: missingDest });
+
+    if (missingPickup || missingDest) {
+      return;
+    }
+    if (!userPhone) {
+      Alert.alert(t("error"), t("ride_phone_required"));
+      return;
+    }
+    if (ridePassengers <= 0) {
+      Alert.alert(t("error"), t("ride_invalid_people_or_seats"));
+      return;
+    }
+
+    setRideFieldHighlight({ pickup: false, destination: false });
+    setRideSendErrorHint(null);
+    setCreatingRideRequest(true);
+    const payload = {
+      regular_user_id: userId,
+      driver_user_id: selectedDriver.driver_user_id,
+      pickup_lat: userLocation.lat,
+      pickup_lon: userLocation.lon,
+      destination_text: destinationText,
+      destination_lat: destination?.lat,
+      destination_lon: destination?.lon,
+      regular_phone: userPhone,
+      passengers_count: ridePassengers,
+      number_of_people: ridePassengers,
+      number_of_seats_required: ridePassengers,
+    };
+    if (__DEV__) {
+      console.log("[ride] POST /rides/requests payload", JSON.stringify(payload));
+    }
+    try {
+      await createRideRequest(payload);
+      setRideSendErrorHint(null);
+      setSelectedDriver(null);
+      Alert.alert(t("success"), t("ride_request_sent"));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const short = msg.length > 180 ? `${msg.slice(0, 177)}…` : msg;
+      setRideSendErrorHint(short || null);
+      const key = rideApiDetailToTranslationKey(msg);
+      Alert.alert(t("error"), key ? t(key) : t("ride_failed_create_request"), [{ text: t("ok") || "OK" }]);
+    } finally {
+      setCreatingRideRequest(false);
     }
   };
 
@@ -869,6 +1078,23 @@ export default function RegularHomeScreen({}: Props) {
             });
             if (nearestPlace) {
               handlePlaceTap(nearestPlace);
+              return;
+            }
+
+            // Fallback: driver PointAnnotations are small and were drawn under place markers;
+            // tap map near a driver's coordinates to open the ride modal.
+            const MAX_DRIVER_TAP_KM = 0.07;
+            let closest: NearbyDriver | null = null;
+            let closestKm = MAX_DRIVER_TAP_KM;
+            for (const d of nearbyDrivers) {
+              const km = haversineDistanceKm(lat, lon, d.lat, d.lon);
+              if (km < closestKm) {
+                closestKm = km;
+                closest = d;
+              }
+            }
+            if (closest) {
+              setSelectedDriver(closest);
             }
           } catch {
             /* ignore */
@@ -1077,6 +1303,20 @@ export default function RegularHomeScreen({}: Props) {
             </PointAnnotation>
           );
         })}
+
+        {/* Drivers last so markers sit above place pins and receive taps first (MapLibre draw order). */}
+        {nearbyDrivers.map((driver) => (
+          <PointAnnotation
+            key={`driver_${driver.driver_user_id}`}
+            id={`driver_${driver.driver_user_id}`}
+            coordinate={[driver.lon, driver.lat]}
+            onSelected={() => setSelectedDriver(driver)}
+          >
+            <View style={styles.driverMarker} accessibilityRole="button" accessibilityLabel={t("map_nearby_drivers_chip")}>
+              <Ionicons name="car-sport" size={22} color="#fff" />
+            </View>
+          </PointAnnotation>
+        ))}
       </MapView>
 
       <MapInlineSearch
@@ -1105,6 +1345,18 @@ export default function RegularHomeScreen({}: Props) {
         emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
         noResultsText={t("no_places_found") || "No places found"}
         onSearchFocus={dismissPlaceDetailsPanel}
+        secondaryRow={
+          <TouchableOpacity
+            style={styles.mapNearbyDriversChip}
+            onPress={focusNearbyDriversOnMap}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={t("map_nearby_drivers_chip")}
+          >
+            <Ionicons name="car-sport" size={18} color="#0f5b63" />
+            <Text style={styles.mapNearbyDriversChipText}>{t("map_nearby_drivers_chip")}</Text>
+          </TouchableOpacity>
+        }
       />
 
       <TouchableOpacity
@@ -1115,6 +1367,11 @@ export default function RegularHomeScreen({}: Props) {
             if (!next) {
               setPickPreviewCoords(null);
               pickMapTapInFlightRef.current = false;
+              rideMapPickSkipRouteRef.current = false;
+              if (pendingRideDriverRef.current) {
+                setSelectedDriver(pendingRideDriverRef.current);
+                pendingRideDriverRef.current = null;
+              }
             }
             return next;
           });
@@ -1143,6 +1400,11 @@ export default function RegularHomeScreen({}: Props) {
                 setIsPickingMapDestination(false);
                 setPickPreviewCoords(null);
                 pickMapTapInFlightRef.current = false;
+                rideMapPickSkipRouteRef.current = false;
+                if (pendingRideDriverRef.current) {
+                  setSelectedDriver(pendingRideDriverRef.current);
+                  pendingRideDriverRef.current = null;
+                }
               }}
               style={styles.pickDestinationCancelBtn}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1607,6 +1869,153 @@ export default function RegularHomeScreen({}: Props) {
 
       {/* Language Selector Modal */}
       <Modal
+        visible={!!selectedDriver}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setSelectedDriver(null)}
+      >
+        <TouchableOpacity style={styles.rideModalOverlay} activeOpacity={1} onPress={() => setSelectedDriver(null)}>
+          <TouchableOpacity activeOpacity={1} style={styles.rideModalCard} onPress={() => {}}>
+            <ScrollView keyboardShouldPersistTaps="handled" bounces={false} showsVerticalScrollIndicator={false}>
+              <View style={styles.rideModalBuildBand}>
+                <Text style={styles.rideModalBuildBandText}>{t("ride_ui_version_strip", { tag: RIDE_UI_BUILD })}</Text>
+              </View>
+              {userId == null ? (
+                <View style={styles.rideModalSessionWarn}>
+                  <Text style={styles.rideModalSessionWarnText}>{t("ride_session_invalid")}</Text>
+                </View>
+              ) : (
+                <Text style={styles.rideModalDebugId}>{t("ride_debug_user_id", { id: String(userId) })}</Text>
+              )}
+              <Text style={styles.rideModalTitle}>{t("ride_driver_info")}</Text>
+              <Text style={styles.rideModalText}>
+                {t("full_name")}: {selectedDriver?.full_name}
+              </Text>
+              <Text style={styles.rideModalText}>
+                {t("username")}: {selectedDriver?.username}
+              </Text>
+              <Text style={styles.rideModalText}>
+                {t("distance")}:{" "}
+                {selectedDriver && userLocation
+                  ? haversineDistanceKm(userLocation.lat, userLocation.lon, selectedDriver.lat, selectedDriver.lon)
+                  : selectedDriver?.distance_km}{" "}
+                {t("ride_km")}
+              </Text>
+
+              <Text style={styles.rideModalSectionLabel}>{t("ride_pickup")}</Text>
+              <View
+                style={[
+                  styles.rideModalFieldBox,
+                  rideFieldHighlight.pickup && styles.rideModalFieldBoxError,
+                ]}
+              >
+                <Text style={styles.rideModalText}>
+                  {userLocation ? t("ride_using_current_location") : t("ride_location_unavailable_hint")}
+                </Text>
+              </View>
+
+              <Text style={styles.rideModalSectionLabel}>{t("ride_destination")}</Text>
+              <Text style={styles.rideModalHint}>{t("ride_search_destination_hint")}</Text>
+              <TextInput
+                style={styles.rideModalSearchInput}
+                value={ridePlaceSearchQuery}
+                onChangeText={setRidePlaceSearchQuery}
+                placeholder={t("search_places")}
+                placeholderTextColor="#888"
+                autoCorrect={false}
+              />
+              {rideModalPlaceResults.length > 0 ? (
+                <View style={styles.rideModalSearchResults}>
+                  {rideModalPlaceResults.map((place) => (
+                    <TouchableOpacity
+                      key={`ride_dest_${place.id}`}
+                      style={styles.rideModalSearchRow}
+                      onPress={() => applyPlaceToRideDestination(place)}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={styles.rideModalSearchRowTitle} numberOfLines={2}>
+                        {getPlaceName(place)}
+                      </Text>
+                      <Text style={styles.rideModalSearchRowSub} numberOfLines={1}>
+                        {getCityName(place.city)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+              <View
+                style={[
+                  styles.rideModalFieldBox,
+                  rideFieldHighlight.destination && styles.rideModalFieldBoxError,
+                ]}
+              >
+                <TextInput
+                  style={styles.rideModalTextInput}
+                  value={rideDestinationInput}
+                  onChangeText={(text) => {
+                    setRideDestinationInput(text);
+                    if (rideFieldHighlight.destination) {
+                      setRideFieldHighlight((h) => ({ ...h, destination: false }));
+                    }
+                  }}
+                  placeholder={t("ride_destination_input_placeholder")}
+                  placeholderTextColor="#888"
+                  multiline
+                />
+                <TouchableOpacity
+                  style={styles.rideModalMapLink}
+                  onPress={() => {
+                    if (selectedDriver) {
+                      pendingRideDriverRef.current = selectedDriver;
+                      rideMapPickSkipRouteRef.current = true;
+                      setSelectedDriver(null);
+                      setIsPickingMapDestination(true);
+                    }
+                  }}
+                  hitSlop={{ top: 8, bottom: 8 }}
+                >
+                  <Text style={styles.rideModalMapLinkText}>{t("ride_choose_on_map_button")}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.ridePassengerRow}>
+                <TouchableOpacity
+                  style={styles.passengerBtn}
+                  onPress={() => setRidePassengers((prev) => Math.max(1, prev - 1))}
+                >
+                  <Text style={styles.passengerBtnText}>-</Text>
+                </TouchableOpacity>
+                <Text style={styles.rideModalText}>{t("ride_number_of_people")}: {ridePassengers}</Text>
+                <TouchableOpacity
+                  style={styles.passengerBtn}
+                  onPress={() => setRidePassengers((prev) => Math.min(12, prev + 1))}
+                >
+                  <Text style={styles.passengerBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={styles.rideRequestButton}
+                onPress={handleCreateRideRequest}
+                disabled={creatingRideRequest}
+              >
+                {creatingRideRequest ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.rideRequestButtonText}>{t("ride_send_request")}</Text>
+                )}
+              </TouchableOpacity>
+              {rideSendErrorHint ? (
+                <Text style={styles.rideModalErrorHint}>
+                  {t("ride_debug_error_hint", { hint: rideSendErrorHint })}
+                </Text>
+              ) : null}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Language Selector Modal */}
+      <Modal
         visible={showLanguageSelector}
         transparent={true}
         animationType="fade"
@@ -1866,6 +2275,23 @@ const styles = StyleSheet.create({
     textAlign: 'left',
     letterSpacing: -0.1,
     flex: 1,
+  },
+  mapNearbyDriversChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.22)",
+    gap: 6,
+  },
+  mapNearbyDriversChipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0f5b63",
   },
   pickDestinationFab: {
     position: "absolute",
@@ -2469,6 +2895,187 @@ const styles = StyleSheet.create({
   },
   destinationMarkerText: {
     fontSize: 24,
+  },
+  driverMarker: {
+    minWidth: 44,
+    minHeight: 44,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    borderRadius: 22,
+    backgroundColor: "#0f5b63",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  rideModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 18,
+  },
+  rideModalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    maxHeight: SCREEN_HEIGHT * 0.78,
+    borderTopWidth: 5,
+    borderTopColor: "#0f5b63",
+    overflow: "hidden",
+  },
+  rideModalBuildBand: {
+    backgroundColor: "#e8f4f5",
+    marginHorizontal: -16,
+    marginTop: -16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(15,91,99,0.12)",
+  },
+  rideModalBuildBandText: {
+    color: "#0f5b63",
+    fontSize: 13,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  rideModalSessionWarn: {
+    backgroundColor: "#fff3cd",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#e6d4a8",
+  },
+  rideModalSessionWarnText: { color: "#664d03", fontSize: 13, textAlign: "center", lineHeight: 18 },
+  rideModalDebugId: { fontSize: 12, color: "#666", marginBottom: 8, textAlign: "center" },
+  rideModalErrorHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: "#842029",
+    lineHeight: 17,
+    textAlign: "center",
+  },
+  rideModalSectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0f5b63",
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  rideModalFieldBox: {
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 4,
+    backgroundColor: "#fafafa",
+  },
+  rideModalFieldBoxError: {
+    borderColor: "#dc3545",
+    backgroundColor: "#fff5f5",
+  },
+  rideModalTextInput: {
+    fontSize: 14,
+    color: "#222",
+    minHeight: 44,
+    textAlignVertical: "top",
+    paddingVertical: 4,
+  },
+  rideModalMapLink: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+  },
+  rideModalMapLinkText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0f5b63",
+    textDecorationLine: "underline",
+  },
+  rideModalHint: {
+    fontSize: 12,
+    color: "#555",
+    marginBottom: 6,
+    lineHeight: 17,
+  },
+  rideModalSearchInput: {
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.1)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#222",
+    marginBottom: 8,
+    backgroundColor: "#fff",
+  },
+  rideModalSearchResults: {
+    maxHeight: 200,
+    marginBottom: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.15)",
+    overflow: "hidden",
+    backgroundColor: "#fafdfd",
+  },
+  rideModalSearchRow: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(0,0,0,0.06)",
+  },
+  rideModalSearchRowTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111",
+  },
+  rideModalSearchRowSub: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
+  },
+  rideModalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 8,
+  },
+  rideModalText: {
+    fontSize: 14,
+    color: "#222",
+    marginBottom: 6,
+  },
+  ridePassengerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginVertical: 8,
+  },
+  passengerBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#e6eef0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  passengerBtnText: {
+    color: "#0f5b63",
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  rideRequestButton: {
+    backgroundColor: "#0f5b63",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  rideRequestButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
   },
   languageSelectorModalOverlay: {
     flex: 1,

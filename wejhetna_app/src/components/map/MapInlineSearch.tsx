@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -45,6 +45,8 @@ export type MapInlineSearchProps = {
   topOffset?: number;
   /** Called when the search field is focused (e.g. dismiss place details panel). */
   onSearchFocus?: () => void;
+  /** Optional row under the search field (e.g. quick filter / map mode). */
+  secondaryRow?: ReactNode;
 };
 
 export default function MapInlineSearch({
@@ -60,6 +62,7 @@ export default function MapInlineSearch({
   noResultsText,
   topOffset = 50,
   onSearchFocus,
+  secondaryRow,
 }: MapInlineSearchProps) {
   const [focused, setFocused] = useState(false);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,6 +168,8 @@ export default function MapInlineSearch({
           ) : null}
         </View>
 
+        {secondaryRow ? <View style={styles.secondaryRowWrap}>{secondaryRow}</View> : null}
+
         {showDropdown && (
           <View style={styles.dropdown}>
             {q.length === 0 && (
@@ -229,6 +234,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.14,
     shadowRadius: 16,
     elevation: 10,
+  },
+  secondaryRowWrap: {
+    marginTop: 8,
   },
   input: {
     flex: 1,
