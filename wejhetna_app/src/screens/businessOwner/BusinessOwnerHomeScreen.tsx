@@ -1,9 +1,10 @@
 // src/screens/businessOwner/BusinessOwnerHomeScreen.tsx
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   TouchableOpacity,
   Alert,
@@ -16,6 +17,7 @@ import {
   Modal,
   ActivityIndicator,
   DeviceEventEmitter,
+  FlatList,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -28,6 +30,18 @@ import { useRoute, RouteProp, useFocusEffect, useNavigation } from "@react-navig
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, Category, translateText } from "../../api/places";
+import { getUserProfile } from "../../api/profileApi";
+import {
+  createRideRequest,
+  getNearbyDrivers,
+  getRegularLatestRideRequest,
+  isActiveBlockingRideStatus,
+  NearbyDriver,
+  parseStoredUserId,
+  RegularLatestRideRequest,
+  rideApiDetailToTranslationKey,
+} from "../../api/rides";
+import { NEARBY_DRIVER_RADIUS_M, RIDE_STATUS_POLL_INTERVAL_MS, RIDE_UI_BUILD } from "../../../config";
 import { useInitialMapGeolocation } from "../../hooks/useInitialMapGeolocation";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -71,6 +85,25 @@ const NEGEV_BOUNDS = {
   ne: [35.10, 31.42],
   sw: [34.72, 31.18],
 };
+
+function haversineDistanceKm(
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number
+): number {
+  const toRad = (v: number) => (v * Math.PI) / 180;
+  const dLat = toRad(toLat - fromLat);
+  const dLon = toRad(toLon - fromLon);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(fromLat)) *
+      Math.cos(toRad(toLat)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(6371 * c * 100) / 100;
+}
 
 // Helper function to get place name based on current language
 const getPlaceName = (place: PlaceForMap): string => {
@@ -306,6 +339,20 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   const [isPlaceSaved, setIsPlaceSaved] = useState(false);
   const [savingPlace, setSavingPlace] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
+  const [userPhone, setUserPhone] = useState<string>("");
+  const [nearbyDrivers, setNearbyDrivers] = useState<NearbyDriver[]>([]);
+  const [selectedDriver, setSelectedDriver] = useState<NearbyDriver | null>(null);
+  const [ridePassengers, setRidePassengers] = useState<number>(1);
+  const [rideDestinationInput, setRideDestinationInput] = useState("");
+  const [rideFieldHighlight, setRideFieldHighlight] = useState({ pickup: false, destination: false });
+  const rideMapPickSkipRouteRef = useRef(false);
+  const pendingRideDriverRef = useRef<NearbyDriver | null>(null);
+  const [creatingRideRequest, setCreatingRideRequest] = useState(false);
+  const [rideSendErrorHint, setRideSendErrorHint] = useState<string | null>(null);
+  const [ridePlaceSearchQuery, setRidePlaceSearchQuery] = useState("");
+  const [rideDriverPickerVisible, setRideDriverPickerVisible] = useState(false);
+  const [rideWithDriverLoading, setRideWithDriverLoading] = useState(false);
+  const [passengerRideLatest, setPassengerRideLatest] = useState<RegularLatestRideRequest | null>(null);
 
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
@@ -371,8 +418,21 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
     async function loadUserId() {
       try {
         const storedUserId = await AsyncStorage.getItem("userId");
-        if (storedUserId) {
-          setUserId(parseInt(storedUserId, 10));
+        const parsedUserId = parseStoredUserId(storedUserId);
+        if (parsedUserId != null) {
+          setUserId(parsedUserId);
+          try {
+            const profile = await getUserProfile(parsedUserId);
+            if (profile.phone) {
+              setUserPhone(profile.phone);
+            }
+          } catch {
+            /* best-effort */
+          }
+        }
+        const storedPhone = await AsyncStorage.getItem("userPhone");
+        if (storedPhone) {
+          setUserPhone(storedPhone);
         }
       } catch (error) {
         console.error("Error loading user ID:", error);
@@ -692,6 +752,271 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
     }
   };
 
+  const filterPlacesByQuery = useCallback(
+    (query: string): PlaceForMap[] => {
+      if (!query || query.trim().length === 0 || !places?.length) {
+        return [];
+      }
+      const queryLower = query.toLowerCase().trim();
+      return places.filter((place) => {
+        try {
+          const nameMatch =
+            (place.name && typeof place.name === "string" && place.name.toLowerCase().includes(queryLower)) ||
+            (place.name_ar && typeof place.name_ar === "string" && place.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.name_he && typeof place.name_he === "string" && place.name_he.toLowerCase().includes(queryLower));
+          const descriptionMatch =
+            place.description &&
+            typeof place.description === "string" &&
+            place.description.toLowerCase().includes(queryLower);
+          const cityMatch =
+            (place.city?.name_ar && typeof place.city.name_ar === "string" && place.city.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_he && typeof place.city.name_he === "string" && place.city.name_he.toLowerCase().includes(queryLower)) ||
+            (place.city?.name_en && typeof place.city.name_en === "string" && place.city.name_en.toLowerCase().includes(queryLower));
+          const categoryMatch =
+            (place.category?.name_ar && typeof place.category.name_ar === "string" && place.category.name_ar.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_he && typeof place.category.name_he === "string" && place.category.name_he.toLowerCase().includes(queryLower)) ||
+            (place.category?.name_en && typeof place.category.name_en === "string" && place.category.name_en.toLowerCase().includes(queryLower));
+          const phoneMatch =
+            place.phone &&
+            typeof place.phone === "string" &&
+            place.phone.replace(/[\s-]/g, "").includes(queryLower.replace(/[\s-]/g, ""));
+          return nameMatch || descriptionMatch || cityMatch || categoryMatch || phoneMatch;
+        } catch {
+          return false;
+        }
+      });
+    },
+    [places]
+  );
+
+  const rideModalPlaceResults = useMemo(
+    () => filterPlacesByQuery(ridePlaceSearchQuery).slice(0, 8),
+    [filterPlacesByQuery, ridePlaceSearchQuery]
+  );
+
+  const applyPlaceToRideDestination = (place: PlaceForMap) => {
+    if (!place.location) return;
+    const name = getPlaceName(place);
+    setDestination({
+      lat: place.location.lat,
+      lon: place.location.lon,
+      name,
+    });
+    setRideDestinationInput(name);
+    setRidePlaceSearchQuery("");
+    setRideFieldHighlight((h) => ({ ...h, destination: false }));
+  };
+
+  const refreshNearbyDrivers = useCallback(async () => {
+    if (!userId || !userLocation) return;
+    try {
+      const drivers = await getNearbyDrivers({
+        regular_user_id: userId,
+        lat: userLocation.lat,
+        lon: userLocation.lon,
+        radius_m: NEARBY_DRIVER_RADIUS_M,
+      });
+      setNearbyDrivers(drivers);
+    } catch {
+      setNearbyDrivers([]);
+    }
+  }, [userId, userLocation]);
+
+  const focusNearbyDriversOnMap = useCallback(() => {
+    void refreshNearbyDrivers();
+    if (userLocation && cameraRef.current) {
+      cameraRef.current.setCamera({
+        centerCoordinate: [userLocation.lon, userLocation.lat],
+        zoomLevel: 14,
+        animationDuration: 900,
+      });
+    }
+  }, [refreshNearbyDrivers, userLocation]);
+
+  useEffect(() => {
+    refreshNearbyDrivers();
+  }, [refreshNearbyDrivers]);
+
+  useEffect(() => {
+    if (!selectedDriver) return;
+    if (destination?.name) {
+      setRideDestinationInput(destination.name);
+    }
+  }, [selectedDriver, destination?.lat, destination?.lon, destination?.name]);
+
+  useEffect(() => {
+    if (selectedDriver) {
+      setRideSendErrorHint(null);
+    }
+  }, [selectedDriver]);
+
+  useEffect(() => {
+    if (userLocation) {
+      setRideFieldHighlight((h) => (h.pickup ? { ...h, pickup: false } : h));
+    }
+  }, [userLocation]);
+
+  useEffect(() => {
+    if (selectedDriver) {
+      setRidePlaceSearchQuery("");
+    }
+  }, [selectedDriver]);
+
+  useEffect(() => {
+    if (!userId || !userLocation) return;
+    const interval = setInterval(() => {
+      void refreshNearbyDrivers();
+    }, RIDE_STATUS_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [userId, userLocation, refreshNearbyDrivers]);
+
+  const refreshPassengerLatestRide = useCallback(async () => {
+    if (!userId) {
+      setPassengerRideLatest(null);
+      return;
+    }
+    try {
+      const row = await getRegularLatestRideRequest(userId);
+      setPassengerRideLatest(row);
+    } catch {
+      setPassengerRideLatest(null);
+    }
+  }, [userId]);
+
+  const hasBlockingPassengerRide =
+    passengerRideLatest != null && isActiveBlockingRideStatus(passengerRideLatest.status);
+
+  useEffect(() => {
+    void refreshPassengerLatestRide();
+  }, [refreshPassengerLatestRide]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(() => {
+      void refreshPassengerLatestRide();
+    }, RIDE_STATUS_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [userId, refreshPassengerLatestRide]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshPassengerLatestRide();
+    }, [refreshPassengerLatestRide])
+  );
+
+  const handleCreateRideRequest = async () => {
+    if (!userId || !selectedDriver) {
+      return;
+    }
+    if (hasBlockingPassengerRide) {
+      Alert.alert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
+      return;
+    }
+
+    const destinationText =
+      rideDestinationInput.trim() ||
+      (destination
+        ? destination.name?.trim() ||
+          `${destination.lat.toFixed(5)}, ${destination.lon.toFixed(5)}`
+        : "");
+
+    const missingPickup = !userLocation;
+    const missingDest = !destinationText;
+    setRideFieldHighlight({ pickup: missingPickup, destination: missingDest });
+
+    if (missingPickup || missingDest) {
+      return;
+    }
+    if (!userPhone) {
+      Alert.alert(t("error"), t("ride_phone_required"));
+      return;
+    }
+    if (ridePassengers <= 0) {
+      Alert.alert(t("error"), t("ride_invalid_people_or_seats"));
+      return;
+    }
+
+    setRideFieldHighlight({ pickup: false, destination: false });
+    setRideSendErrorHint(null);
+    setCreatingRideRequest(true);
+    const payload = {
+      regular_user_id: userId,
+      driver_user_id: selectedDriver.driver_user_id,
+      pickup_lat: userLocation.lat,
+      pickup_lon: userLocation.lon,
+      destination_text: destinationText,
+      destination_lat: destination?.lat,
+      destination_lon: destination?.lon,
+      regular_phone: userPhone,
+      passengers_count: ridePassengers,
+      number_of_people: ridePassengers,
+      number_of_seats_required: ridePassengers,
+    };
+    try {
+      await createRideRequest(payload);
+      setRideSendErrorHint(null);
+      setSelectedDriver(null);
+      void refreshPassengerLatestRide();
+      Alert.alert(t("success"), t("ride_request_sent"));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const short = msg.length > 180 ? `${msg.slice(0, 177)}…` : msg;
+      setRideSendErrorHint(short || null);
+      const key = rideApiDetailToTranslationKey(msg);
+      Alert.alert(t("error"), key ? t(key) : t("ride_failed_create_request"), [{ text: t("ok") || "OK" }]);
+    } finally {
+      setCreatingRideRequest(false);
+    }
+  };
+
+  const handleRideWithDriverFromPlaceDetails = async () => {
+    if (!userId) {
+      Alert.alert(t("error"), t("ride_session_invalid"));
+      return;
+    }
+    if (hasBlockingPassengerRide) {
+      Alert.alert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
+      return;
+    }
+    if (!userLocation) {
+      Alert.alert(t("error"), t("ride_location_unavailable_hint"));
+      return;
+    }
+    if (!destination) {
+      return;
+    }
+    const destText =
+      destination.name?.trim() ||
+      `${destination.lat.toFixed(5)}, ${destination.lon.toFixed(5)}`;
+    setRideDestinationInput(destText);
+    setRideFieldHighlight({ pickup: false, destination: false });
+    setRideWithDriverLoading(true);
+    try {
+      const drivers = await getNearbyDrivers({
+        regular_user_id: userId,
+        lat: userLocation.lat,
+        lon: userLocation.lon,
+        radius_m: NEARBY_DRIVER_RADIUS_M,
+      });
+      setNearbyDrivers(drivers);
+      if (drivers.length === 0) {
+        Alert.alert(t("error"), t("ride_no_drivers_nearby"));
+        return;
+      }
+      if (drivers.length === 1) {
+        setSelectedDriver(drivers[0]);
+        return;
+      }
+      setRideDriverPickerVisible(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const key = rideApiDetailToTranslationKey(msg);
+      Alert.alert(t("error"), key ? t(key) : t("ride_failed_load_requests"), [{ text: t("ok") || "OK" }]);
+    } finally {
+      setRideWithDriverLoading(false);
+    }
+  };
+
   const getRoute = async () => {
     await openDrivingRoutePreview({
       navigation: nav,
@@ -720,13 +1045,23 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
       const dest = { lat, lon, name: t("map_selected_destination_label") };
       setCustomPin(null);
       setDestination(dest);
-      await openDrivingRoutePreview({
-        navigation: nav,
-        destination: dest,
-        t,
-        setRouteLoading,
-        setUserLocation,
-      });
+      setRideDestinationInput(dest.name || "");
+      if (rideMapPickSkipRouteRef.current) {
+        rideMapPickSkipRouteRef.current = false;
+        const pending = pendingRideDriverRef.current;
+        pendingRideDriverRef.current = null;
+        if (pending) {
+          setSelectedDriver(pending);
+        }
+      } else {
+        await openDrivingRoutePreview({
+          navigation: nav,
+          destination: dest,
+          t,
+          setRouteLoading,
+          setUserLocation,
+        });
+      }
     } finally {
       pickMapTapInFlightRef.current = false;
     }
@@ -1041,6 +1376,20 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
             });
             if (nearestPlace) {
               handlePlaceTap(nearestPlace);
+              return;
+            }
+            const MAX_DRIVER_TAP_KM = 0.07;
+            let closest: NearbyDriver | null = null;
+            let closestKm = MAX_DRIVER_TAP_KM;
+            for (const d of nearbyDrivers) {
+              const km = haversineDistanceKm(lat, lon, d.lat, d.lon);
+              if (km < closestKm) {
+                closestKm = km;
+                closest = d;
+              }
+            }
+            if (closest) {
+              setSelectedDriver(closest);
             }
           } catch {
             /* ignore */
@@ -1248,6 +1597,19 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
             </PointAnnotation>
           );
         })}
+
+        {nearbyDrivers.map((driver) => (
+          <PointAnnotation
+            key={`driver_${driver.driver_user_id}`}
+            id={`driver_${driver.driver_user_id}`}
+            coordinate={[driver.lon, driver.lat]}
+            onSelected={() => setSelectedDriver(driver)}
+          >
+            <View style={styles.driverMarker} accessibilityRole="button" accessibilityLabel={t("map_nearby_drivers_chip")}>
+              <Ionicons name="car-sport" size={22} color="#fff" />
+            </View>
+          </PointAnnotation>
+        ))}
       </MapView>
 
       <MapInlineSearch
@@ -1276,6 +1638,18 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
         emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
         noResultsText={t("no_places_found") || "No places found"}
         onSearchFocus={dismissPlaceDetailsPanel}
+        secondaryRow={
+          <TouchableOpacity
+            style={styles.mapNearbyDriversChip}
+            onPress={focusNearbyDriversOnMap}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={t("map_nearby_drivers_chip")}
+          >
+            <Ionicons name="car-sport" size={18} color="#0f5b63" />
+            <Text style={styles.mapNearbyDriversChipText}>{t("map_nearby_drivers_chip")}</Text>
+          </TouchableOpacity>
+        }
       />
 
       <TouchableOpacity
@@ -1286,6 +1660,11 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
             if (!next) {
               setPickPreviewCoords(null);
               pickMapTapInFlightRef.current = false;
+              rideMapPickSkipRouteRef.current = false;
+              if (pendingRideDriverRef.current) {
+                setSelectedDriver(pendingRideDriverRef.current);
+                pendingRideDriverRef.current = null;
+              }
             }
             return next;
           });
@@ -1314,6 +1693,11 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                 setIsPickingMapDestination(false);
                 setPickPreviewCoords(null);
                 pickMapTapInFlightRef.current = false;
+                rideMapPickSkipRouteRef.current = false;
+                if (pendingRideDriverRef.current) {
+                  setSelectedDriver(pendingRideDriverRef.current);
+                  pendingRideDriverRef.current = null;
+                }
               }}
               style={styles.pickDestinationCancelBtn}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1499,24 +1883,56 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                 </Text>
               </TouchableOpacity>
               
-              {/* Get Directions Button - Navigates directly to RouteDetailsScreen */}
+              {/* Get Directions + ride with driver (same row as regular home) */}
               {destination && (
-                <TouchableOpacity
-                  style={styles.actionButtonPrimary}
-                  onPress={getRoute}
-                  disabled={routeLoading}
-                >
-                  {routeLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
-                      <Text style={styles.actionButtonPrimaryText}>
-                        {t("start_navigation") || "Start Navigation"}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
+                <View style={styles.actionButtonsNavRideWrap}>
+                  <TouchableOpacity
+                    style={[styles.actionButtonPrimary, styles.actionButtonPrimaryHalf]}
+                    onPress={getRoute}
+                    disabled={routeLoading || rideWithDriverLoading}
+                  >
+                    {routeLoading ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
+                        <Text style={styles.actionButtonPrimaryText} numberOfLines={1}>
+                          {t("start_navigation") || "Start Navigation"}
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButtonRideWithDriver,
+                      styles.actionButtonPrimaryHalf,
+                      hasBlockingPassengerRide && styles.actionButtonRideWithDriverMuted,
+                    ]}
+                    onPress={handleRideWithDriverFromPlaceDetails}
+                    disabled={rideWithDriverLoading}
+                  >
+                    {rideWithDriverLoading ? (
+                      <ActivityIndicator size="small" color="#0f5b63" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="car-sport"
+                          size={20}
+                          color={hasBlockingPassengerRide ? "#999" : "#0f5b63"}
+                        />
+                        <Text
+                          style={[
+                            styles.actionButtonRideWithDriverText,
+                            hasBlockingPassengerRide && styles.actionButtonRideWithDriverTextMuted,
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {t("ride_with_driver_button")}
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
               )}
 
               {!destination && (
@@ -1806,6 +2222,194 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           </>
         </Animated.View>
       )}
+
+      <Modal
+        visible={!!selectedDriver}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setSelectedDriver(null)}
+      >
+        <TouchableOpacity style={styles.rideModalOverlay} activeOpacity={1} onPress={() => setSelectedDriver(null)}>
+          <TouchableOpacity activeOpacity={1} style={styles.rideModalCard} onPress={() => {}}>
+            <ScrollView keyboardShouldPersistTaps="handled" bounces={false} showsVerticalScrollIndicator={false}>
+              <View style={styles.rideModalBuildBand}>
+                <Text style={styles.rideModalBuildBandText}>{t("ride_ui_version_strip", { tag: RIDE_UI_BUILD })}</Text>
+              </View>
+              {userId == null ? (
+                <View style={styles.rideModalSessionWarn}>
+                  <Text style={styles.rideModalSessionWarnText}>{t("ride_session_invalid")}</Text>
+                </View>
+              ) : (
+                <Text style={styles.rideModalDebugId}>{t("ride_debug_user_id", { id: String(userId) })}</Text>
+              )}
+              <Text style={styles.rideModalTitle}>{t("ride_driver_info")}</Text>
+              <Text style={styles.rideModalText}>
+                {t("full_name")}: {selectedDriver?.full_name}
+              </Text>
+              <Text style={styles.rideModalText}>
+                {t("username")}: {selectedDriver?.username}
+              </Text>
+              <Text style={styles.rideModalText}>
+                {t("distance")}:{" "}
+                {selectedDriver && userLocation
+                  ? haversineDistanceKm(userLocation.lat, userLocation.lon, selectedDriver.lat, selectedDriver.lon)
+                  : selectedDriver?.distance_km}{" "}
+                {t("ride_km")}
+              </Text>
+
+              <Text style={styles.rideModalSectionLabel}>{t("ride_pickup")}</Text>
+              <View
+                style={[
+                  styles.rideModalFieldBox,
+                  rideFieldHighlight.pickup && styles.rideModalFieldBoxError,
+                ]}
+              >
+                <Text style={styles.rideModalText}>
+                  {userLocation ? t("ride_using_current_location") : t("ride_location_unavailable_hint")}
+                </Text>
+              </View>
+
+              <Text style={styles.rideModalSectionLabel}>{t("ride_destination")}</Text>
+              <Text style={styles.rideModalHint}>{t("ride_search_destination_hint")}</Text>
+              <TextInput
+                style={styles.rideModalSearchInput}
+                value={ridePlaceSearchQuery}
+                onChangeText={setRidePlaceSearchQuery}
+                placeholder={t("search_places")}
+                placeholderTextColor="#888"
+                autoCorrect={false}
+              />
+              {rideModalPlaceResults.length > 0 ? (
+                <View style={styles.rideModalSearchResults}>
+                  {rideModalPlaceResults.map((place) => (
+                    <TouchableOpacity
+                      key={`ride_dest_${place.id}`}
+                      style={styles.rideModalSearchRow}
+                      onPress={() => applyPlaceToRideDestination(place)}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={styles.rideModalSearchRowTitle} numberOfLines={2}>
+                        {getPlaceName(place)}
+                      </Text>
+                      <Text style={styles.rideModalSearchRowSub} numberOfLines={1}>
+                        {getCityName(place.city)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+              <View
+                style={[
+                  styles.rideModalFieldBox,
+                  rideFieldHighlight.destination && styles.rideModalFieldBoxError,
+                ]}
+              >
+                <TextInput
+                  style={styles.rideModalTextInput}
+                  value={rideDestinationInput}
+                  onChangeText={(text) => {
+                    setRideDestinationInput(text);
+                    if (rideFieldHighlight.destination) {
+                      setRideFieldHighlight((h) => ({ ...h, destination: false }));
+                    }
+                  }}
+                  placeholder={t("ride_destination_input_placeholder")}
+                  placeholderTextColor="#888"
+                  multiline
+                />
+                <TouchableOpacity
+                  style={styles.rideModalMapLink}
+                  onPress={() => {
+                    if (selectedDriver) {
+                      pendingRideDriverRef.current = selectedDriver;
+                      rideMapPickSkipRouteRef.current = true;
+                      setSelectedDriver(null);
+                      setIsPickingMapDestination(true);
+                    }
+                  }}
+                  hitSlop={{ top: 8, bottom: 8 }}
+                >
+                  <Text style={styles.rideModalMapLinkText}>{t("ride_choose_on_map_button")}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.ridePassengerRow}>
+                <TouchableOpacity
+                  style={styles.passengerBtn}
+                  onPress={() => setRidePassengers((prev) => Math.max(1, prev - 1))}
+                >
+                  <Text style={styles.passengerBtnText}>-</Text>
+                </TouchableOpacity>
+                <Text style={styles.rideModalText}>{t("ride_number_of_people")}: {ridePassengers}</Text>
+                <TouchableOpacity
+                  style={styles.passengerBtn}
+                  onPress={() => setRidePassengers((prev) => Math.min(12, prev + 1))}
+                >
+                  <Text style={styles.passengerBtnText}>+</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={styles.rideRequestButton}
+                onPress={handleCreateRideRequest}
+                disabled={creatingRideRequest}
+              >
+                {creatingRideRequest ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.rideRequestButtonText}>{t("ride_send_request")}</Text>
+                )}
+              </TouchableOpacity>
+              {rideSendErrorHint ? (
+                <Text style={styles.rideModalErrorHint}>
+                  {t("ride_debug_error_hint", { hint: rideSendErrorHint })}
+                </Text>
+              ) : null}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={rideDriverPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRideDriverPickerVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.rideModalOverlay}
+          activeOpacity={1}
+          onPress={() => setRideDriverPickerVisible(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.rideDriverPickerCard} onPress={() => {}}>
+            <Text style={styles.rideModalTitle}>{t("ride_choose_driver_title")}</Text>
+            <FlatList
+              data={nearbyDrivers}
+              keyExtractor={(item) => `pick_${item.driver_user_id}`}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.rideDriverPickerRow}
+                  onPress={() => {
+                    setRideDriverPickerVisible(false);
+                    setSelectedDriver(item);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="car-sport" size={22} color="#0f5b63" />
+                  <View style={styles.rideDriverPickerRowText}>
+                    <Text style={styles.rideDriverPickerName} numberOfLines={1}>
+                      {item.full_name}
+                    </Text>
+                    <Text style={styles.rideDriverPickerMeta} numberOfLines={1}>
+                      @{item.username} · {item.distance_km} {t("ride_km")}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={22} color="#888" />
+                </TouchableOpacity>
+              )}
+            />
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Language Selector Modal */}
       <Modal
@@ -2285,6 +2889,271 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  actionButtonsNavRideWrap: {
+    flex: 1.5,
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+  },
+  actionButtonPrimaryHalf: {
+    flex: 1,
+    minWidth: 0,
+  },
+  actionButtonRideWithDriver: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    gap: 6,
+    borderWidth: 2,
+    borderColor: "#0f5b63",
+  },
+  actionButtonRideWithDriverText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0f5b63",
+    textAlign: "center",
+    flexShrink: 1,
+  },
+  actionButtonRideWithDriverMuted: {
+    borderColor: "#c4c4c4",
+    backgroundColor: "#f4f4f4",
+    opacity: 0.92,
+  },
+  actionButtonRideWithDriverTextMuted: {
+    color: "#888",
+  },
+  mapNearbyDriversChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.25)",
+  },
+  mapNearbyDriversChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0f5b63",
+  },
+  driverMarker: {
+    minWidth: 44,
+    minHeight: 44,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    borderRadius: 22,
+    backgroundColor: "#0f5b63",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  rideModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 18,
+  },
+  rideModalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    maxHeight: SCREEN_HEIGHT * 0.78,
+    borderTopWidth: 5,
+    borderTopColor: "#0f5b63",
+    overflow: "hidden",
+  },
+  rideModalBuildBand: {
+    backgroundColor: "#e8f4f5",
+    marginHorizontal: -16,
+    marginTop: -16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(15,91,99,0.12)",
+  },
+  rideModalBuildBandText: {
+    color: "#0f5b63",
+    fontSize: 13,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  rideModalSessionWarn: {
+    backgroundColor: "#fff3cd",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#e6d4a8",
+  },
+  rideModalSessionWarnText: { color: "#664d03", fontSize: 13, textAlign: "center", lineHeight: 18 },
+  rideModalDebugId: { fontSize: 12, color: "#666", marginBottom: 8, textAlign: "center" },
+  rideModalErrorHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: "#842029",
+    lineHeight: 17,
+    textAlign: "center",
+  },
+  rideModalSectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0f5b63",
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  rideModalFieldBox: {
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.08)",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 4,
+    backgroundColor: "#fafafa",
+  },
+  rideModalFieldBoxError: {
+    borderColor: "#dc3545",
+    backgroundColor: "#fff5f5",
+  },
+  rideModalTextInput: {
+    fontSize: 14,
+    color: "#222",
+    minHeight: 44,
+    textAlignVertical: "top",
+    paddingVertical: 4,
+  },
+  rideModalMapLink: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+  },
+  rideModalMapLinkText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#0f5b63",
+    textDecorationLine: "underline",
+  },
+  rideModalHint: {
+    fontSize: 12,
+    color: "#555",
+    marginBottom: 6,
+    lineHeight: 17,
+  },
+  rideModalSearchInput: {
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.1)",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#222",
+    marginBottom: 8,
+    backgroundColor: "#fff",
+  },
+  rideModalSearchResults: {
+    maxHeight: 200,
+    marginBottom: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.15)",
+    overflow: "hidden",
+    backgroundColor: "#fafdfd",
+  },
+  rideModalSearchRow: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(0,0,0,0.06)",
+  },
+  rideModalSearchRowTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111",
+  },
+  rideModalSearchRowSub: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
+  },
+  rideModalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 8,
+  },
+  rideModalText: {
+    fontSize: 14,
+    color: "#222",
+    marginBottom: 6,
+  },
+  ridePassengerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginVertical: 8,
+  },
+  passengerBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#e6eef0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  passengerBtnText: {
+    color: "#0f5b63",
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  rideRequestButton: {
+    backgroundColor: "#0f5b63",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  rideRequestButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  rideDriverPickerCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 16,
+    maxHeight: SCREEN_HEIGHT * 0.55,
+    width: "100%",
+    borderTopWidth: 5,
+    borderTopColor: "#0f5b63",
+  },
+  rideDriverPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(0,0,0,0.08)",
+  },
+  rideDriverPickerRowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rideDriverPickerName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111",
+  },
+  rideDriverPickerMeta: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
   },
   imageGalleryContainer: {
     paddingHorizontal: 16,

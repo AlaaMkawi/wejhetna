@@ -30,7 +30,6 @@ import AdvertisementCard from "../components/AdvertisementCard";
 const DARK_TEAL = "#0f5b63";
 const BG = "#f4fbfb";
 const MUTED = "#6b8a8e";
-const BORDER = "#d4e8ea";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 

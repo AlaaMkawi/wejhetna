@@ -371,6 +371,11 @@ class RideRequestActionRequest(BaseModel):
     note: Optional[str] = None
 
 
+class RidePassengerCancelRequest(BaseModel):
+    regular_user_id: int
+    note: Optional[str] = None
+
+
 class RideRequestStatusOut(BaseModel):
     id: int
     status: str
@@ -382,9 +387,12 @@ class RideRequestRegularOut(BaseModel):
     driver_user_id: int
     driver_full_name: str
     driver_username: str
+    driver_phone: Optional[str] = None
     pickup_lat: float
     pickup_lon: float
     destination_text: str
+    destination_lat: Optional[float] = None
+    destination_lon: Optional[float] = None
     passengers_count: int
     number_of_people: Optional[int] = None
     number_of_seats_required: Optional[int] = None
@@ -394,21 +402,36 @@ class RideRequestRegularOut(BaseModel):
     driver_live_lat: Optional[float] = None
     driver_live_lon: Optional[float] = None
     status: str
+    passenger_verification_unlocked: bool = False
     verification_code: Optional[str] = None  # set when driver arrived; passenger shares with driver
+    verification_failed_attempts: int = 0
+    regular_phone: Optional[str] = None
+    status_note: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
 
 class RideVerifyCodeRequest(BaseModel):
     ride_request_id: int = Field(..., ge=1)
-    driver_user_id: int = Field(..., ge=1)
     verification_code: str = Field(..., min_length=4, max_length=16)
+    driver_user_id: Optional[int] = Field(None, ge=1)
+    regular_user_id: Optional[int] = Field(None, ge=1)
+
+
+class RideCompleteRequest(BaseModel):
+    """Either the driver or the passenger confirms they reached the destination on the shared trip screen."""
+    ride_request_id: int = Field(..., ge=1)
+    driver_user_id: Optional[int] = Field(None, ge=1)
+    regular_user_id: Optional[int] = Field(None, ge=1)
 
 
 class RideRequestDriverOut(BaseModel):
     id: int
     regular_user_id: int
     regular_username: str
+    regular_full_name: Optional[str] = None
+    driver_phone: Optional[str] = None
+    status_note: Optional[str] = None
     pickup_lat: float
     pickup_lon: float
     destination_text: str
@@ -423,5 +446,7 @@ class RideRequestDriverOut(BaseModel):
     eta_to_user: Optional[int] = None
     estimated_trip_time: Optional[int] = None
     regular_phone: Optional[str] = None
+    passenger_verification_unlocked: bool = False
+    verification_failed_attempts: int = 0
     created_at: datetime
     updated_at: datetime

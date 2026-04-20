@@ -145,3 +145,17 @@ def send_email_task(self, to_email: str, subject: str, body: str) -> None:
             f"[CELERY tasks.send_email] FAILED task_id={task_id!r} to={to_email!r}: {e}"
         )
         raise
+
+    @celery_app.task(name="wejhetna.notify_verification_code_created", ignore_result=True)
+    def notify_verification_code_created(ride_request_id: int) -> None:
+        print(
+            f"[CELERY wejhetna.notify_verification_code_created] "
+            f"ride_request_id={ride_request_id!r}"
+        )
+
+    @celery_app.task(name="wejhetna.notify_ride_in_progress", ignore_result=True)
+    def notify_ride_in_progress(ride_request_id: int) -> None:
+        print(
+            f"[CELERY wejhetna.notify_ride_in_progress] "
+            f"ride_request_id={ride_request_id!r}"
+        )

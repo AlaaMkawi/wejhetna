@@ -9,6 +9,7 @@ import {
   StatusBar,
   Platform,
   Modal,
+  Linking,
 } from "react-native";
 import { emitLiveNavigationExit } from "../../navigation/navigationEvents";
 import { useTranslation } from "react-i18next";
@@ -48,6 +49,16 @@ import {
   type SmoothedPoint,
 } from "../../utils/gpsSmoothing";
 import { NavigationMarker } from "../../components/map/NavigationMarker";
+import { RideDestinationDetailsModal } from "../../components/ride/RideDestinationDetailsModal";
+import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScreen";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Alert } from "react-native";
+import {
+  completeRideTrip,
+  getRegularLatestRideRequest,
+  markRideArrived,
+  parseStoredUserId,
+} from "../../api/rides";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -80,6 +91,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     userLocation: initialUserLocation,
     routeCoordinates: initialRouteCoordinates,
     navigationPhase: navigationPhaseParam,
+    rideContext,
   } = route.params;
 
   const mapRef = useRef<any>(null);
@@ -123,6 +135,12 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [mapBearing, setMapBearing] = useState<number>(0);
   const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [rerouting, setRerouting] = useState(false);
+  const [rideDestModalOpen, setRideDestModalOpen] = useState(false);
+  // Ride-only arrival modal: replaces the generic "You arrived" popup while a ride is active.
+  const [rideTripArrivedModal, setRideTripArrivedModal] = useState(false);
+  const [completingRideTrip, setCompletingRideTrip] = useState(false);
+  // Pickup-mode arrival: driver reached passenger's pickup — 5 sec auto-dismiss popup + server notify.
+  const [ridePickupArrivedModal, setRidePickupArrivedModal] = useState(false);
 
   const activeRouteCoordsRef = useRef<RouteLineStringCoords>(
     initialCoords.length >= 2 ? [...initialCoords] : [...initialCoords]
@@ -135,6 +153,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const isFollowingRef = useRef(false);
   const userLocationRef = useRef<{ lat: number; lon: number } | null>(initialUserLocation);
   const destinationRef = useRef(destination);
+  const rideContextRef = useRef(rideContext ?? null);
+  useEffect(() => {
+    rideContextRef.current = rideContext ?? null;
+  }, [rideContext]);
   const lastProgressAtRef = useRef(0);
   const lastCameraMoveAtRef = useRef(0);
   const headingForSmoothRef = useRef<number | null>(null);
@@ -528,7 +550,17 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             const dDest = calculateDistance(latitude, longitude, dest.lat, dest.lon);
             if (dDest <= ARRIVAL_RADIUS_M) {
               hasArrivedRef.current = true;
-              setShowArrivalModal(true);
+              const rc = rideContextRef.current;
+              if (rc) {
+                // Ride-only dedicated arrival UI; do NOT show the generic personal-navigation popup.
+                if (rc.mode === "pickup") {
+                  setRidePickupArrivedModal(true);
+                } else {
+                  setRideTripArrivedModal(true);
+                }
+              } else {
+                setShowArrivalModal(true);
+              }
               const wid = watchIdRef.current;
               if (wid != null) {
                 NativeGeolocation.clearWatch(wid);
@@ -698,6 +730,210 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     };
   }, []);
 
+  // Passenger-pickup viewer mode = the passenger is spectating the driver's pickup route.
+  // We must NOT engage watchPosition (the passenger's own GPS is irrelevant to this view and
+  // would falsely trigger arrival detection), NOR call markRideArrived (driver-only). Instead,
+  // we poll the backend for `driver_live_lat/lon` and feed it through the same rendering
+  // pipeline (setUserLocation + polyline trim + maybeReroute + camera follow) used by the
+  // normal navigation engine.
+  const isPassengerPickup =
+    rideContext?.mode === "pickup" && rideContext?.role === "REGULAR";
+
+  const startPassengerPickupTracking = useCallback(() => {
+    if (!destination) return;
+    const wPrev = watchIdRef.current;
+    if (wPrev != null) {
+      NativeGeolocation.clearWatch(wPrev);
+      watchIdRef.current = null;
+    }
+    setShowFullRoute(false);
+    // Passenger never "arrives" on this device; block the arrival path permanently for this view.
+    hasArrivedRef.current = true;
+    setShowArrivalModal(false);
+    setSessionPhase("active");
+    setIsFollowingUser(true);
+    isNavigatingRef.current = true;
+    lastProgressAtRef.current = 0;
+    lastCameraMoveAtRef.current = 0;
+  }, [destination]);
+
+  const autoStartedLiveNavRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (autoStartedLiveNavRef.current) return;
+    if (sessionPhase !== "active") return;
+    if (!rideContext) return;
+    autoStartedLiveNavRef.current = true;
+    if (isPassengerPickup) {
+      startPassengerPickupTracking();
+    } else {
+      startLiveNavigation();
+    }
+  }, [
+    sessionPhase,
+    rideContext,
+    isPassengerPickup,
+    startLiveNavigation,
+    startPassengerPickupTracking,
+  ]);
+
+  // Passenger-pickup: poll driver's live location every few seconds and re-use the existing
+  // routing pipeline (setUserLocation + trim + reroute + camera) to animate the view.
+  useEffect(() => {
+    if (!isPassengerPickup) return;
+    if (!destination) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const stored = await AsyncStorage.getItem("userId");
+        const uid = parseStoredUserId(stored);
+        if (uid == null) return;
+        const latest = await getRegularLatestRideRequest(uid);
+        if (cancelled) return;
+        if (!latest) return;
+        if (
+          rideContext?.rideRequestId != null &&
+          latest.id !== rideContext.rideRequestId
+        ) {
+          return;
+        }
+        const lat = latest.driver_live_lat;
+        const lon = latest.driver_live_lon;
+        if (
+          lat == null ||
+          lon == null ||
+          !Number.isFinite(lat) ||
+          !Number.isFinite(lon)
+        ) {
+          return;
+        }
+        const newLoc = { lat, lon };
+        setUserLocation(newLoc);
+        setSmoothedUserLocation(newLoc);
+        userLocationRef.current = newLoc;
+        displayLocationRef.current = newLoc;
+
+        const coords = activeRouteCoordsRef.current;
+        if (coords.length >= 2) {
+          const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
+            lat,
+            lon,
+            coords,
+            SNAP_TRIM_M
+          );
+          activeRouteCoordsRef.current = trimmed;
+          setDisplayRouteFC(lineStringToFeatureCollection(trimmed));
+          const legD = legDistanceRef.current;
+          const legT = legDurationRef.current;
+          const ratio =
+            legD > 50 ? Math.min(1, Math.max(0, remainingLengthMeters / legD)) : 0;
+          setRemainingSeconds(Math.round(legT * ratio));
+
+          // Reroute if the driver strays substantially from the current polyline.
+          const distToRoute = minDistanceToPolylineMeters(lat, lon, coords);
+          if (distToRoute > OFF_ROUTE_THRESHOLD_M) {
+            if (offRouteSinceRef.current === null) {
+              offRouteSinceRef.current = Date.now();
+            } else if (Date.now() - offRouteSinceRef.current > 2800) {
+              offRouteSinceRef.current = null;
+              void maybeReroute(lat, lon);
+            }
+          } else if (distToRoute < ON_ROUTE_THRESHOLD_M) {
+            offRouteSinceRef.current = null;
+          }
+        }
+
+        if (cameraRef.current && isFollowingRef.current) {
+          const now = Date.now();
+          if (now - lastCameraMoveAtRef.current >= 500) {
+            lastCameraMoveAtRef.current = now;
+            cameraRef.current.setCamera({
+              centerCoordinate: [lon, lat],
+              zoomLevel: 17.2,
+              animationDuration: 450,
+            });
+          }
+        }
+      } catch {
+        /* transient polling error – will retry on next interval */
+      }
+    };
+
+    void tick();
+    const id = setInterval(() => void tick(), 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isPassengerPickup, destination, rideContext?.rideRequestId, maybeReroute]);
+
+  // Pickup arrival: fire-and-forget markRideArrived + 5s auto-close + return to driver requests.
+  useEffect(() => {
+    if (!ridePickupArrivedModal) return;
+    if (!rideContext || rideContext.mode !== "pickup") return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const stored = await AsyncStorage.getItem("userId");
+        const did = parseStoredUserId(stored);
+        if (did != null && rideContext.role === "DRIVER") {
+          try {
+            await markRideArrived(rideContext.rideRequestId, did);
+          } catch {
+            // Server may already be in a later state; swallow — popup/navigation still proceed.
+          }
+        }
+      } finally {
+        if (cancelled) return;
+      }
+    })();
+
+    const closeTimer = setTimeout(() => {
+      if (cancelled) return;
+      setRidePickupArrivedModal(false);
+      navigateToUserRideRequestsTab(navigation as any, rideContext.role);
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(closeTimer);
+    };
+  }, [ridePickupArrivedModal, rideContext, navigation]);
+
+  const onRideTripArrivedConfirm = useCallback(async () => {
+    if (!rideContext || completingRideTrip) return;
+    setCompletingRideTrip(true);
+    try {
+      const stored = await AsyncStorage.getItem("userId");
+      const uid = parseStoredUserId(stored);
+      if (uid != null) {
+        try {
+          await completeRideTrip({
+            ride_request_id: rideContext.rideRequestId,
+            ...(rideContext.role === "DRIVER"
+              ? { driver_user_id: uid }
+              : { regular_user_id: uid }),
+          });
+        } catch (err) {
+          // Already completed by the other party → accept silently; otherwise warn and keep user on screen.
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/already completed/i.test(msg)) {
+            Alert.alert(t("error"), t("ride_trip_complete_failed"), [
+              { text: t("ok") || "OK" },
+            ]);
+            setCompletingRideTrip(false);
+            return;
+          }
+        }
+      }
+      setRideTripArrivedModal(false);
+      navigateToUserRideRequestsTab(navigation as any, rideContext.role);
+    } finally {
+      setCompletingRideTrip(false);
+    }
+  }, [rideContext, completingRideTrip, navigation, t]);
+
   const showFullRouteOverview = () => {
     const coords = activeRouteCoordsRef.current;
     if (coords.length > 0) {
@@ -736,6 +972,16 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       <View style={styles.header}>
+        {rideContext ? (
+          <TouchableOpacity
+            style={styles.rideHeaderBackBtn}
+            onPress={() => navigateToUserRideRequestsTab(navigation as any, rideContext.role)}
+            hitSlop={12}
+            accessibilityRole="button"
+          >
+            <Ionicons name="chevron-back" size={26} color={DARK_TEAL} />
+          </TouchableOpacity>
+        ) : null}
         <Text style={styles.headerTitle}>{headerTitle}</Text>
       </View>
 
@@ -826,6 +1072,40 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             </ShapeSource>
           )}
         </MapView>
+
+        {rideContext ? (
+          <View style={styles.rideOverlay}>
+            <Text style={styles.rideOverlayTitle}>{t("ride_trip_participants_title")}</Text>
+            <Text style={styles.rideOverlayLine}>
+              {t("ride_trip_label_driver")}: {rideContext.driverName}
+            </Text>
+            {rideContext.driverPhone ? (
+              <TouchableOpacity onPress={() => void Linking.openURL(`tel:${rideContext.driverPhone}`)}>
+                <Text style={styles.rideOverlayLink}>
+                  {t("ride_trip_driver_phone")}: {rideContext.driverPhone}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <Text style={styles.rideOverlayLine}>
+              {t("ride_trip_label_passenger")}: {rideContext.passengerName}
+            </Text>
+            {rideContext.passengerPhone ? (
+              <TouchableOpacity onPress={() => void Linking.openURL(`tel:${rideContext.passengerPhone}`)}>
+                <Text style={styles.rideOverlayLink}>
+                  {t("ride_trip_passenger_phone")}: {rideContext.passengerPhone}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.rideOverlayBtn}
+              onPress={() => setRideDestModalOpen(true)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="information-circle-outline" size={20} color="#fff" />
+              <Text style={styles.rideOverlayBtnText}>{t("ride_trip_destination_details_button")}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {mapBearing !== 0 && isActive && (
           <TouchableOpacity
@@ -967,7 +1247,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           </View>
         )}
 
-        {isActive && (
+        {isActive && !rideContext && (
           <TouchableOpacity
             style={styles.stopNavigationButton}
             onPress={stopLiveNavigationAndReturnHome}
@@ -1009,6 +1289,73 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={rideTripArrivedModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          /* block dismiss – user must tap the confirm button to end the ride */
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.arrivalModalContainer}>
+            <View style={styles.arrivalModalContent}>
+              <View style={styles.arrivalIconContainer}>
+                <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
+              </View>
+              <Text style={styles.arrivalModalTitle}>
+                {t("ride_trip_arrived_title")}
+              </Text>
+              <TouchableOpacity
+                style={styles.arrivalModalButton}
+                onPress={() => void onRideTripArrivedConfirm()}
+                disabled={completingRideTrip}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.arrivalModalButtonText}>
+                  {completingRideTrip ? "…" : t("ride_trip_arrived_confirm")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={ridePickupArrivedModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          /* auto-dismisses after 5s */
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.arrivalModalContainer}>
+            <View style={styles.arrivalModalContent}>
+              <View style={styles.arrivalIconContainer}>
+                <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
+              </View>
+              <Text style={styles.arrivalModalTitle}>
+                {t("ride_pickup_arrived_title")}
+              </Text>
+              <Text style={styles.arrivalModalMessage}>
+                {t("ride_pickup_arrived_body")}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {rideContext ? (
+        <RideDestinationDetailsModal
+          visible={rideDestModalOpen}
+          onClose={() => setRideDestModalOpen(false)}
+          destinationText={rideContext.destinationText}
+          destinationLat={rideContext.destinationLat}
+          destinationLon={rideContext.destinationLon}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1055,6 +1402,43 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "600",
     fontSize: 13,
+  },
+  rideOverlay: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    right: 12,
+    backgroundColor: "rgba(255,255,255,0.96)",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.12)",
+  },
+  rideOverlayTitle: { fontSize: 13, fontWeight: "800", color: DARK_TEAL, marginBottom: 6 },
+  rideOverlayLine: { fontSize: 13, color: "#222", marginBottom: 2 },
+  rideOverlayLink: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#1565c0",
+    marginBottom: 6,
+    textDecorationLine: "underline",
+  },
+  rideOverlayBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: DARK_TEAL,
+    borderRadius: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  rideOverlayBtnText: { color: "#fff", fontWeight: "700", fontSize: 14, marginLeft: 8 },
+  rideHeaderBackBtn: {
+    position: "absolute",
+    left: 10,
+    top: Platform.OS === "ios" ? 46 : (StatusBar.currentHeight ?? 0) + 6,
+    padding: 4,
+    zIndex: 3,
   },
   userLocationMarkerContainer: {
     alignItems: "center",

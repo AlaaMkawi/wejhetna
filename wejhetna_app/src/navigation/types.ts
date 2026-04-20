@@ -126,10 +126,45 @@ export type RootStackParamList = {
     } | null;
     /** When omitted, screen defaults to preview (map + summary before live navigation). */
     navigationPhase?: "preview" | "active";
+    /**
+     * Optional ride UI overlay shown only when this route is opened from the ride flow
+     * (OTP verified → in-trip navigation). Does not affect regular navigation entrypoints.
+     */
+    rideContext?: {
+      rideRequestId: number;
+      destinationText: string;
+      destinationLat: number | null;
+      destinationLon: number | null;
+      driverName: string;
+      driverPhone: string | null;
+      passengerName: string;
+      passengerPhone: string | null;
+      /** Needed so the back button inside RouteDetails returns to the correct requests tab. */
+      role: "DRIVER" | "REGULAR";
+      /**
+       * `"trip"` = after OTP, driver+passenger en route to destination.
+       * `"pickup"` = driver en route to passenger's pickup point.
+       * When omitted, defaults to `"trip"` (legacy behaviour).
+       */
+      mode?: "trip" | "pickup";
+    };
   };
   /** Full-screen live ride tracking (driver → pickup or passenger following driver). */
   RideTrackingMap: {
     mode: "driver" | "passenger";
+    rideRequestId: number;
+  };
+  /** Shared in-trip navigation to destination (after OTP success). */
+  RideTripToDestination: {
+    rideRequestId: number;
+    showTripSuccessIntro?: boolean;
+  };
+  /**
+   * Unified pickup-route entrypoint.
+   * Driver: loads into openDrivingRoutePreview → RouteDetails (live nav to pickup).
+   * Passenger: redirects to RideTrackingMap (passenger mode) which already shows live driver approach.
+   */
+  RidePickupNavigation: {
     rideRequestId: number;
   };
 };

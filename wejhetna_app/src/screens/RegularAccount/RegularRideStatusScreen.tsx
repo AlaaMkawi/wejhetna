@@ -1,9 +1,11 @@
-import React, { Fragment, useCallback, useMemo, useState } from "react";
+import React, { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -13,24 +15,28 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import { useTranslation } from "react-i18next";
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import {
-  getRegularLatestRideRequest,
+  cancelRideRequestByPassenger,
+  getRegularRideRequestsList,
+  isActiveBlockingRideStatus,
   parseStoredUserId,
   RegularLatestRideRequest,
+  rideApiDetailToTranslationKey,
   RideRequestStatus,
+  verifyRideStartCode,
 } from "../../api/rides";
 import { RIDE_STATUS_POLL_INTERVAL_MS, RIDE_UI_BUILD } from "../../../config";
-import { RideDriverMapMarker } from "../../components/map/RideDriverMapMarker";
-import { useDriverTrailHeading } from "../../components/map/useDriverTrailHeading";
-
-const TRACKING_MAP_STYLE =
-  "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
-const NEGEV_BOUNDS = {
-  ne: [35.1, 31.42] as [number, number],
-  sw: [34.72, 31.18] as [number, number],
-};
+import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
+import { markPassengerCancelledOwnRide, markVerificationMismatchSelfAlert } from "../../utils/rideCancelAlertGate";
+import { markTripStartHandledLocally } from "../../utils/rideTripStartPromotionGate";
+import { RideVerificationAttemptHint } from "../../components/ride/RideVerificationAttemptHint";
+import { RideVerifySuccessModal } from "../../components/ride/RideVerifySuccessModal";
+import {
+  navigateToRideTripToDestination,
+  navigateToRidePickupNavigation,
+  navigateToUserRideRequestsTab,
+} from "../../utils/rideNavigateToTripScreen";
 
 /** ETA at or below this (minutes) shows “arriving soon” copy before “arriving now”. */
 const ARRIVING_SOON_ETA_MIN = 3;
@@ -71,33 +77,67 @@ function hasValidPickup(latest: RegularLatestRideRequest): boolean {
   );
 }
 
+function formatRideRequestTimestamp(iso: string, locale: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      return iso;
+    }
+    return d.toLocaleString(locale);
+  } catch {
+    return iso;
+  }
+}
+
 export default function RegularRideStatusScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [userId, setUserId] = useState<number | null>(null);
-  const [latest, setLatest] = useState<RegularLatestRideRequest | null>(null);
+  const [rideList, setRideList] = useState<RegularLatestRideRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [cancellingPassengerRide, setCancellingPassengerRide] = useState(false);
+  const [passengerVerifyInput, setPassengerVerifyInput] = useState("");
+  const [busyPassengerVerify, setBusyPassengerVerify] = useState(false);
+  const verifySuccessTripIdRef = useRef<number | null>(null);
+  const [verifySuccessVisible, setVerifySuccessVisible] = useState(false);
 
-  const driverTrailHeadingDeg = useDriverTrailHeading(
-    latest?.driver_live_lat,
-    latest?.driver_live_lon,
-    6
+  const onPassengerVerifySuccessTimer = useCallback(() => {
+    setVerifySuccessVisible(false);
+    const id = verifySuccessTripIdRef.current;
+    verifySuccessTripIdRef.current = null;
+    if (id == null) return;
+    const parent = navigation.getParent() as NativeStackNavigationProp<RootStackParamList> | undefined;
+    if (parent) {
+      navigateToRideTripToDestination(parent, id, { showTripSuccessIntro: false });
+    }
+  }, [navigation]);
+
+  const activeRide = useMemo(
+    () => rideList.find((r) => isActiveBlockingRideStatus(r.status)) ?? null,
+    [rideList]
   );
+
+  const historyRides = useMemo(() => {
+    if (activeRide == null) {
+      return rideList;
+    }
+    return rideList.filter((r) => r.id !== activeRide.id);
+  }, [rideList, activeRide]);
 
   const refresh = useCallback(async () => {
     const stored = await AsyncStorage.getItem("userId");
     const id = parseStoredUserId(stored);
     setUserId(id);
     if (id == null) {
-      setLatest(null);
+      setRideList([]);
       setLoading(false);
       setLoadError(false);
       return;
     }
     try {
-      const row = await getRegularLatestRideRequest(id);
-      setLatest(row);
+      const rows = await getRegularRideRequestsList(id);
+      setRideList(rows);
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -116,64 +156,121 @@ export default function RegularRideStatusScreen() {
     }, [refresh])
   );
 
-  const mapCamera = useMemo(() => {
-    if (!latest || !hasValidPickup(latest)) {
+  const handleCancelPassengerRide = useCallback(() => {
+    if (!activeRide || userId == null || !isActiveBlockingRideStatus(activeRide.status)) {
+      return;
+    }
+    const rideRequestId = activeRide.id;
+    const regularUserId = userId;
+    Alert.alert(t("ride_passenger_cancel_confirm_title"), t("ride_passenger_cancel_confirm_message"), [
+      { text: t("cancel"), style: "cancel" },
+      {
+        text: t("ride_passenger_cancel_button"),
+        style: "destructive",
+        onPress: async () => {
+          setCancellingPassengerRide(true);
+          try {
+            await cancelRideRequestByPassenger({
+              ride_request_id: rideRequestId,
+              regular_user_id: regularUserId,
+            });
+            markPassengerCancelledOwnRide();
+            await refresh();
+            Alert.alert(t("success"), t("ride_passenger_cancel_success"), [{ text: t("ok") }]);
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const key = rideApiDetailToTranslationKey(msg);
+            Alert.alert(t("error"), key ? t(key) : msg, [{ text: t("ok") }]);
+          } finally {
+            setCancellingPassengerRide(false);
+          }
+        },
+      },
+    ]);
+  }, [activeRide, userId, refresh, t]);
+
+  const runPassengerVerifyCode = useCallback(async () => {
+    if (!activeRide || userId == null) return;
+    const code = passengerVerifyInput.trim();
+    if (code.length < 4) {
+      Alert.alert(t("error"), t("ride_verify_code_too_short"), [{ text: t("ok") }]);
+      return;
+    }
+    setBusyPassengerVerify(true);
+    try {
+      await verifyRideStartCode({
+        ride_request_id: activeRide.id,
+        regular_user_id: userId,
+        verification_code: code,
+      });
+      setPassengerVerifyInput("");
+      await refresh();
+      markTripStartHandledLocally(activeRide.id);
+      verifySuccessTripIdRef.current = activeRide.id;
+      setVerifySuccessVisible(true);
+    } catch (e: unknown) {
+      await refresh();
+      const msg = e instanceof Error ? e.message : String(e);
+      const key = rideApiDetailToTranslationKey(msg);
+      if (key === "ride_error_verify_attempts_exceeded") {
+        markVerificationMismatchSelfAlert();
+        const parent = navigation.getParent() as NativeStackNavigationProp<RootStackParamList> | undefined;
+        Alert.alert(
+          t("ride_cancelled_verification_mismatch_title"),
+          t("ride_cancelled_verification_mismatch_message"),
+          [{ text: t("ok"), onPress: () => parent && navigateToUserRideRequestsTab(parent, "REGULAR") }]
+        );
+        return;
+      }
+      Alert.alert(t("error"), key ? t(key) : msg, [{ text: t("ok") }]);
+    } finally {
+      setBusyPassengerVerify(false);
+    }
+  }, [activeRide, userId, passengerVerifyInput, refresh, navigation, t]);
+
+  const pickupCoord = useMemo(() => {
+    if (!activeRide || !hasValidPickup(activeRide)) return null;
+    return { lat: activeRide.pickup_lat, lon: activeRide.pickup_lon };
+  }, [activeRide]);
+
+  const driverLive = useMemo(() => {
+    if (
+      activeRide?.driver_live_lat == null ||
+      activeRide?.driver_live_lon == null ||
+      !Number.isFinite(activeRide.driver_live_lat) ||
+      !Number.isFinite(activeRide.driver_live_lon)
+    ) {
       return null;
     }
-    const plon = latest.pickup_lon;
-    const plat = latest.pickup_lat;
-    const dlon = latest.driver_live_lon;
-    const dlat = latest.driver_live_lat;
-    if (
-      dlon != null &&
-      dlat != null &&
-      Number.isFinite(dlon) &&
-      Number.isFinite(dlat)
-    ) {
-      return {
-        centerCoordinate: [(plon + dlon) / 2, (plat + dlat) / 2] as [number, number],
-        zoomLevel: 12.9,
-      };
-    }
-    return {
-      centerCoordinate: [plon, plat] as [number, number],
-      zoomLevel: 14,
-    };
-  }, [
-    latest?.pickup_lat,
-    latest?.pickup_lon,
-    latest?.driver_live_lat,
-    latest?.driver_live_lon,
-  ]);
+    return { lat: activeRide.driver_live_lat, lon: activeRide.driver_live_lon };
+  }, [activeRide?.driver_live_lat, activeRide?.driver_live_lon]);
 
-  const cameraKey = useMemo(() => {
-    if (!latest || !hasValidPickup(latest)) return "cam";
-    const dlat = latest.driver_live_lat ?? "x";
-    const dlon = latest.driver_live_lon ?? "x";
-    return `cam-${latest.id}-${dlat}-${dlon}-${latest.pickup_lat}-${latest.pickup_lon}`;
-  }, [
-    latest?.id,
-    latest?.driver_live_lat,
-    latest?.driver_live_lon,
-    latest?.pickup_lat,
-    latest?.pickup_lon,
-  ]);
+  const { remainingDistanceMeters, etaSecondsRemaining } = useDriverToPickupRouteVisualization(
+    driverLive,
+    pickupCoord
+  );
 
-  const renderBody = () => {
-    if (userId == null) {
-      return <Text style={styles.muted}>{t("ride_session_invalid")}</Text>;
-    }
-    if (loadError) {
-      return <Text style={styles.errorText}>{t("ride_failed_load_requests")}</Text>;
-    }
-    if (latest == null) {
-      return <Text style={styles.empty}>{t("ride_tracking_empty")}</Text>;
-    }
+  const displayEtaMinutes = useMemo(() => {
+    if (etaSecondsRemaining == null || !Number.isFinite(etaSecondsRemaining)) return null;
+    if (etaSecondsRemaining <= 90) return 1;
+    return Math.max(1, Math.round(etaSecondsRemaining / 60));
+  }, [etaSecondsRemaining]);
 
-    const st = latest.status;
-    const eta = latest.eta_to_user;
-    const phaseKey = passengerPhaseKey(st, eta);
-    const phaseLine = phaseKey ? t(phaseKey) : null;
+  const displayDistKm = useMemo(() => {
+    if (remainingDistanceMeters == null || !Number.isFinite(remainingDistanceMeters)) return null;
+    return Math.round((remainingDistanceMeters / 1000) * 10) / 10;
+  }, [remainingDistanceMeters]);
+
+  const liveEtaDistLines = useMemo(() => {
+    if (!activeRide) {
+      return { etaLine: null as string | null, distLine: null as string | null };
+    }
+    const st = activeRide.status;
+    const eta =
+      displayEtaMinutes != null &&
+      (st === "accepted" || st === "on_the_way" || st === "driving_to_customer")
+        ? displayEtaMinutes
+        : activeRide.eta_to_user;
 
     const etaLine =
       (st === "on_the_way" || st === "driving_to_customer") && eta != null && eta <= 1
@@ -184,109 +281,181 @@ export default function RegularRideStatusScreen() {
             ? `${t("ride_eta_pickup_estimate")}: ${eta} ${t("ride_min")}`
             : null;
 
-    const distLine =
-      latest.distance_to_pickup_km != null &&
+    const distKm =
+      displayDistKm != null &&
       (st === "accepted" ||
         st === "on_the_way" ||
         st === "driving_to_customer" ||
         st === "arrived")
-        ? t("ride_distance_to_pickup_km", { km: latest.distance_to_pickup_km })
-        : null;
+        ? displayDistKm
+        : activeRide.distance_to_pickup_km;
 
-    const showTrackingMap =
-      hasValidPickup(latest) &&
+    const distLine =
+      distKm != null &&
       (st === "accepted" ||
         st === "on_the_way" ||
         st === "driving_to_customer" ||
-        st === "arrived");
+        st === "arrived")
+        ? t("ride_distance_to_pickup_km", { km: distKm })
+        : null;
+
+    return { etaLine, distLine };
+  }, [activeRide, displayEtaMinutes, displayDistKm, t]);
+
+  const renderBody = () => {
+    if (userId == null) {
+      return <Text style={styles.muted}>{t("ride_session_invalid")}</Text>;
+    }
+    if (loadError) {
+      return <Text style={styles.errorText}>{t("ride_failed_load_requests")}</Text>;
+    }
+    if (rideList.length === 0) {
+      return <Text style={styles.empty}>{t("ride_tracking_empty")}</Text>;
+    }
+
+    const locale =
+      i18n.language === "ar" ? "ar" : i18n.language === "he" ? "he-IL" : i18n.language || undefined;
+
+    const activeCard =
+      activeRide != null ? (
+        (() => {
+          const latest = activeRide;
+          const st = latest.status;
+          const eta = latest.eta_to_user;
+          const phaseKey = passengerPhaseKey(st, eta);
+          const phaseLine = phaseKey ? t(phaseKey) : null;
+
+          const etaLine = liveEtaDistLines.etaLine;
+          const distLine = liveEtaDistLines.distLine;
+          const showPassengerCancel = isActiveBlockingRideStatus(st);
+          const passengerVerificationUnlocked = latest.passenger_verification_unlocked === true;
+          const showPassengerGoOutOnly = st === "arrived" && !passengerVerificationUnlocked;
+
+          const showPassengerDriverFollowBanner =
+            hasValidPickup(latest) && (st === "on_the_way" || st === "driving_to_customer");
+
+          return (
+            <View style={styles.card}>
+              <Text style={styles.activeSectionLabel}>{t("ride_active_ride_section")}</Text>
+              <Text style={styles.statusLine}>{t(`ride_status_${st}`)}</Text>
+              {showPassengerDriverFollowBanner ? (
+                <View style={styles.passengerDriverEnRouteBox}>
+                  <Text style={styles.passengerDriverEnRouteText}>
+                    {t("ride_passenger_driver_en_route_banner")}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.followDriverButton}
+                    onPress={() =>
+                      navigateToRidePickupNavigation(navigation, latest.id)
+                    }
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="navigate" size={22} color="#fff" />
+                    <Text style={styles.followDriverButtonText}>
+                      {t("ride_passenger_view_driver_route_button")}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {showPassengerGoOutOnly ? (
+                <View style={styles.passengerGoOutBanner}>
+                  <Text style={styles.passengerGoOutBannerText}>{t("ride_passenger_go_to_driver_prompt")}</Text>
+                </View>
+              ) : null}
+              {!showPassengerGoOutOnly && phaseLine ? <Text style={styles.phaseLine}>{phaseLine}</Text> : null}
+              {!showPassengerGoOutOnly ? (
+                <Text style={styles.driverLine}>
+                  {latest.driver_full_name} · @{latest.driver_username}
+                </Text>
+              ) : null}
+              {!showPassengerGoOutOnly ? <Text style={styles.destLine}>{latest.destination_text}</Text> : null}
+              {!showPassengerGoOutOnly && latest.estimated_trip_time != null ? (
+                <Text style={styles.meta}>
+                  {t("ride_estimated_trip_time")}: {latest.estimated_trip_time} {t("ride_min")}
+                </Text>
+              ) : null}
+              {!showPassengerGoOutOnly && distLine ? <Text style={styles.dist}>{distLine}</Text> : null}
+              {!showPassengerGoOutOnly && etaLine ? <Text style={styles.eta}>{etaLine}</Text> : null}
+
+              {st === "in_progress" ? (
+                <TouchableOpacity
+                  style={styles.resumeTripButton}
+                  onPress={() => {
+                    const parent = navigation.getParent() as NativeStackNavigationProp<RootStackParamList> | undefined;
+                    if (parent) {
+                      navigateToRideTripToDestination(parent, latest.id, { showTripSuccessIntro: false });
+                    }
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="navigate" size={20} color="#fff" />
+                  <Text style={styles.resumeTripButtonText}>
+                    {t("ride_trip_resume_navigation_button")}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+
+              {showPassengerCancel ? (
+                <TouchableOpacity
+                  style={[styles.cancelRequestButton, cancellingPassengerRide && styles.cancelRequestButtonDisabled]}
+                  onPress={handleCancelPassengerRide}
+                  disabled={cancellingPassengerRide}
+                  activeOpacity={0.85}
+                >
+                  {cancellingPassengerRide ? (
+                    <ActivityIndicator color="#c62828" />
+                  ) : (
+                    <Text style={styles.cancelRequestButtonText}>
+                      {showPassengerGoOutOnly ? t("ride_passenger_cancel_ride") : t("ride_passenger_cancel_button")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+
+              {st === "arrived" && passengerVerificationUnlocked && latest.verification_code ? (
+                <View style={styles.codeBox}>
+                  <Text style={styles.codeHint}>{t("ride_tracking_share_code_hint")}</Text>
+                  <Text style={styles.codeDigits}>{latest.verification_code}</Text>
+                  <RideVerificationAttemptHint
+                    failedAttempts={latest.verification_failed_attempts ?? 0}
+                    labelTwoRemaining={t("ride_verify_attempts_two_remaining")}
+                    labelOneRemaining={t("ride_verify_attempts_one_remaining")}
+                  />
+                </View>
+              ) : null}
+            </View>
+          );
+        })()
+      ) : (
+        <View style={styles.noActiveCard}>
+          <Text style={styles.noActiveBanner}>{t("ride_no_active_ride_banner")}</Text>
+        </View>
+      );
+
+    const historyBlock =
+      historyRides.length > 0 ? (
+        <View style={styles.historyBlock}>
+          <Text style={styles.historySectionTitle}>{t("ride_history_section_title")}</Text>
+          {historyRides.map((h) => (
+            <View key={h.id} style={styles.historyRow}>
+              <Text style={styles.historyRowDate}>{formatRideRequestTimestamp(h.created_at, locale ?? "he-IL")}</Text>
+              <Text style={styles.historyRowStatus}>{t(`ride_status_${h.status}`)}</Text>
+              <Text style={styles.historyRowDest} numberOfLines={2}>
+                {h.destination_text}
+              </Text>
+              <Text style={styles.historyRowDriver} numberOfLines={1}>
+                {h.driver_full_name} · @{h.driver_username}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null;
 
     return (
-      <View style={styles.card}>
-        <Text style={styles.statusLine}>{t(`ride_status_${st}`)}</Text>
-        {phaseLine ? <Text style={styles.phaseLine}>{phaseLine}</Text> : null}
-        <Text style={styles.driverLine}>
-          {latest.driver_full_name} · @{latest.driver_username}
-        </Text>
-        <Text style={styles.destLine}>{latest.destination_text}</Text>
-        {latest.estimated_trip_time != null ? (
-          <Text style={styles.meta}>
-            {t("ride_estimated_trip_time")}: {latest.estimated_trip_time} {t("ride_min")}
-          </Text>
-        ) : null}
-        {distLine ? <Text style={styles.dist}>{distLine}</Text> : null}
-        {etaLine ? <Text style={styles.eta}>{etaLine}</Text> : null}
-
-        {showTrackingMap && mapCamera ? (
-          <Fragment>
-          <View style={styles.mapWrap}>
-            <MapView
-              style={styles.map}
-              mapStyle={TRACKING_MAP_STYLE}
-              scrollEnabled={false}
-              rotateEnabled={false}
-              pitchEnabled={false}
-              logoEnabled={false}
-              attributionEnabled={false}
-            >
-              <Camera
-                key={cameraKey}
-                defaultSettings={{
-                  centerCoordinate: mapCamera.centerCoordinate,
-                  zoomLevel: mapCamera.zoomLevel,
-                }}
-                maxBounds={NEGEV_BOUNDS}
-                minZoomLevel={10}
-                maxZoomLevel={18}
-                animationMode="flyTo"
-              />
-              <PointAnnotation
-                id={`pickup_${latest.id}`}
-                coordinate={[latest.pickup_lon, latest.pickup_lat]}
-              >
-                <View style={styles.markerPickup}>
-                  <Ionicons name="navigate" size={18} color="#fff" />
-                </View>
-              </PointAnnotation>
-              {latest.driver_live_lon != null &&
-              latest.driver_live_lat != null &&
-              Number.isFinite(latest.driver_live_lon) &&
-              Number.isFinite(latest.driver_live_lat) ? (
-                <PointAnnotation
-                  id={`driver_${latest.id}`}
-                  coordinate={[latest.driver_live_lon, latest.driver_live_lat]}
-                >
-                  <RideDriverMapMarker
-                    size="default"
-                    headingDeg={driverTrailHeadingDeg}
-                  />
-                </PointAnnotation>
-              ) : null}
-            </MapView>
-            <Text style={styles.mapLegend}>{t("ride_tracking_map_legend")}</Text>
-          </View>
-            <TouchableOpacity
-              style={styles.openMapButton}
-              onPress={() =>
-                navigation.navigate("RideTrackingMap", {
-                  mode: "passenger",
-                  rideRequestId: latest.id,
-                })
-              }
-              activeOpacity={0.85}
-            >
-              <Ionicons name="map-outline" size={22} color="#fff" />
-              <Text style={styles.openMapButtonText}>{t("ride_tracking_open_map_passenger")}</Text>
-            </TouchableOpacity>
-          </Fragment>
-        ) : null}
-
-        {st === "arrived" && latest.verification_code ? (
-          <View style={styles.codeBox}>
-            <Text style={styles.codeHint}>{t("ride_tracking_share_code_hint")}</Text>
-            <Text style={styles.codeDigits}>{latest.verification_code}</Text>
-          </View>
-        ) : null}
-      </View>
+      <Fragment>
+        {activeCard}
+        {historyBlock}
+      </Fragment>
     );
   };
 
@@ -304,6 +473,12 @@ export default function RegularRideStatusScreen() {
         )}
         <Text style={styles.build}>{t("ride_ui_version_strip", { tag: RIDE_UI_BUILD })}</Text>
       </ScrollView>
+      <RideVerifySuccessModal
+        visible={verifySuccessVisible}
+        onTimerComplete={onPassengerVerifySuccessTimer}
+        title={t("ride_verify_success_title")}
+        body={t("ride_verify_success_body")}
+      />
     </SafeAreaView>
   );
 }
@@ -338,11 +513,122 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+  activeSectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0f5b63",
+    marginBottom: 10,
+  },
+  noActiveCard: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.15)",
+  },
+  noActiveBanner: {
+    fontSize: 14,
+    color: "#555",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  historyBlock: {
+    marginTop: 8,
+  },
+  historySectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  historyRow: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  historyRowDate: {
+    fontSize: 12,
+    color: "#888",
+    marginBottom: 6,
+  },
+  historyRowStatus: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0f5b63",
+    marginBottom: 6,
+  },
+  historyRowDest: {
+    fontSize: 14,
+    color: "#333",
+    marginBottom: 4,
+    lineHeight: 20,
+  },
+  historyRowDriver: {
+    fontSize: 13,
+    color: "#666",
+  },
   statusLine: {
     fontSize: 17,
     fontWeight: "700",
     color: "#0f5b63",
     marginBottom: 6,
+  },
+  passengerDriverEnRouteBox: {
+    backgroundColor: "#e8f5e9",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.22)",
+  },
+  passengerDriverEnRouteText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#1b5e20",
+    textAlign: "center",
+    marginBottom: 12,
+    lineHeight: 22,
+  },
+  followDriverButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f5b63",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  followDriverButtonText: { color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 },
+  resumeTripButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f5b63",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginTop: 12,
+  },
+  resumeTripButtonText: { color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 },
+  passengerGoOutBanner: {
+    backgroundColor: "#e3f2fd",
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "rgba(21,101,192,0.35)",
+  },
+  passengerGoOutBannerText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0d47a1",
+    textAlign: "center",
+    lineHeight: 23,
   },
   phaseLine: {
     fontSize: 14,
@@ -355,35 +641,24 @@ const styles = StyleSheet.create({
   meta: { fontSize: 13, color: "#555", marginBottom: 4 },
   dist: { fontSize: 13, color: "#444", marginBottom: 4 },
   eta: { fontSize: 15, fontWeight: "600", color: "#111", marginTop: 4 },
-  mapWrap: {
-    marginTop: 14,
-    borderRadius: 12,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.2)",
-  },
-  map: { width: "100%", height: 220 },
-  mapLegend: { fontSize: 11, color: "#555", paddingVertical: 8, textAlign: "center" },
-  openMapButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#0f5b63",
-    marginTop: 10,
-    borderRadius: 12,
+  cancelRequestButton: {
+    marginTop: 16,
     paddingVertical: 12,
     paddingHorizontal: 14,
-  },
-  openMapButtonText: { color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 },
-  markerPickup: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#0f5b63",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#c62828",
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#fff",
+    minHeight: 48,
+  },
+  cancelRequestButtonDisabled: {
+    opacity: 0.55,
+  },
+  cancelRequestButtonText: {
+    color: "#c62828",
+    fontWeight: "700",
+    fontSize: 15,
   },
   codeBox: {
     marginTop: 16,
@@ -401,5 +676,29 @@ const styles = StyleSheet.create({
     color: "#0f5b63",
     textAlign: "center",
   },
+  passengerVerifyInput: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.35)",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#111",
+    backgroundColor: "#fff",
+    textAlign: "center",
+  },
+  passengerVerifyButton: {
+    marginTop: 12,
+    backgroundColor: "#0f5b63",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 48,
+  },
+  passengerVerifyButtonDisabled: { opacity: 0.55 },
+  passengerVerifyButtonText: { color: "#fff", fontSize: 15, fontWeight: "700" },
   build: { fontSize: 11, color: "#999", textAlign: "center", marginTop: 28 },
 });

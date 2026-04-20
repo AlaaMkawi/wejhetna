@@ -20,6 +20,15 @@ export type OpenDrivingRoutePreviewParams = {
   t: TranslateFn;
   setRouteLoading: (loading: boolean) => void;
   setUserLocation?: (loc: { lat: number; lon: number }) => void;
+  /**
+   * Optional override for the OSRM origin used to build the initial route polyline.
+   * When omitted, uses the device GPS (existing behavior).
+   */
+  originOverride?: { lat: number; lon: number } | null;
+  /** When omitted, defaults to preview (existing behavior). */
+  navigationPhase?: "preview" | "active";
+  /** Optional extras to be merged into RouteDetails params (e.g. rideContext). */
+  routeDetailsExtras?: Partial<RootStackParamList["RouteDetails"]>;
 };
 
 /**
@@ -32,6 +41,9 @@ export async function openDrivingRoutePreview({
   t,
   setRouteLoading,
   setUserLocation,
+  originOverride,
+  navigationPhase,
+  routeDetailsExtras,
 }: OpenDrivingRoutePreviewParams): Promise<void> {
   if (!destination) {
     Alert.alert(t("error"), t("please_select_destination"));
@@ -68,11 +80,16 @@ export async function openDrivingRoutePreview({
       return;
     }
 
+    const osrmOrigin =
+      originOverride && Number.isFinite(originOverride.lat) && Number.isFinite(originOverride.lon)
+        ? { lat: originOverride.lat, lon: originOverride.lon }
+        : freshLocation;
+
     console.log("[GPS][routePreview] osrm start", {
-      origin: freshLocation,
+      origin: osrmOrigin,
       destination: { lat: destination.lat, lon: destination.lon },
     });
-    const osrm = await fetchOsrmDrivingRoute(freshLocation, destination);
+    const osrm = await fetchOsrmDrivingRoute(osrmOrigin, destination);
     console.log("[GPS][routePreview] osrm ok", {
       distanceMeters: osrm.distanceMeters,
       durationSeconds: osrm.durationSeconds,
@@ -82,23 +99,26 @@ export async function openDrivingRoutePreview({
     const routeInfoData = {
       distance: osrm.distanceMeters,
       duration: osrm.durationSeconds,
-      startAddress: t("your_location"),
+      startAddress: originOverride ? t("ride_pickup") : t("your_location"),
       endAddress: destination.name || t("destination"),
     };
 
     const routeCoords = lineStringToFeatureCollection(osrm.coordinates);
 
+    const phase: "preview" | "active" = navigationPhase === "active" ? "active" : "preview";
+
     console.log("[GPS][routePreview] navigate RouteDetails", {
-      userLocation: freshLocation,
+      userLocation: osrmOrigin,
       destination: { lat: destination.lat, lon: destination.lon },
-      navigationPhase: "preview",
+      navigationPhase: phase,
     });
     navigation.navigate("RouteDetails", {
       routeInfo: routeInfoData,
       destination,
-      userLocation: freshLocation,
+      userLocation: osrmOrigin,
       routeCoordinates: routeCoords,
-      navigationPhase: "preview",
+      navigationPhase: phase,
+      ...(routeDetailsExtras ?? {}),
     });
   } catch (error: unknown) {
     const err = error as { code?: number; message?: string };

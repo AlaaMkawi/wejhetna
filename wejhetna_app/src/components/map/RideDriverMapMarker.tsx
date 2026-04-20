@@ -13,6 +13,8 @@ export type RideDriverMapMarkerProps = {
   /** Clockwise degrees from north; when set, the car rotates with direction of travel. */
   headingDeg?: number | null;
   size?: RideDriverMapMarkerSize;
+  /** Default `car-sport`; use `car` for taxi-style live passenger tracking. */
+  vehicleIcon?: "car-sport" | "car";
 };
 
 const SIZE_MAP: Record<RideDriverMapMarkerSize, { outer: number; icon: number }> = {
@@ -24,7 +26,11 @@ const SIZE_MAP: Record<RideDriverMapMarkerSize, { outer: number; icon: number }>
 /**
  * High-contrast driver marker for MapLibre `PointAnnotation` children (custom styling, not the default pin).
  */
-export function RideDriverMapMarker({ headingDeg, size = "default" }: RideDriverMapMarkerProps) {
+export function RideDriverMapMarker({
+  headingDeg,
+  size = "default",
+  vehicleIcon = "car-sport",
+}: RideDriverMapMarkerProps) {
   const { outer: w, icon } = SIZE_MAP[size];
   const inner = w - 10;
   const rotate =
@@ -45,7 +51,7 @@ export function RideDriverMapMarker({ headingDeg, size = "default" }: RideDriver
                 },
               ]}
             >
-              <Ionicons name="car-sport" size={icon} color={ICON} />
+              <Ionicons name={vehicleIcon} size={icon} color={ICON} />
             </View>
           </View>
         </View>

@@ -37,6 +37,8 @@ import UserTabNavigator from "./UserTabNavigator";
 import ManageMyBusinessScreen from "../screens/businessOwner/ManageMyBusinessScreen";
 import RouteDetailsScreen from "../screens/RegularAccount/RouteDetailsScreen";
 import RideTrackingMapScreen from "../screens/ride/RideTrackingMapScreen";
+import RideTripToDestinationScreen from "../screens/ride/RideTripToDestinationScreen";
+import RidePickupNavigationScreen from "../screens/ride/RidePickupNavigationScreen";
 import CreateAdvertisementScreen from "../screens/CreateAdvertisementScreen";
 import AdvertisementsScreen from "../screens/AdvertisementsScreen";
 import AdvertisementDetailsScreen from "../screens/AdvertisementDetailsScreen";
@@ -246,6 +248,16 @@ export default function AppNavigator() {
       <Stack.Screen
         name="RideTrackingMap"
         component={RideTrackingMapScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="RideTripToDestination"
+        component={RideTripToDestinationScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="RidePickupNavigation"
+        component={RidePickupNavigationScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

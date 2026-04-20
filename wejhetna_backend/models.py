@@ -72,6 +72,8 @@ class RideRequestStatus(str, enum.Enum):
     DRIVING_TO_CUSTOMER = "driving_to_customer"
     ARRIVED = "arrived"
     IN_PROGRESS = "in_progress"
+    # Trip reached the destination (driver or passenger confirmed arrival in the shared nav screen).
+    COMPLETED = "completed"
 
 
 # ========== TABLES ==========
@@ -378,6 +380,8 @@ class RideRequest(Base):
     status_note = Column(Text, nullable=True)
     verification_code = Column(String(32), nullable=True)
     verification_expires_at = Column(DateTime(timezone=True), nullable=True)
+    passenger_verification_unlocked = Column(Boolean, nullable=False, default=False)
+    verification_failed_attempts = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

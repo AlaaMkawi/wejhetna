@@ -43,7 +43,8 @@ export type RideRequestStatus =
   | "on_the_way"
   | "driving_to_customer"
   | "arrived"
-  | "in_progress";
+  | "in_progress"
+  | "completed";
 
 const RIDE_STATUS_VALUES: readonly RideRequestStatus[] = [
   "pending",
@@ -54,6 +55,7 @@ const RIDE_STATUS_VALUES: readonly RideRequestStatus[] = [
   "driving_to_customer",
   "arrived",
   "in_progress",
+  "completed",
 ];
 
 /** Backend/DB may emit enum names or mixed casing; UI compares to lowercase literals. */
@@ -76,14 +78,27 @@ export function normalizeRideRequestStatus(raw: unknown): RideRequestStatus {
     DRIVING_TO_CUSTOMER: "driving_to_customer",
     ARRIVED: "arrived",
     IN_PROGRESS: "in_progress",
+    COMPLETED: "completed",
   };
   return byEnumName[upper] ?? "pending";
+}
+
+/** User cannot create a new ride while status is any of these (until rejected/cancelled/completed). */
+export function isActiveBlockingRideStatus(status: RideRequestStatus | string | null | undefined): boolean {
+  if (status == null || status === "") {
+    return false;
+  }
+  const s = typeof status === "string" ? normalizeRideRequestStatus(status) : status;
+  return s !== "rejected" && s !== "cancelled" && s !== "completed";
 }
 
 export type DriverRideRequest = {
   id: number;
   regular_user_id: number;
   regular_username: string;
+  /** Passenger display name (same source as User.full_name); optional for older API responses. */
+  regular_full_name?: string | null;
+  driver_phone?: string | null;
   pickup_lat: number;
   pickup_lon: number;
   destination_text: string;
@@ -98,6 +113,9 @@ export type DriverRideRequest = {
   eta_to_user?: number | null;
   estimated_trip_time?: number | null;
   regular_phone?: string | null;
+  passenger_verification_unlocked?: boolean;
+  verification_failed_attempts?: number;
+  status_note?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -107,9 +125,12 @@ export type RegularLatestRideRequest = {
   driver_user_id: number;
   driver_full_name: string;
   driver_username: string;
+  driver_phone?: string | null;
   pickup_lat?: number;
   pickup_lon?: number;
   destination_text: string;
+  destination_lat?: number | null;
+  destination_lon?: number | null;
   passengers_count: number;
   number_of_people?: number | null;
   number_of_seats_required?: number | null;
@@ -121,8 +142,13 @@ export type RegularLatestRideRequest = {
   driver_live_lat?: number | null;
   driver_live_lon?: number | null;
   status: RideRequestStatus;
-  /** Present when driver marked arrival; passenger shares with driver to start the ride. */
+  /** When true, passenger may see the verification code (after driver confirms passenger is outside). */
+  passenger_verification_unlocked?: boolean;
+  /** Present when driver marked arrival and passenger unlock is on; passenger shares with driver to start the ride. */
   verification_code?: string | null;
+  verification_failed_attempts?: number;
+  regular_phone?: string | null;
+  status_note?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -192,6 +218,12 @@ export function rideApiDetailToTranslationKey(detail: string): string | null {
     "Invalid verification code": "ride_error_verify_invalid",
     "Ride is not waiting for verification code": "ride_error_not_waiting_code",
     "Only on-the-way rides can be marked arrived": "ride_error_mark_arrived_invalid_state",
+    "Active ride request already exists": "ride_error_active_ride_exists",
+    "Ride request is already closed": "ride_error_ride_already_closed",
+    "Ride cannot be cancelled in this state": "ride_error_cancel_invalid_state",
+    "Passenger is not allowed to cancel this request": "ride_error_passenger_cancel_forbidden",
+    "Verification attempts exceeded; ride cancelled": "ride_error_verify_attempts_exceeded",
+    "Ride is not waiting for verification unlock": "ride_error_verify_unlock_wrong_state",
   };
   return map[d] ?? null;
 }
@@ -350,6 +382,9 @@ export async function getDriverRideRequests(driver_user_id: number): Promise<Dri
   return data.map((row) => ({
     ...row,
     status: normalizeRideRequestStatus(row.status),
+    passenger_verification_unlocked: Boolean(row.passenger_verification_unlocked),
+    verification_failed_attempts:
+      typeof row.verification_failed_attempts === "number" ? row.verification_failed_attempts : 0,
   }));
 }
 
@@ -395,6 +430,27 @@ export async function cancelRideRequest(ride_request_id: number, driver_user_id:
   return parseOrThrow(res, "Failed to cancel request");
 }
 
+export async function cancelRideRequestByPassenger(payload: {
+  ride_request_id: number;
+  regular_user_id: number;
+  note?: string;
+}) {
+  const ride_request_id = Math.trunc(Number(payload.ride_request_id));
+  const regular_user_id = Math.trunc(Number(payload.regular_user_id));
+  if (!Number.isFinite(ride_request_id) || ride_request_id < 1 || !Number.isFinite(regular_user_id) || regular_user_id < 1) {
+    throw new Error("Invalid ride request");
+  }
+  const res = await fetch(`${BASE_URL}/rides/requests/${ride_request_id}/cancel-by-passenger`, {
+    method: "POST",
+    headers: RIDE_FETCH_HEADERS,
+    body: JSON.stringify({
+      regular_user_id,
+      note: payload.note,
+    }),
+  });
+  return parseOrThrow(res, "Failed to cancel request");
+}
+
 export async function startDrivingToCustomer(ride_request_id: number, driver_user_id: number) {
   const rid = Math.trunc(Number(ride_request_id));
   const did = Math.trunc(Number(driver_user_id));
@@ -423,33 +479,92 @@ export async function markRideArrived(ride_request_id: number, driver_user_id: n
   return parseOrThrow(res, "Failed to mark arrived");
 }
 
+export async function unlockPassengerVerificationForRide(ride_request_id: number, driver_user_id: number) {
+  const rid = Math.trunc(Number(ride_request_id));
+  const did = Math.trunc(Number(driver_user_id));
+  if (!Number.isFinite(rid) || rid < 1 || !Number.isFinite(did) || did < 1) {
+    throw new Error("Invalid ride request");
+  }
+  const res = await fetch(`${BASE_URL}/rides/requests/${rid}/unlock-passenger-verification`, {
+    method: "POST",
+    headers: RIDE_FETCH_HEADERS,
+    body: JSON.stringify({ driver_user_id: did }),
+  });
+  return parseOrThrow(res, "Failed to unlock passenger verification");
+}
+
 export async function verifyRideStartCode(payload: {
   ride_request_id: number;
-  driver_user_id: number;
   verification_code: string;
+  driver_user_id?: number;
+  regular_user_id?: number;
 }) {
   const ride_request_id = Math.trunc(Number(payload.ride_request_id));
-  const driver_user_id = Math.trunc(Number(payload.driver_user_id));
   const verification_code = String(payload.verification_code ?? "").trim();
-  if (
-    !Number.isFinite(ride_request_id) ||
-    ride_request_id < 1 ||
-    !Number.isFinite(driver_user_id) ||
-    driver_user_id < 1 ||
-    verification_code.length < 4
-  ) {
+  if (!Number.isFinite(ride_request_id) || ride_request_id < 1 || verification_code.length < 4) {
+    throw new Error("Invalid ride request");
+  }
+  const body: Record<string, unknown> = {
+    ride_request_id,
+    verification_code,
+  };
+  if (payload.regular_user_id != null) {
+    const uid = Math.trunc(Number(payload.regular_user_id));
+    if (!Number.isFinite(uid) || uid < 1) {
+      throw new Error("Invalid ride request");
+    }
+    body.regular_user_id = uid;
+  } else if (payload.driver_user_id != null) {
+    const did = Math.trunc(Number(payload.driver_user_id));
+    if (!Number.isFinite(did) || did < 1) {
+      throw new Error("Invalid ride request");
+    }
+    body.driver_user_id = did;
+  } else {
     throw new Error("Invalid ride request");
   }
   const res = await fetch(`${BASE_URL}/rides/verify-code`, {
     method: "POST",
     headers: RIDE_FETCH_HEADERS,
-    body: JSON.stringify({
-      ride_request_id,
-      driver_user_id,
-      verification_code,
-    }),
+    body: JSON.stringify(body),
   });
   return parseOrThrow(res, "Failed to verify code");
+}
+
+export async function completeRideTrip(payload: {
+  ride_request_id: number;
+  driver_user_id?: number;
+  regular_user_id?: number;
+}) {
+  const ride_request_id = Math.trunc(Number(payload.ride_request_id));
+  if (!Number.isFinite(ride_request_id) || ride_request_id < 1) {
+    throw new Error("Invalid ride request");
+  }
+  const body: Record<string, unknown> = { ride_request_id };
+  if (payload.driver_user_id != null && payload.regular_user_id != null) {
+    throw new Error("Invalid ride request");
+  }
+  if (payload.driver_user_id != null) {
+    const did = Math.trunc(Number(payload.driver_user_id));
+    if (!Number.isFinite(did) || did < 1) {
+      throw new Error("Invalid ride request");
+    }
+    body.driver_user_id = did;
+  } else if (payload.regular_user_id != null) {
+    const uid = Math.trunc(Number(payload.regular_user_id));
+    if (!Number.isFinite(uid) || uid < 1) {
+      throw new Error("Invalid ride request");
+    }
+    body.regular_user_id = uid;
+  } else {
+    throw new Error("Invalid ride request");
+  }
+  const res = await fetch(`${BASE_URL}/rides/requests/${ride_request_id}/complete`, {
+    method: "POST",
+    headers: RIDE_FETCH_HEADERS,
+    body: JSON.stringify(body),
+  });
+  return parseOrThrow(res, "Failed to complete ride");
 }
 
 export async function getRegularLatestRideRequest(
@@ -469,8 +584,50 @@ export async function getRegularLatestRideRequest(
   if (data == null || typeof data !== "object") {
     return null;
   }
+  const row = data as Record<string, unknown>;
   return {
     ...data,
     status: normalizeRideRequestStatus(data.status),
+    passenger_verification_unlocked: Boolean((data as { passenger_verification_unlocked?: boolean }).passenger_verification_unlocked),
+    verification_failed_attempts:
+      typeof row.verification_failed_attempts === "number" ? row.verification_failed_attempts : 0,
+    driver_phone: typeof row.driver_phone === "string" ? row.driver_phone : null,
+    destination_lat: typeof row.destination_lat === "number" ? row.destination_lat : null,
+    destination_lon: typeof row.destination_lon === "number" ? row.destination_lon : null,
+    regular_phone: typeof row.regular_phone === "string" ? row.regular_phone : null,
+    status_note: typeof row.status_note === "string" ? row.status_note : null,
   };
+}
+
+/** All ride requests for the passenger, newest first (same shape as latest row). */
+export async function getRegularRideRequestsList(user_id: number): Promise<RegularLatestRideRequest[]> {
+  const uid = Math.trunc(Number(user_id));
+  if (!Number.isFinite(uid) || uid < 1) {
+    throw new Error("Invalid ride request");
+  }
+  const res = await fetch(`${BASE_URL}/users/${uid}/ride-requests`, {
+    headers: RIDE_FETCH_HEADERS,
+  });
+  if (res.status === 404) {
+    throw new Error("Regular user not found");
+  }
+  const data = (await parseOrThrow(res, "Failed to load ride requests")) as RegularLatestRideRequest[];
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data.map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      ...row,
+      status: normalizeRideRequestStatus(row.status),
+      passenger_verification_unlocked: Boolean((row as { passenger_verification_unlocked?: boolean }).passenger_verification_unlocked),
+      verification_failed_attempts:
+        typeof r.verification_failed_attempts === "number" ? r.verification_failed_attempts : 0,
+      driver_phone: typeof r.driver_phone === "string" ? r.driver_phone : null,
+      destination_lat: typeof r.destination_lat === "number" ? r.destination_lat : null,
+      destination_lon: typeof r.destination_lon === "number" ? r.destination_lon : null,
+      regular_phone: typeof r.regular_phone === "string" ? r.regular_phone : null,
+      status_note: typeof r.status_note === "string" ? r.status_note : null,
+    };
+  });
 }
