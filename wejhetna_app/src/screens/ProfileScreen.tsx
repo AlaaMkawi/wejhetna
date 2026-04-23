@@ -1059,6 +1059,37 @@ export default function ProfileScreen() {
                     color="#94a3b8"
                   />
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.adRequestCard,
+                    styles.myAdsCard,
+                    isRTL && styles.adRequestCardRTL,
+                  ]}
+                  onPress={() =>
+                    navigation.navigate("MyAdvertisements", { userId })
+                  }
+                  activeOpacity={0.88}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("advertisements.myAds.title")}
+                >
+                  <View style={[styles.adRequestIconWrap, styles.myAdsIconWrap]}>
+                    <Ionicons name="albums-outline" size={24} color={DARK_TEAL} />
+                  </View>
+                  <View style={[styles.adRequestTextBlock, isRTL && styles.adRequestTextBlockRTL]}>
+                    <Text style={[styles.adRequestTitle, isRTL && styles.rtlText]}>
+                      {t("advertisements.myAds.title")}
+                    </Text>
+                    <Text style={[styles.adRequestSubtitle, isRTL && styles.rtlText]}>
+                      {t("advertisements.myAds.subtitle")}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={isRTL ? "chevron-back" : "chevron-forward"}
+                    size={22}
+                    color="#94a3b8"
+                  />
+                </TouchableOpacity>
               </View>
             ) : null}
 
@@ -1595,6 +1626,16 @@ const styles = StyleSheet.create({
     marginTop: 4,
     lineHeight: 19,
     fontWeight: "500",
+  },
+  myAdsCard: {
+    marginTop: 10,
+    shadowOpacity: 0.05,
+    elevation: 2,
+  },
+  myAdsIconWrap: {
+    backgroundColor: "#e8f4f5",
+    shadowOpacity: 0,
+    elevation: 0,
   },
   rtlText: {
     textAlign: "right",

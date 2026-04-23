@@ -5,6 +5,7 @@ import SignUpScreen from "../screens/SignUpScreen";
 import { RootStackParamList } from "./types";
 import AdminLoginScreen from "../screens/AdminLoginScreen";
 import AdminDriversScreen from "../screens/Admin/AdminDriversScreen";
+import AdminDriverReportsScreen from "../screens/Admin/AdminDriverReportsScreen";
 import UserLoginScreen from "../screens/UserLoginScreen";
 import AdminTabNavigator from "./AdminTabNavigator";
 import AdminCitiesScreen from "../screens//Admin/AdminCitiesScreen";
@@ -42,6 +43,7 @@ import RidePickupNavigationScreen from "../screens/ride/RidePickupNavigationScre
 import CreateAdvertisementScreen from "../screens/CreateAdvertisementScreen";
 import AdvertisementsScreen from "../screens/AdvertisementsScreen";
 import AdvertisementDetailsScreen from "../screens/AdvertisementDetailsScreen";
+import MyAdvertisementsScreen from "../screens/MyAdvertisementsScreen";
 import AdminAdvertisementsPendingScreen from "../screens/Admin/AdminAdvertisementsPendingScreen";
 import AdminAdvertisementDetailsScreen from "../screens/Admin/AdminAdvertisementDetailsScreen";
 
@@ -75,7 +77,12 @@ export default function AppNavigator() {
         component={AdminDriversScreen}
         options={{ headerShown: false }}
       />
-      
+      <Stack.Screen
+        name="AdminDriverReports"
+        component={AdminDriverReportsScreen}
+        options={{ headerShown: false }}
+      />
+
       <Stack.Screen
         name="UserLogin"
         component={UserLoginScreen}
@@ -273,6 +280,11 @@ export default function AppNavigator() {
       <Stack.Screen
         name="AdvertisementDetails"
         component={AdvertisementDetailsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="MyAdvertisements"
+        component={MyAdvertisementsScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

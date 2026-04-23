@@ -7,7 +7,7 @@ const DRIVER_FILL = "#0f5b63";
 const DRIVER_RING = "#1565c0";
 const ICON = "#ffffff";
 
-export type RideDriverMapMarkerSize = "compact" | "default" | "expanded";
+export type RideDriverMapMarkerSize = "tiny" | "compact" | "default" | "expanded";
 
 export type RideDriverMapMarkerProps = {
   /** Clockwise degrees from north; when set, the car rotates with direction of travel. */
@@ -17,10 +17,15 @@ export type RideDriverMapMarkerProps = {
   vehicleIcon?: "car-sport" | "car";
 };
 
+/**
+ * Marker pixel sizes tuned so several drivers can coexist on the map without
+ * obscuring each other while remaining comfortably tappable (~36-40dp minimum).
+ */
 const SIZE_MAP: Record<RideDriverMapMarkerSize, { outer: number; icon: number }> = {
-  compact: { outer: 46, icon: 22 },
-  default: { outer: 54, icon: 27 },
-  expanded: { outer: 62, icon: 31 },
+  tiny: { outer: 30, icon: 15 },
+  compact: { outer: 38, icon: 19 },
+  default: { outer: 48, icon: 24 },
+  expanded: { outer: 56, icon: 28 },
 };
 
 /**
@@ -32,15 +37,27 @@ export function RideDriverMapMarker({
   vehicleIcon = "car-sport",
 }: RideDriverMapMarkerProps) {
   const { outer: w, icon } = SIZE_MAP[size];
-  const inner = w - 10;
+  // Thinner ring at small sizes keeps the car icon visible.
+  const ringBorder = size === "tiny" ? 2 : size === "compact" ? 2.5 : 3;
+  const inner = Math.max(12, w - ringBorder * 2 - 4);
   const rotate =
     headingDeg != null && Number.isFinite(headingDeg) ? [{ rotate: `${headingDeg}deg` }] : [];
 
   return (
     <View style={styles.hit}>
-      <View style={[styles.shadowPlate, { width: w + 10, height: w + 10 }]}>
+      <View style={[styles.shadowPlate, { width: w + 8, height: w + 8 }]}>
         <View style={[styles.rotate, { transform: rotate }]}>
-          <View style={[styles.ring, { width: w, height: w, borderRadius: w / 2 }]}>
+          <View
+            style={[
+              styles.ring,
+              {
+                width: w,
+                height: w,
+                borderRadius: w / 2,
+                borderWidth: ringBorder,
+              },
+            ]}
+          >
             <View
               style={[
                 styles.fill,
@@ -71,12 +88,12 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 5 },
-        shadowOpacity: 0.5,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.35,
+        shadowRadius: 5,
       },
       android: {
-        elevation: 10,
+        elevation: 6,
       },
       default: {},
     }),
@@ -86,7 +103,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   ring: {
-    borderWidth: 3,
     borderColor: DRIVER_RING,
     backgroundColor: "rgba(255,255,255,0.98)",
     alignItems: "center",

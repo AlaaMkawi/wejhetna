@@ -33,6 +33,63 @@ export type NearbyDriver = {
   lat: number;
   lon: number;
   distance_km: number;
+  /** Aggregated from DriverRating. 0 when the driver has not yet been rated. */
+  rating_avg?: number;
+  rating_count?: number;
+  /** Optional vehicle info for the driver info popup (latest approved vehicle). */
+  car_type?: string | null;
+  plate_number?: string | null;
+  production_year?: number | null;
+};
+
+export type DriverRatingSummary = {
+  driver_user_id: number;
+  rating_avg: number;
+  rating_count: number;
+};
+
+export type RideFeedbackStatus = {
+  ride_request_id: number;
+  rated: boolean;
+  reported: boolean;
+  can_rate: boolean;
+};
+
+export type DriverRatingAdmin = {
+  id: number;
+  ride_request_id: number;
+  driver_user_id: number;
+  regular_user_id: number;
+  regular_full_name: string;
+  regular_username: string;
+  stars: number;
+  comment: string | null;
+  created_at: string;
+};
+
+export type DriverReportsCountSummary = {
+  driver_user_id: number;
+  pending: number;
+  reviewed: number;
+  dismissed: number;
+  total: number;
+};
+
+export type AdminDriverReport = {
+  id: number;
+  ride_request_id: number | null;
+  driver_user_id: number;
+  driver_full_name: string;
+  driver_username: string;
+  regular_user_id: number;
+  regular_full_name: string;
+  regular_username: string;
+  message: string;
+  status: "PENDING" | "REVIEWED" | "DISMISSED";
+  admin_notes: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by_admin_id: number | null;
 };
 
 export type RideRequestStatus =
@@ -224,6 +281,8 @@ export function rideApiDetailToTranslationKey(detail: string): string | null {
     "Passenger is not allowed to cancel this request": "ride_error_passenger_cancel_forbidden",
     "Verification attempts exceeded; ride cancelled": "ride_error_verify_attempts_exceeded",
     "Ride is not waiting for verification unlock": "ride_error_verify_unlock_wrong_state",
+    "Destination is outside supported service cities":
+      "destination_must_be_in_service_cities",
   };
   return map[d] ?? null;
 }
@@ -630,4 +689,206 @@ export async function getRegularRideRequestsList(user_id: number): Promise<Regul
       status_note: typeof r.status_note === "string" ? r.status_note : null,
     };
   });
+}
+
+/* =========================
+ * RATING / REPORT / ADMIN MODERATION
+ * ========================= */
+
+export async function getDriverRatingSummary(driver_user_id: number): Promise<DriverRatingSummary> {
+  const id = Math.trunc(Number(driver_user_id));
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Invalid driver id");
+  }
+  const res = await fetch(`${BASE_URL}/drivers/${id}/rating-summary`, {
+    headers: RIDE_FETCH_HEADERS,
+  });
+  const data = (await parseOrThrow(res, "Failed to load rating summary")) as DriverRatingSummary;
+  return {
+    driver_user_id: id,
+    rating_avg: Number(data.rating_avg ?? 0),
+    rating_count: Number(data.rating_count ?? 0),
+  };
+}
+
+export async function getRideFeedbackStatus(payload: {
+  ride_request_id: number;
+  regular_user_id: number;
+}): Promise<RideFeedbackStatus> {
+  const rid = Math.trunc(Number(payload.ride_request_id));
+  const uid = Math.trunc(Number(payload.regular_user_id));
+  if (!Number.isFinite(rid) || rid < 1 || !Number.isFinite(uid) || uid < 1) {
+    throw new Error("Invalid ride request");
+  }
+  const res = await fetch(
+    `${BASE_URL}/rides/requests/${rid}/feedback-status?regular_user_id=${uid}`,
+    { headers: RIDE_FETCH_HEADERS }
+  );
+  const data = (await parseOrThrow(res, "Failed to load feedback status")) as RideFeedbackStatus;
+  return {
+    ride_request_id: rid,
+    rated: Boolean(data.rated),
+    reported: Boolean(data.reported),
+    can_rate: Boolean(data.can_rate),
+  };
+}
+
+export async function submitDriverRating(payload: {
+  ride_request_id: number;
+  regular_user_id: number;
+  stars: number;
+  comment?: string;
+}) {
+  const rid = Math.trunc(Number(payload.ride_request_id));
+  const uid = Math.trunc(Number(payload.regular_user_id));
+  const stars = Math.trunc(Number(payload.stars));
+  if (
+    !Number.isFinite(rid) || rid < 1 ||
+    !Number.isFinite(uid) || uid < 1 ||
+    !Number.isFinite(stars) || stars < 1 || stars > 5
+  ) {
+    throw new Error("Invalid rating payload");
+  }
+  const res = await fetch(`${BASE_URL}/rides/requests/${rid}/rate`, {
+    method: "POST",
+    headers: RIDE_FETCH_HEADERS,
+    body: JSON.stringify({
+      regular_user_id: uid,
+      stars,
+      comment: payload.comment?.slice(0, 1000) ?? null,
+    }),
+  });
+  return parseOrThrow(res, "Failed to submit rating");
+}
+
+export async function submitDriverReport(payload: {
+  ride_request_id: number;
+  regular_user_id: number;
+  message: string;
+}) {
+  const rid = Math.trunc(Number(payload.ride_request_id));
+  const uid = Math.trunc(Number(payload.regular_user_id));
+  const message = String(payload.message ?? "").trim();
+  if (
+    !Number.isFinite(rid) || rid < 1 ||
+    !Number.isFinite(uid) || uid < 1 ||
+    message.length < 3 || message.length > 2000
+  ) {
+    throw new Error("Invalid report payload");
+  }
+  const res = await fetch(`${BASE_URL}/rides/requests/${rid}/report`, {
+    method: "POST",
+    headers: RIDE_FETCH_HEADERS,
+    body: JSON.stringify({
+      regular_user_id: uid,
+      ride_request_id: rid,
+      message,
+    }),
+  });
+  return parseOrThrow(res, "Failed to submit report");
+}
+
+/* ---------- Admin moderation ---------- */
+
+export async function adminListDriverReports(
+  status_filter?: "PENDING" | "REVIEWED" | "DISMISSED"
+): Promise<AdminDriverReport[]> {
+  const qs = status_filter ? `?status_filter=${status_filter}` : "";
+  const res = await fetch(`${BASE_URL}/admin/driver-reports${qs}`, {
+    headers: RIDE_FETCH_HEADERS,
+  });
+  const data = (await parseOrThrow(res, "Failed to load reports")) as AdminDriverReport[];
+  return Array.isArray(data) ? data : [];
+}
+
+export async function adminReviewDriverReport(payload: {
+  report_id: number;
+  admin_user_id: number;
+  status: "PENDING" | "REVIEWED" | "DISMISSED";
+  admin_notes?: string;
+}): Promise<AdminDriverReport> {
+  const rid = Math.trunc(Number(payload.report_id));
+  const aid = Math.trunc(Number(payload.admin_user_id));
+  if (!Number.isFinite(rid) || rid < 1 || !Number.isFinite(aid) || aid < 1) {
+    throw new Error("Invalid report action payload");
+  }
+  const res = await fetch(`${BASE_URL}/admin/driver-reports/${rid}/review`, {
+    method: "POST",
+    headers: RIDE_FETCH_HEADERS,
+    body: JSON.stringify({
+      admin_user_id: aid,
+      status: payload.status,
+      admin_notes: payload.admin_notes?.slice(0, 2000) ?? null,
+    }),
+  });
+  return parseOrThrow(res, "Failed to update report") as Promise<AdminDriverReport>;
+}
+
+export async function adminGetDriverReportsSummary(): Promise<{
+  PENDING: number;
+  REVIEWED: number;
+  DISMISSED: number;
+}> {
+  const res = await fetch(`${BASE_URL}/admin/driver-reports/summary`, {
+    headers: RIDE_FETCH_HEADERS,
+  });
+  const data = (await parseOrThrow(res, "Failed to load reports summary")) as Record<string, number>;
+  return {
+    PENDING: Number(data.PENDING ?? 0),
+    REVIEWED: Number(data.REVIEWED ?? 0),
+    DISMISSED: Number(data.DISMISSED ?? 0),
+  };
+}
+
+/**
+ * Full ratings history for a single driver (newest first). Powers the admin
+ * driver-details ratings list; backend caps the limit at 500.
+ */
+export async function listDriverRatings(
+  driver_user_id: number,
+  limit: number = 100
+): Promise<DriverRatingAdmin[]> {
+  const id = Math.trunc(Number(driver_user_id));
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Invalid driver id");
+  }
+  const safeLimit = Math.max(1, Math.min(Math.trunc(Number(limit) || 100), 500));
+  const res = await fetch(`${BASE_URL}/drivers/${id}/ratings?limit=${safeLimit}`, {
+    headers: RIDE_FETCH_HEADERS,
+  });
+  const data = (await parseOrThrow(res, "Failed to load driver ratings")) as DriverRatingAdmin[];
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data.map((row) => ({
+    ...row,
+    stars: Number(row.stars) || 0,
+    regular_full_name: String(row.regular_full_name ?? ""),
+    regular_username: String(row.regular_username ?? ""),
+    comment: typeof row.comment === "string" ? row.comment : null,
+  }));
+}
+
+/**
+ * Count of driver reports per status scoped to a single driver.
+ * Used on AdminDriverDetailsScreen for the recent-reports summary card.
+ */
+export async function adminGetDriverReportsSummaryForDriver(
+  driver_user_id: number
+): Promise<DriverReportsCountSummary> {
+  const id = Math.trunc(Number(driver_user_id));
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Invalid driver id");
+  }
+  const res = await fetch(`${BASE_URL}/admin/drivers/${id}/reports-summary`, {
+    headers: RIDE_FETCH_HEADERS,
+  });
+  const data = (await parseOrThrow(res, "Failed to load driver reports summary")) as DriverReportsCountSummary;
+  return {
+    driver_user_id: id,
+    pending: Number(data.pending ?? 0),
+    reviewed: Number(data.reviewed ?? 0),
+    dismissed: Number(data.dismissed ?? 0),
+    total: Number(data.total ?? 0),
+  };
 }

@@ -794,14 +794,6 @@ export default function AdminHomeScreen() {
     }
   };
 
-  const resetCamera = () => {
-    cameraRef.current?.setCamera({
-      centerCoordinate: INITIAL_CENTER,
-      zoomLevel: INITIAL_ZOOM,
-      animationDuration: 1000,
-    });
-  };
-
   const handleDeletePlace = async () => {
     if (!selectedPlace) return;
 
@@ -1168,12 +1160,6 @@ export default function AdminHomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-      )}
-
-      {!selectedPlace && !destination && (
-        <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
-          <Text style={styles.recenterButtonText}>🎯</Text>
-        </TouchableOpacity>
       )}
 
       <Animated.View 
@@ -2079,13 +2065,6 @@ const styles = StyleSheet.create({
   },
   fabIcon: { color: "#FFF", fontSize: 22, marginRight: 8, fontWeight: "300", marginTop: -2 },
   fabText: { color: "#FFF", fontSize: 15, fontWeight: "600" },
-  recenterButton: {
-    position: "absolute", right: 20, bottom: 100, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFF",
-    alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
-  },
-  recenterButtonText: {
-    fontSize: 20,
-  },
   // Bottom Sheet Styles - Google Maps style
   bottomSheetContainer: {
     position: "absolute",

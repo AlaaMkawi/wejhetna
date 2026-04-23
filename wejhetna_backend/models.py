@@ -62,6 +62,12 @@ class AdvertisementStatus(str, enum.Enum):
     REJECTED = "REJECTED"
 
 
+class DriverReportStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    REVIEWED = "REVIEWED"
+    DISMISSED = "DISMISSED"
+
+
 class RideRequestStatus(str, enum.Enum):
     PENDING = "pending"
     ACCEPTED = "accepted"
@@ -393,6 +399,64 @@ class RideRequest(Base):
     driver_user = relationship("User", foreign_keys=[driver_user_id])
 
 
+class DriverRating(Base):
+    """
+    Star rating (1..5) submitted by a regular user after a completed ride.
+    One rating per (ride_request, regular_user) pair.
+    """
+    __tablename__ = "driver_ratings"
+    __table_args__ = (
+        Index("idx_driver_ratings_driver", "driver_user_id"),
+        Index("idx_driver_ratings_ride_regular", "ride_request_id", "regular_user_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    ride_request_id = Column(Integer, ForeignKey("ride_requests.id"), nullable=False)
+    driver_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    regular_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    stars = Column(Integer, nullable=False)  # 1..5
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    ride_request = relationship("RideRequest", foreign_keys=[ride_request_id])
+    driver_user = relationship("User", foreign_keys=[driver_user_id])
+    regular_user = relationship("User", foreign_keys=[regular_user_id])
+
+
+class DriverReport(Base):
+    """
+    Free-text report about a driver, submitted by a regular user for admin review.
+    Kept separate from DriverRating so moderation does not affect the public score.
+    """
+    __tablename__ = "driver_reports"
+    __table_args__ = (
+        Index("idx_driver_reports_status", "status"),
+        Index("idx_driver_reports_driver", "driver_user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    ride_request_id = Column(Integer, ForeignKey("ride_requests.id"), nullable=True)
+    driver_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    regular_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    message = Column(Text, nullable=False)
+    status = Column(
+        Enum(DriverReportStatus),
+        nullable=False,
+        default=DriverReportStatus.PENDING,
+    )
+    admin_notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    ride_request = relationship("RideRequest", foreign_keys=[ride_request_id])
+    driver_user = relationship("User", foreign_keys=[driver_user_id])
+    regular_user = relationship("User", foreign_keys=[regular_user_id])
+    reviewed_by_admin = relationship("User", foreign_keys=[reviewed_by_admin_id])
+
+
 class BusinessOwnerPlaceRequest(Base):
     __tablename__ = "business_owner_place_requests"
 
@@ -469,11 +533,11 @@ class Advertisement(Base):
         default=AdvertisementStatus.PENDING,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    expires_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=text("NOW() + INTERVAL '7 days'"),
-    )
+    # Set when admin approves and the advertisement becomes publicly visible.
+    # The 7-day public lifetime is counted from this moment, not from created_at.
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    # Computed at approval time as approved_at + 7 days. NULL while pending/rejected.
+    expires_at = Column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", back_populates="advertisements")
     category = relationship("Category", back_populates="advertisements")

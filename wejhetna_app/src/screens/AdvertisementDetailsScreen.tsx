@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   View,
   Text,
@@ -9,13 +15,21 @@ import {
   Platform,
   FlatList,
   useWindowDimensions,
+  ActivityIndicator,
+  Alert,
+  Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { RootStackParamList } from "../navigation/types";
-import { PublicAdvertisement } from "../api/advertisements";
+import {
+  PublicAdvertisement,
+  deleteMyAdvertisement,
+  deleteAdvertisementAdmin,
+} from "../api/advertisements";
 import { formatApiImageUri } from "../utils/imageUrl";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdvertisementDetails">;
@@ -50,10 +64,32 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<PublicAdvertisement> | null>(null);
 
-  const feed = useMemo(
-    () => sortNewestFirst(route.params.advertisements),
-    [route.params.advertisements]
+  const [feed, setFeed] = useState<PublicAdvertisement[]>(() =>
+    sortNewestFirst(route.params.advertisements)
   );
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [rawId, rawRole] = await Promise.all([
+          AsyncStorage.getItem("userId"),
+          AsyncStorage.getItem("userRole"),
+        ]);
+        if (rawId) {
+          const n = Number(rawId);
+          if (!Number.isNaN(n)) setCurrentUserId(n);
+        }
+        if (rawRole) setCurrentUserRole(rawRole);
+      } catch {
+        /* ignore — delete actions will simply remain hidden */
+      }
+    })();
+  }, []);
 
   const { advertisementId } = route.params;
 
@@ -61,6 +97,10 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
     const idx = feed.findIndex((a) => a.id === advertisementId);
     return Math.max(0, idx);
   }, [feed, advertisementId]);
+
+  useEffect(() => {
+    setCurrentIndex(initialIndex);
+  }, [initialIndex]);
 
   const pageHeight = height;
 
@@ -83,6 +123,66 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
     }, 0);
     return () => clearTimeout(id);
   }, [initialIndex]);
+
+  const onViewableItemsChanged = useRef(
+    ({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
+      const first = viewableItems[0];
+      if (first && typeof first.index === "number") {
+        setCurrentIndex(first.index);
+      }
+    }
+  ).current;
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+
+  const currentItem: PublicAdvertisement | undefined = feed[currentIndex];
+  const isOwner =
+    !!currentItem && currentUserId != null && currentItem.user_id === currentUserId;
+  const isAdmin = currentUserRole === "ADMIN";
+  const canDelete = isOwner || isAdmin;
+
+  const performDelete = useCallback(async () => {
+    if (!currentItem || !canDelete) return;
+    setDeleteBusy(true);
+    try {
+      if (isOwner && currentUserId != null) {
+        await deleteMyAdvertisement({
+          userId: currentUserId,
+          advertisementId: currentItem.id,
+        });
+      } else if (isAdmin && currentUserId != null) {
+        await deleteAdvertisementAdmin({
+          adminUserId: currentUserId,
+          advertisementId: currentItem.id,
+        });
+      } else {
+        throw new Error("Missing credentials");
+      }
+      // Remove deleted ad locally and advance / close if list became empty.
+      const removedId = currentItem.id;
+      setConfirmOpen(false);
+      setFeed((prev) => {
+        const next = prev.filter((a) => a.id !== removedId);
+        if (next.length === 0) {
+          setTimeout(() => navigation.goBack(), 0);
+        }
+        return next;
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert(t("error"), t("advertisements.delete.failed", { message: msg }));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [
+    canDelete,
+    currentItem,
+    currentUserId,
+    isAdmin,
+    isOwner,
+    navigation,
+    t,
+  ]);
 
   return (
     <View style={styles.root}>
@@ -139,6 +239,8 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
             });
           }, 350);
         }}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
       />
 
       <TouchableOpacity
@@ -160,6 +262,73 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
           />
         </View>
       </TouchableOpacity>
+
+      {canDelete ? (
+        <TouchableOpacity
+          style={[
+            styles.deleteFloating,
+            isRTL ? { left: 6 } : { right: 6 },
+            { top: insets.top + 4 },
+          ]}
+          onPress={() => setConfirmOpen(true)}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel={
+            isOwner
+              ? t("advertisements.delete.ownerAction")
+              : t("advertisements.delete.adminAction")
+          }
+          disabled={deleteBusy}
+        >
+          <View style={[styles.backInner, styles.deleteInner]}>
+            <Ionicons name="trash-outline" size={22} color="#fff" />
+          </View>
+        </TouchableOpacity>
+      ) : null}
+
+      <Modal
+        visible={confirmOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (!deleteBusy ? setConfirmOpen(false) : undefined)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={[styles.modalTitle, isRTL && styles.modalTextRTL]}>
+              {isOwner
+                ? t("advertisements.delete.confirmOwnerTitle")
+                : t("advertisements.delete.confirmAdminTitle")}
+            </Text>
+            <Text style={[styles.modalBody, isRTL && styles.modalTextRTL]}>
+              {isOwner
+                ? t("advertisements.delete.confirmOwnerMessage")
+                : t("advertisements.delete.confirmAdminMessage")}
+            </Text>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalBtnGhost}
+                onPress={() => (!deleteBusy ? setConfirmOpen(false) : undefined)}
+                disabled={deleteBusy}
+              >
+                <Text style={styles.modalBtnGhostText}>{t("cancel")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalBtnDanger}
+                onPress={performDelete}
+                disabled={deleteBusy}
+              >
+                {deleteBusy ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.modalBtnDangerText}>
+                    {t("advertisements.delete.confirmCta")}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -191,6 +360,10 @@ const styles = StyleSheet.create({
     position: "absolute",
     zIndex: 20,
   },
+  deleteFloating: {
+    position: "absolute",
+    zIndex: 20,
+  },
   backInner: {
     width: 42,
     height: 42,
@@ -198,5 +371,70 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  deleteInner: {
+    backgroundColor: "rgba(185, 28, 28, 0.75)",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0f5b63",
+    marginBottom: 10,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  modalBody: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: "#475569",
+    marginBottom: 20,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  modalTextRTL: {
+    textAlign: "right",
+    writingDirection: "rtl",
+  },
+  modalActions: {
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "flex-end",
+  },
+  modalBtnGhost: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+  },
+  modalBtnGhostText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#64748b",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  modalBtnDanger: {
+    minWidth: 120,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: "#b91c1c",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalBtnDangerText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
 });
