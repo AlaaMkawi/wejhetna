@@ -1,4 +1,4 @@
-import React, { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,7 @@ import Ionicons from "react-native-vector-icons/Ionicons";
 import {
   cancelRideRequestByPassenger,
   getRegularRideRequestsList,
+  getRideFeedbackStatus,
   isActiveBlockingRideStatus,
   parseStoredUserId,
   RegularLatestRideRequest,
@@ -26,6 +27,10 @@ import {
   RideRequestStatus,
   verifyRideStartCode,
 } from "../../api/rides";
+import {
+  PostRideFeedbackModal,
+  type PostRideFeedbackTarget,
+} from "../../components/ride/PostRideFeedbackModal";
 import { RIDE_STATUS_POLL_INTERVAL_MS, RIDE_UI_BUILD } from "../../../config";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
 import { markPassengerCancelledOwnRide, markVerificationMismatchSelfAlert } from "../../utils/rideCancelAlertGate";
@@ -102,6 +107,18 @@ export default function RegularRideStatusScreen() {
   const verifySuccessTripIdRef = useRef<number | null>(null);
   const [verifySuccessVisible, setVerifySuccessVisible] = useState(false);
 
+  /**
+   * Cached feedback status per completed ride so we can hide the "Rate" /
+   * "Report" chips once the passenger already submitted their feedback — the
+   * server enforces uniqueness, but caching here prevents confusing double-taps.
+   */
+  const [feedbackStatuses, setFeedbackStatuses] = useState<
+    Record<number, { rated: boolean; reported: boolean }>
+  >({});
+  const [feedbackTarget, setFeedbackTarget] =
+    useState<PostRideFeedbackTarget | null>(null);
+  const [feedbackInitialTab, setFeedbackInitialTab] = useState<"rate" | "report">("rate");
+
   const onPassengerVerifySuccessTimer = useCallback(() => {
     setVerifySuccessVisible(false);
     const id = verifySuccessTripIdRef.current;
@@ -154,6 +171,58 @@ export default function RegularRideStatusScreen() {
       }, RIDE_STATUS_POLL_INTERVAL_MS);
       return () => clearInterval(interval);
     }, [refresh])
+  );
+
+  /**
+   * Fetch feedback status for each completed ride whose status we don't know
+   * yet. Limited to `completed` rides to avoid unnecessary work, and cached in
+   * `feedbackStatuses` so each ride is only fetched once per screen lifetime.
+   */
+  useEffect(() => {
+    if (userId == null) return;
+    const completed = rideList.filter((r) => r.status === "completed");
+    if (completed.length === 0) return;
+    const pending = completed.filter((r) => feedbackStatuses[r.id] == null);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const updates: Record<number, { rated: boolean; reported: boolean }> = {};
+      for (const ride of pending) {
+        try {
+          const status = await getRideFeedbackStatus({
+            ride_request_id: ride.id,
+            regular_user_id: userId,
+          });
+          if (cancelled) return;
+          updates[ride.id] = { rated: status.rated, reported: status.reported };
+        } catch {
+          // Silent — keep UI responsive; we'll retry on next refresh.
+        }
+      }
+      if (!cancelled && Object.keys(updates).length > 0) {
+        setFeedbackStatuses((prev) => ({ ...prev, ...updates }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rideList, userId, feedbackStatuses]);
+
+  const openFeedbackForRide = useCallback(
+    (ride: RegularLatestRideRequest, tab: "rate" | "report") => {
+      if (userId == null) return;
+      const status = feedbackStatuses[ride.id] ?? { rated: false, reported: false };
+      setFeedbackInitialTab(tab);
+      setFeedbackTarget({
+        rideRequestId: ride.id,
+        regularUserId: userId,
+        driverFullName: ride.driver_full_name ?? "",
+        driverUsername: ride.driver_username ?? "",
+        alreadyRated: status.rated,
+        alreadyReported: status.reported,
+      });
+    },
+    [userId, feedbackStatuses]
   );
 
   const handleCancelPassengerRide = useCallback(() => {
@@ -436,18 +505,70 @@ export default function RegularRideStatusScreen() {
       historyRides.length > 0 ? (
         <View style={styles.historyBlock}>
           <Text style={styles.historySectionTitle}>{t("ride_history_section_title")}</Text>
-          {historyRides.map((h) => (
-            <View key={h.id} style={styles.historyRow}>
-              <Text style={styles.historyRowDate}>{formatRideRequestTimestamp(h.created_at, locale ?? "he-IL")}</Text>
-              <Text style={styles.historyRowStatus}>{t(`ride_status_${h.status}`)}</Text>
-              <Text style={styles.historyRowDest} numberOfLines={2}>
-                {h.destination_text}
-              </Text>
-              <Text style={styles.historyRowDriver} numberOfLines={1}>
-                {h.driver_full_name} · @{h.driver_username}
-              </Text>
-            </View>
-          ))}
+          {historyRides.map((h) => {
+            const status = feedbackStatuses[h.id];
+            const canGiveFeedback = h.status === "completed";
+            const rated = !!status?.rated;
+            const reported = !!status?.reported;
+            return (
+              <View key={h.id} style={styles.historyRow}>
+                <Text style={styles.historyRowDate}>{formatRideRequestTimestamp(h.created_at, locale ?? "he-IL")}</Text>
+                <Text style={styles.historyRowStatus}>{t(`ride_status_${h.status}`)}</Text>
+                <Text style={styles.historyRowDest} numberOfLines={2}>
+                  {h.destination_text}
+                </Text>
+                <Text style={styles.historyRowDriver} numberOfLines={1}>
+                  {h.driver_full_name} · @{h.driver_username}
+                </Text>
+                {canGiveFeedback ? (
+                  <View style={styles.historyFeedbackRow}>
+                    <TouchableOpacity
+                      style={[styles.feedbackChip, rated && styles.feedbackChipDone]}
+                      onPress={() => openFeedbackForRide(h, "rate")}
+                      disabled={rated}
+                    >
+                      <Ionicons
+                        name={rated ? "checkmark-circle" : "star-outline"}
+                        size={14}
+                        color={rated ? "#047857" : "#0f5b63"}
+                      />
+                      <Text
+                        style={[
+                          styles.feedbackChipText,
+                          rated && styles.feedbackChipTextDone,
+                        ]}
+                      >
+                        {rated
+                          ? t("ride_rate_done") || "Rated"
+                          : t("ride_rate_driver") || "Rate driver"}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.feedbackChipReport, reported && styles.feedbackChipDone]}
+                      onPress={() => openFeedbackForRide(h, "report")}
+                      disabled={reported}
+                    >
+                      <Ionicons
+                        name={reported ? "checkmark-circle" : "flag-outline"}
+                        size={14}
+                        color={reported ? "#047857" : "#c5322a"}
+                      />
+                      <Text
+                        style={[
+                          styles.feedbackChipReportText,
+                          reported && styles.feedbackChipTextDone,
+                        ]}
+                      >
+                        {reported
+                          ? t("ride_report_done") || "Reported"
+                          : t("ride_report_driver") || "Report"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
         </View>
       ) : null;
 
@@ -478,6 +599,36 @@ export default function RegularRideStatusScreen() {
         onTimerComplete={onPassengerVerifySuccessTimer}
         title={t("ride_verify_success_title")}
         body={t("ride_verify_success_body")}
+      />
+      <PostRideFeedbackModal
+        visible={!!feedbackTarget}
+        target={feedbackTarget}
+        initialTab={feedbackInitialTab}
+        onClose={() => setFeedbackTarget(null)}
+        onRatingSubmitted={() => {
+          if (feedbackTarget) {
+            const rideId = feedbackTarget.rideRequestId;
+            setFeedbackStatuses((prev) => ({
+              ...prev,
+              [rideId]: {
+                rated: true,
+                reported: prev[rideId]?.reported ?? false,
+              },
+            }));
+          }
+        }}
+        onReportSubmitted={() => {
+          if (feedbackTarget) {
+            const rideId = feedbackTarget.rideRequestId;
+            setFeedbackStatuses((prev) => ({
+              ...prev,
+              [rideId]: {
+                rated: prev[rideId]?.rated ?? false,
+                reported: true,
+              },
+            }));
+          }
+        }}
       />
     </SafeAreaView>
   );
@@ -571,6 +722,57 @@ const styles = StyleSheet.create({
   historyRowDriver: {
     fontSize: 13,
     color: "#666",
+  },
+  historyFeedbackRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#e5e7eb",
+  },
+  feedbackChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.3)",
+    backgroundColor: "#e6f2f3",
+  },
+  feedbackChipText: {
+    color: "#0f5b63",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  feedbackChipReport: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(197,50,42,0.3)",
+    backgroundColor: "#fde8e6",
+  },
+  feedbackChipReportText: {
+    color: "#c5322a",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  feedbackChipDone: {
+    backgroundColor: "#ecfdf5",
+    borderColor: "rgba(4,120,87,0.3)",
+  },
+  feedbackChipTextDone: {
+    color: "#047857",
   },
   statusLine: {
     fontSize: 17,

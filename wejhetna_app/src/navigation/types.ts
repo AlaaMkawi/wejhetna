@@ -6,6 +6,7 @@ export type RootStackParamList = {
   SignUp: undefined;
   AdminLogin: undefined;
   AdminDrivers: { adminUserId: number; role: "ADMIN";};
+  AdminDriverReports: { adminUserId: number; role: "ADMIN" };
   EnterEmail: { userType?: "regular" | "driver" | "owner" };
   VerifyEmail: { email: string; userType?: "regular" | "driver" | "owner" };
   RegularSignup: { email: string };
@@ -104,6 +105,7 @@ export type RootStackParamList = {
     advertisementId: number;
     advertisements: import("../api/advertisements").PublicAdvertisement[];
   };
+  MyAdvertisements: { userId: number };
   RouteDetails: {
     routeInfo: {
       distance: number;

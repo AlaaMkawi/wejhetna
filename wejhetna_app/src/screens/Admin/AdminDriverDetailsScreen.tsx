@@ -12,13 +12,24 @@ import {
   Image,
   StatusBar,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { useTranslation } from "react-i18next";
+import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import i18n from "../../i18n";
 import MessageModal from "../MessageModal";
 import FullscreenImageViewer from "../../components/FullscreenImageViewer";
+import Ionicons from "react-native-vector-icons/Ionicons";
+import {
+  DriverRatingAdmin,
+  DriverReportsCountSummary,
+  DriverRatingSummary,
+  getDriverRatingSummary,
+  listDriverRatings,
+  adminGetDriverReportsSummaryForDriver,
+} from "../../api/rides";
 
 import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
@@ -27,8 +38,54 @@ type Props = NativeStackScreenProps<RootStackParamList, "AdminDriverDetails">;
 
 export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
-  const { adminUserId, driver } = route.params;
-  const [tab, setTab] = useState<"personal" | "vehicle">("personal");
+  const { adminUserId, role, driver } = route.params;
+  const [tab, setTab] = useState<"personal" | "vehicle" | "feedback">("personal");
+
+  // ---- Feedback tab data (ratings + reports summary) ----
+  const initialRatingAvg =
+    typeof (driver as { rating_avg?: number | null }).rating_avg === "number"
+      ? (driver as { rating_avg: number }).rating_avg
+      : null;
+  const initialRatingCount =
+    typeof (driver as { rating_count?: number | null }).rating_count === "number"
+      ? (driver as { rating_count: number }).rating_count
+      : null;
+
+  const [ratingSummary, setRatingSummary] = useState<DriverRatingSummary>({
+    driver_user_id: driver.user_id,
+    rating_avg: initialRatingAvg ?? 0,
+    rating_count: initialRatingCount ?? 0,
+  });
+  const [ratings, setRatings] = useState<DriverRatingAdmin[]>([]);
+  const [reportsSummary, setReportsSummary] = useState<DriverReportsCountSummary | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+
+  const loadFeedback = React.useCallback(async () => {
+    setFeedbackLoading(true);
+    setFeedbackError(null);
+    try {
+      // Run in parallel — three independent GETs backing a single tab.
+      const [summary, ratingsList, reports] = await Promise.all([
+        getDriverRatingSummary(driver.user_id),
+        listDriverRatings(driver.user_id, 100),
+        adminGetDriverReportsSummaryForDriver(driver.user_id),
+      ]);
+      setRatingSummary(summary);
+      setRatings(ratingsList);
+      setReportsSummary(reports);
+    } catch (e: any) {
+      setFeedbackError(e?.message ?? t("network_error") ?? "Network error");
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, [driver.user_id, t]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadFeedback();
+    }, [loadFeedback])
+  );
   const [viewerVisible, setViewerVisible] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
   const [viewerImages, setViewerImages] = useState<string[]>([]);
@@ -322,6 +379,185 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
     </>
   );
 
+  const formatDateTime = (iso: string) => {
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleDateString() + " • " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return iso;
+    }
+  };
+
+  const renderStars = (stars: number, size: number = 14) => {
+    const full = Math.max(0, Math.min(5, Math.round(stars)));
+    const items: React.ReactNode[] = [];
+    for (let i = 0; i < 5; i++) {
+      items.push(
+        <Ionicons
+          key={i}
+          name={i < full ? "star" : "star-outline"}
+          size={size}
+          color={i < full ? "#F59E0B" : "#D1D5DB"}
+        />
+      );
+    }
+    return <View style={{ flexDirection: "row", gap: 2 }}>{items}</View>;
+  };
+
+  const renderFeedback = () => {
+    const avg = Number(ratingSummary.rating_avg || 0);
+    const count = Number(ratingSummary.rating_count || 0);
+    const pending = reportsSummary?.pending ?? 0;
+    const totalReports = reportsSummary?.total ?? 0;
+
+    return (
+      <View>
+        {/* Rating summary card */}
+        <View style={styles.feedbackCard}>
+          <Text style={styles.sectionTitle}>
+            {t("admin_driver_rating_summary") || "Rating summary"}
+          </Text>
+
+          {count === 0 ? (
+            <View style={styles.feedbackEmptyBox}>
+              <Ionicons name="star-outline" size={28} color="#9CA3AF" />
+              <Text style={styles.feedbackEmptyText}>
+                {t("admin_driver_no_ratings") || "No ratings yet"}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.ratingRow}>
+              <View style={{ alignItems: "center", minWidth: 90 }}>
+                <Text style={styles.ratingAvgBig}>{avg.toFixed(1)}</Text>
+                {renderStars(avg, 16)}
+                <Text style={styles.ratingCountSmall}>
+                  {t("admin_driver_ratings_count", { count }) ||
+                    `${count} rating${count === 1 ? "" : "s"}`}
+                </Text>
+              </View>
+              <View style={{ flex: 1, marginLeft: 16 }}>
+                <Text style={styles.feedbackHint}>
+                  {t("admin_driver_rating_hint") ||
+                    "Average of all passenger ratings for this driver."}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Reports summary card */}
+        <View style={styles.feedbackCard}>
+          <View style={styles.reportsCardHeader}>
+            <Text style={styles.sectionTitle}>
+              {t("admin_driver_reports_summary") || "Reports summary"}
+            </Text>
+            {pending > 0 && (
+              <View style={styles.pendingBadge}>
+                <Text style={styles.pendingBadgeText}>{pending}</Text>
+              </View>
+            )}
+          </View>
+
+          {reportsSummary == null && feedbackLoading ? (
+            <ActivityIndicator size="small" color={DARK_TEAL} />
+          ) : totalReports === 0 ? (
+            <View style={styles.feedbackEmptyBox}>
+              <Ionicons name="shield-checkmark-outline" size={26} color="#10B981" />
+              <Text style={styles.feedbackEmptyText}>
+                {t("admin_driver_no_reports") || "No reports for this driver"}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.reportsCountsRow}>
+                <View style={[styles.reportsCountChip, styles.reportsCountPending]}>
+                  <Text style={styles.reportsCountLabel}>
+                    {t("admin_reports_filter_pending") || "Pending"}
+                  </Text>
+                  <Text style={styles.reportsCountValue}>
+                    {reportsSummary?.pending ?? 0}
+                  </Text>
+                </View>
+                <View style={[styles.reportsCountChip, styles.reportsCountReviewed]}>
+                  <Text style={styles.reportsCountLabel}>
+                    {t("admin_reports_filter_reviewed") || "Reviewed"}
+                  </Text>
+                  <Text style={styles.reportsCountValue}>
+                    {reportsSummary?.reviewed ?? 0}
+                  </Text>
+                </View>
+                <View style={[styles.reportsCountChip, styles.reportsCountDismissed]}>
+                  <Text style={styles.reportsCountLabel}>
+                    {t("admin_reports_filter_dismissed") || "Dismissed"}
+                  </Text>
+                  <Text style={styles.reportsCountValue}>
+                    {reportsSummary?.dismissed ?? 0}
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.openReportsButton}
+                activeOpacity={0.85}
+                onPress={() =>
+                  navigation.navigate("AdminDriverReports", {
+                    adminUserId,
+                    role,
+                  })
+                }
+              >
+                <Ionicons name="flag" size={16} color="#FFFFFF" />
+                <Text style={styles.openReportsButtonText}>
+                  {t("admin_driver_open_reports") || "Open reports screen"}
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* Ratings history list */}
+        <View style={styles.feedbackCard}>
+          <Text style={styles.sectionTitle}>
+            {t("admin_driver_ratings_history") || "Ratings history"}
+          </Text>
+
+          {feedbackLoading && ratings.length === 0 ? (
+            <ActivityIndicator size="small" color={DARK_TEAL} />
+          ) : feedbackError ? (
+            <Text style={styles.feedbackErrorText}>{feedbackError}</Text>
+          ) : ratings.length === 0 ? (
+            <View style={styles.feedbackEmptyBox}>
+              <Ionicons name="chatbubble-ellipses-outline" size={26} color="#9CA3AF" />
+              <Text style={styles.feedbackEmptyText}>
+                {t("admin_driver_no_ratings") || "No ratings yet"}
+              </Text>
+            </View>
+          ) : (
+            ratings.map((r) => (
+              <View key={r.id} style={styles.ratingItem}>
+                <View style={styles.ratingItemHeader}>
+                  <Text style={styles.ratingItemName} numberOfLines={1}>
+                    {r.regular_full_name ||
+                      r.regular_username ||
+                      t("admin_driver_rating_anonymous") ||
+                      "Passenger"}
+                  </Text>
+                  {renderStars(r.stars, 13)}
+                </View>
+                {r.comment ? (
+                  <Text style={styles.ratingItemComment}>{r.comment}</Text>
+                ) : null}
+                <Text style={styles.ratingItemDate}>{formatDateTime(r.created_at)}</Text>
+              </View>
+            ))
+          )}
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -362,14 +598,31 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
             {t("car_files")}
           </Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabButton, tab === "feedback" && styles.tabButtonActive]}
+          onPress={() => setTab("feedback")}
+          activeOpacity={0.8}
+        >
+          <Text
+            style={[
+              styles.tabButtonText,
+              tab === "feedback" && styles.tabButtonTextActive,
+            ]}
+          >
+            {t("admin_driver_tab_feedback") || "Feedback"}
+          </Text>
+        </TouchableOpacity>
       </View>
 
-      <ScrollView 
-        style={styles.scrollView} 
+      <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {tab === "personal" ? renderPersonal() : renderVehicle()}
+        {tab === "personal" && renderPersonal()}
+        {tab === "vehicle" && renderVehicle()}
+        {tab === "feedback" && renderFeedback()}
       </ScrollView>
 
       {/* Reject modal */}
@@ -726,5 +979,155 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     resizeMode: "cover",
+  },
+  // ---- Feedback tab ----
+  feedbackCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 12,
+    borderWidth: 0.5,
+    borderColor: "#E5E7EB",
+  },
+  feedbackEmptyBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 18,
+    gap: 8,
+  },
+  feedbackEmptyText: {
+    color: "#6B7280",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  feedbackErrorText: {
+    color: "#C62828",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  feedbackHint: {
+    color: "#6B7280",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  ratingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  ratingAvgBig: {
+    fontSize: 36,
+    fontWeight: "800",
+    color: "#111827",
+    letterSpacing: -1,
+    marginBottom: 4,
+  },
+  ratingCountSmall: {
+    marginTop: 4,
+    fontSize: 11,
+    color: "#6B7280",
+    fontWeight: "600",
+  },
+  reportsCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pendingBadge: {
+    marginLeft: 8,
+    minWidth: 24,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: "#c5322a",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  pendingBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  reportsCountsRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+  },
+  reportsCountChip: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+  },
+  reportsCountPending: {
+    backgroundColor: "#FFF3E0",
+    borderColor: "#F4B343",
+  },
+  reportsCountReviewed: {
+    backgroundColor: "#E8F5E9",
+    borderColor: "#4CAF50",
+  },
+  reportsCountDismissed: {
+    backgroundColor: "#F3F4F6",
+    borderColor: "#D1D5DB",
+  },
+  reportsCountLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#374151",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+    marginBottom: 4,
+  },
+  reportsCountValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
+  },
+  openReportsButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: DARK_TEAL,
+  },
+  openReportsButtonText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 14,
+    letterSpacing: 0.2,
+  },
+  ratingItem: {
+    paddingVertical: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: "#E5E7EB",
+  },
+  ratingItemHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+    gap: 10,
+  },
+  ratingItemName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  ratingItemComment: {
+    color: "#374151",
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 6,
+  },
+  ratingItemDate: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    fontWeight: "500",
   },
 });

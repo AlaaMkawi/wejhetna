@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy import func
@@ -36,6 +37,14 @@ class AdvertisementInvalidStateError(Exception):
         super().__init__(message)
 
 
+class AdvertisementPermissionError(Exception):
+    """Caller is not allowed to perform the requested action on this advertisement."""
+
+
+# Public visibility window after admin approval.
+ADVERTISEMENT_PUBLIC_LIFETIME = timedelta(days=7)
+
+
 def create_advertisement_request(
     db: Session,
     *,
@@ -65,6 +74,8 @@ def create_advertisement_request(
 
     desc = (description or "").strip() or None
 
+    # expires_at is intentionally left NULL at submission time: the 7-day public
+    # lifetime only starts when an admin approves the advertisement.
     ad = Advertisement(
         user_id=user.id,
         image_url=upload.image_url,
@@ -73,6 +84,8 @@ def create_advertisement_request(
         city_id=city_id,
         description=desc,
         status=AdvertisementStatus.PENDING,
+        approved_at=None,
+        expires_at=None,
     )
     db.add(ad)
     db.commit()
@@ -136,7 +149,10 @@ def approve_advertisement(db: Session, advertisement_id: int) -> tuple[Advertise
             "Cannot approve a rejected advertisement."
         )
 
+    now = datetime.now(timezone.utc)
     ad.status = AdvertisementStatus.APPROVED
+    ad.approved_at = now
+    ad.expires_at = now + ADVERTISEMENT_PUBLIC_LIFETIME
     db.commit()
     db.refresh(ad)
     return ad, "Advertisement approved successfully."
@@ -160,21 +176,68 @@ def reject_advertisement(db: Session, advertisement_id: int) -> tuple[Advertisem
         )
 
     ad.status = AdvertisementStatus.REJECTED
+    # A rejected advertisement is never published; keep the lifecycle fields clean.
+    ad.approved_at = None
+    ad.expires_at = None
     db.commit()
     db.refresh(ad)
     return ad, "Advertisement rejected successfully."
+
+
+def list_my_advertisements(db: Session, *, user_id: int) -> List[Advertisement]:
+    """
+    Return the user's own advertisements (any status), newest first.
+    Used by the "My advertisements" screen so the owner can see submissions,
+    track approval and delete if desired.
+    """
+    return (
+        db.query(Advertisement)
+        .filter(Advertisement.user_id == user_id)
+        .order_by(Advertisement.created_at.desc())
+        .all()
+    )
+
+
+def delete_advertisement_by_owner(
+    db: Session, *, advertisement_id: int, user_id: int
+) -> None:
+    """
+    Delete the advertisement if owned by `user_id`. Allowed in any status so the
+    owner can withdraw a pending request or take down a published one early.
+    Raises AdvertisementNotFoundError or AdvertisementPermissionError.
+    """
+    ad = db.query(Advertisement).filter(Advertisement.id == advertisement_id).first()
+    if not ad:
+        raise AdvertisementNotFoundError()
+    if ad.user_id != user_id:
+        raise AdvertisementPermissionError()
+    db.delete(ad)
+    db.commit()
+
+
+def delete_advertisement_by_admin(db: Session, *, advertisement_id: int) -> None:
+    """Admin-side hard delete (e.g. inappropriate/outdated content)."""
+    ad = db.query(Advertisement).filter(Advertisement.id == advertisement_id).first()
+    if not ad:
+        raise AdvertisementNotFoundError()
+    db.delete(ad)
+    db.commit()
 
 
 __all__ = [
     "create_advertisement_request",
     "list_pending_advertisements",
     "list_public_approved_advertisements",
+    "list_my_advertisements",
     "approve_advertisement",
     "reject_advertisement",
+    "delete_advertisement_by_owner",
+    "delete_advertisement_by_admin",
     "CategoryNotFoundError",
     "CityNotFoundError",
     "AdvertisementNotFoundError",
     "AdvertisementInvalidStateError",
+    "AdvertisementPermissionError",
     "AdvertisementImageValidationError",
     "AdvertisementS3ConfigError",
     "AdvertisementS3UploadError",

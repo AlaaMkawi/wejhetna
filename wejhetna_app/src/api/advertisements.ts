@@ -18,12 +18,34 @@ export type AdvertisementUserPublic = {
 /** Public listing (GET /advertisements) — approved, non-expired */
 export type PublicAdvertisement = {
   id: number;
+  /** Owner user id — used by the client to detect ownership and show the delete action. */
+  user_id: number;
   image_url: string;
   category_id: number;
   city_id: number;
   description?: string | null;
   user: AdvertisementUserPublic;
   created_at: string;
+  /** ISO timestamp when the admin approved the ad (null if never approved). */
+  approved_at?: string | null;
+  /** ISO timestamp when the public visibility ends (approved_at + 7 days). */
+  expires_at?: string | null;
+};
+
+/** Owner-facing advertisement status (matches backend enum). */
+export type AdvertisementStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+/** Owner-facing row (GET /advertisements/mine) — any status. */
+export type MyAdvertisement = {
+  id: number;
+  image_url: string;
+  category_id: number;
+  city_id: number;
+  description?: string | null;
+  status: AdvertisementStatus;
+  created_at: string;
+  approved_at?: string | null;
+  expires_at?: string | null;
 };
 
 export async function fetchPublicAdvertisements(params?: {
@@ -224,4 +246,82 @@ export async function createAdvertisementRequest(params: {
   }
 
   return res.json();
+}
+
+/** Owner: list own advertisements (any status). */
+export async function fetchMyAdvertisements(params: {
+  userId: number;
+}): Promise<MyAdvertisement[]> {
+  const qs = new URLSearchParams();
+  qs.append("user_id", String(params.userId));
+  const res = await fetch(`${BASE_URL}/advertisements/mine?${qs.toString()}`);
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail != null) msg = parseFastApiDetail(j.detail);
+    } catch {
+      try {
+        msg = await res.text();
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+/** Owner: delete own advertisement (any status). */
+export async function deleteMyAdvertisement(params: {
+  userId: number;
+  advertisementId: number;
+}): Promise<void> {
+  const qs = new URLSearchParams();
+  qs.append("user_id", String(params.userId));
+  const res = await fetch(
+    `${BASE_URL}/advertisements/${params.advertisementId}?${qs.toString()}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok && res.status !== 204) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail != null) msg = parseFastApiDetail(j.detail);
+    } catch {
+      try {
+        msg = await res.text();
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(msg);
+  }
+}
+
+/** Admin: delete any advertisement (moderation). */
+export async function deleteAdvertisementAdmin(params: {
+  adminUserId: number;
+  advertisementId: number;
+}): Promise<void> {
+  const qs = new URLSearchParams();
+  qs.append("admin_user_id", String(params.adminUserId));
+  const res = await fetch(
+    `${BASE_URL}/admin/advertisements/${params.advertisementId}?${qs.toString()}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok && res.status !== 204) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      const j = await res.json();
+      if (j?.detail != null) msg = parseFastApiDetail(j.detail);
+    } catch {
+      try {
+        msg = await res.text();
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(msg);
+  }
 }

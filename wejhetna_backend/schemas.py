@@ -290,12 +290,36 @@ class AdvertisementPublicOut(BaseModel):
     """Approved, non-expired advertisement for public listing (GET /advertisements)."""
 
     id: int
+    # user_id is exposed so the frontend can detect ownership and show the
+    # owner-only delete action on the advertisement details screen.
+    user_id: int
     image_url: str
     category_id: int
     city_id: int
     description: Optional[str] = None
     user: AdvertisementUserPublicOut
     created_at: datetime
+    # approved_at / expires_at are set at admin approval time (7-day public lifetime).
+    # Null while pending (should not happen for public list) or rejected.
+    approved_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
+class MyAdvertisementOut(BaseModel):
+    """Owner-facing advertisement row (GET /advertisements/mine) — all statuses."""
+
+    id: int
+    image_url: str
+    category_id: int
+    city_id: int
+    description: Optional[str] = None
+    status: str
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True
@@ -350,6 +374,13 @@ class NearbyAvailableDriverOut(BaseModel):
     lat: float
     lon: float
     distance_km: float
+    # Public rating summary (aggregated from DriverRating) — UI shows stars/count
+    rating_avg: float = 0.0
+    rating_count: int = 0
+    # Optional vehicle info (latest approved vehicle) for the info popup
+    car_type: Optional[str] = None
+    plate_number: Optional[str] = None
+    production_year: Optional[int] = None
 
 
 class RideRequestCreateRequest(BaseModel):
@@ -423,6 +454,93 @@ class RideCompleteRequest(BaseModel):
     ride_request_id: int = Field(..., ge=1)
     driver_user_id: Optional[int] = Field(None, ge=1)
     regular_user_id: Optional[int] = Field(None, ge=1)
+
+
+class DriverRatingCreateRequest(BaseModel):
+    """Regular user rates the driver after a completed ride."""
+    regular_user_id: int = Field(..., ge=1)
+    stars: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = Field(None, max_length=1000)
+
+
+class DriverRatingOut(BaseModel):
+    id: int
+    ride_request_id: int
+    driver_user_id: int
+    regular_user_id: int
+    stars: int
+    comment: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class DriverReportCreateRequest(BaseModel):
+    """Regular user submits a free-text report about the driver (sent to admins)."""
+    regular_user_id: int = Field(..., ge=1)
+    message: str = Field(..., min_length=3, max_length=2000)
+    ride_request_id: Optional[int] = Field(None, ge=1)
+
+
+class DriverReportAdminActionRequest(BaseModel):
+    """Admin action on a report: mark REVIEWED or DISMISSED with optional notes."""
+    admin_user_id: int = Field(..., ge=1)
+    status: str = Field(..., pattern="^(REVIEWED|DISMISSED|PENDING)$")
+    admin_notes: Optional[str] = Field(None, max_length=2000)
+
+
+class DriverReportOut(BaseModel):
+    id: int
+    ride_request_id: Optional[int] = None
+    driver_user_id: int
+    driver_full_name: str
+    driver_username: str
+    regular_user_id: int
+    regular_full_name: str
+    regular_username: str
+    message: str
+    status: str
+    admin_notes: Optional[str] = None
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    reviewed_by_admin_id: Optional[int] = None
+
+
+class DriverRatingSummaryOut(BaseModel):
+    driver_user_id: int
+    rating_avg: float
+    rating_count: int
+
+
+class DriverRatingAdminOut(BaseModel):
+    """Individual rating row enriched with passenger info for the admin UI."""
+    id: int
+    ride_request_id: int
+    driver_user_id: int
+    regular_user_id: int
+    regular_full_name: str
+    regular_username: str
+    stars: int
+    comment: Optional[str] = None
+    created_at: datetime
+
+
+class DriverReportsCountSummaryOut(BaseModel):
+    """Count of driver reports per status for a specific driver."""
+    driver_user_id: int
+    pending: int
+    reviewed: int
+    dismissed: int
+    total: int
+
+
+class RideFeedbackStatusOut(BaseModel):
+    """Whether the current regular user has already rated / reported a ride."""
+    ride_request_id: int
+    rated: bool
+    reported: bool
+    can_rate: bool  # false when ride not yet COMPLETED or user is not the passenger
 
 
 class RideRequestDriverOut(BaseModel):

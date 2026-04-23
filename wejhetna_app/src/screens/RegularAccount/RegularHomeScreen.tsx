@@ -39,6 +39,13 @@ import { useTranslation } from "react-i18next";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import { isOpenNow } from "../../utils/openingHours";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
+import DriverInfoPopup from "../../components/ride/DriverInfoPopup";
+import { RideDriverMapMarker } from "../../components/map/RideDriverMapMarker";
+import { RideDriverClusterMarker } from "../../components/map/RideDriverClusterMarker";
+import {
+  clusterNearbyDrivers,
+  zoomInTargetForCluster,
+} from "../../utils/nearbyDriverClustering";
 import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
 import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
@@ -348,7 +355,6 @@ export default function RegularHomeScreen({}: Props) {
   /** Shown under send button after a failed POST (short hint for debugging). */
   const [rideSendErrorHint, setRideSendErrorHint] = useState<string | null>(null);
   const [ridePlaceSearchQuery, setRidePlaceSearchQuery] = useState("");
-  const [rideDriverPickerVisible, setRideDriverPickerVisible] = useState(false);
   const [rideWithDriverLoading, setRideWithDriverLoading] = useState(false);
   const [passengerRideLatest, setPassengerRideLatest] = useState<RegularLatestRideRequest | null>(null);
 
@@ -851,13 +857,34 @@ export default function RegularHomeScreen({}: Props) {
     }
   };
 
-  const resetCamera = () => {
-    cameraRef.current?.setCamera({
-      centerCoordinate: INITIAL_CENTER,
-      zoomLevel: INITIAL_ZOOM,
-      animationDuration: 1000,
-    });
-  };
+  /**
+   * Group nearby drivers into singles/clusters/spread items so overlapping
+   * markers don't obscure each other. Anchor latitude is the user's location
+   * when we have it (most drivers render around them), otherwise the map's
+   * initial center — either is accurate enough for meters-per-pixel math.
+   */
+  const driverMapItems = useMemo(() => {
+    if (nearbyDrivers.length === 0) return [];
+    const anchorLat = userLocation?.lat ?? INITIAL_CENTER[1];
+    return clusterNearbyDrivers(nearbyDrivers, currentZoom, anchorLat);
+  }, [nearbyDrivers, currentZoom, userLocation?.lat]);
+
+  /**
+   * Tapping a cluster badge zooms the camera in by a couple of levels centered
+   * on the cluster. As meters-per-pixel shrinks the cluster naturally splits
+   * into individual markers on the next render cycle.
+   */
+  const handleClusterTap = useCallback(
+    (lat: number, lon: number) => {
+      if (!cameraRef.current) return;
+      cameraRef.current.setCamera({
+        centerCoordinate: [lon, lat],
+        zoomLevel: zoomInTargetForCluster(currentZoom),
+        animationDuration: 500,
+      });
+    },
+    [currentZoom]
+  );
 
   // Handle map long press (drop custom pin for destination)
   const handleMapLongPress = async (e: any) => {
@@ -1027,7 +1054,7 @@ export default function RegularHomeScreen({}: Props) {
     }
   };
 
-  const handleCreateRideRequest = async () => {
+  const handleCreateRideRequest = async (overrides?: { passengers?: number }) => {
     if (!userId || !selectedDriver) {
       return;
     }
@@ -1048,15 +1075,51 @@ export default function RegularHomeScreen({}: Props) {
     setRideFieldHighlight({ pickup: missingPickup, destination: missingDest });
 
     if (missingPickup || missingDest) {
+      if (missingPickup) {
+        Alert.alert(t("error"), t("ride_location_unavailable_hint"));
+      } else if (missingDest) {
+        Alert.alert(t("error"), t("ride_destination_required") || t("ride_destination_input_placeholder"));
+      }
       return;
     }
     if (!userPhone) {
       Alert.alert(t("error"), t("ride_phone_required"));
       return;
     }
-    if (ridePassengers <= 0) {
+
+    // Final destination rule: must be inside one of the 3 supported service cities.
+    // Pickup / driver / user live locations are intentionally NOT validated here —
+    // drivers and passengers can be anywhere; only the final destination is constrained.
+    // We only re-check when we actually have coordinates (some manual / text-only
+    // destinations bypass coords and remain server-validated by destination_text fallback).
+    if (
+      destination &&
+      typeof destination.lat === "number" &&
+      typeof destination.lon === "number"
+    ) {
+      const ok = await assertDestinationInServiceCities(
+        destination.lat,
+        destination.lon,
+        t
+      );
+      if (!ok) {
+        return;
+      }
+    }
+
+    // Popup-driven counts take priority; fall back to the screen-level state so
+    // legacy code paths (e.g. map-pick destination) keep working unchanged.
+    const passengersFromPopup =
+      overrides?.passengers != null && Number.isFinite(overrides.passengers)
+        ? Math.max(1, Math.min(12, Math.trunc(overrides.passengers)))
+        : null;
+    const passengers = passengersFromPopup ?? ridePassengers;
+    if (passengers <= 0) {
       Alert.alert(t("error"), t("ride_invalid_people_or_seats"));
       return;
+    }
+    if (passengersFromPopup != null && passengersFromPopup !== ridePassengers) {
+      setRidePassengers(passengersFromPopup);
     }
 
     setRideFieldHighlight({ pickup: false, destination: false });
@@ -1071,9 +1134,9 @@ export default function RegularHomeScreen({}: Props) {
       destination_lat: destination?.lat,
       destination_lon: destination?.lon,
       regular_phone: userPhone,
-      passengers_count: ridePassengers,
-      number_of_people: ridePassengers,
-      number_of_seats_required: ridePassengers,
+      passengers_count: passengers,
+      number_of_people: passengers,
+      number_of_seats_required: passengers,
     };
     if (__DEV__) {
       console.log("[ride] POST /rides/requests payload", JSON.stringify(payload));
@@ -1129,11 +1192,14 @@ export default function RegularHomeScreen({}: Props) {
         Alert.alert(t("error"), t("ride_no_drivers_nearby"));
         return;
       }
+      // Focus the map on the fetched drivers so every available driver is visible.
+      // Users then tap any driver marker to open the compact info popup — no
+      // more full-screen form modal or list picker in this flow.
+      focusNearbyDriversOnMap();
       if (drivers.length === 1) {
+        // UX shortcut when there is only one option — open their popup directly.
         setSelectedDriver(drivers[0]);
-        return;
       }
-      setRideDriverPickerVisible(true);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       const key = rideApiDetailToTranslationKey(msg);
@@ -1175,20 +1241,25 @@ export default function RegularHomeScreen({}: Props) {
               return;
             }
 
-            // Fallback: driver PointAnnotations are small and were drawn under place markers;
-            // tap map near a driver's coordinates to open the ride modal.
+            // Fallback: driver markers are intentionally small, so a near-miss
+            // tap should still hit them. Hit-test against the clustered items
+            // (singles/spread → open popup, cluster → zoom in).
             const MAX_DRIVER_TAP_KM = 0.07;
-            let closest: NearbyDriver | null = null;
+            let closestItem: (typeof driverMapItems)[number] | null = null;
             let closestKm = MAX_DRIVER_TAP_KM;
-            for (const d of nearbyDrivers) {
-              const km = haversineDistanceKm(lat, lon, d.lat, d.lon);
+            for (const item of driverMapItems) {
+              const km = haversineDistanceKm(lat, lon, item.lat, item.lon);
               if (km < closestKm) {
                 closestKm = km;
-                closest = d;
+                closestItem = item;
               }
             }
-            if (closest) {
-              setSelectedDriver(closest);
+            if (closestItem) {
+              if (closestItem.type === "cluster") {
+                handleClusterTap(closestItem.lat, closestItem.lon);
+              } else {
+                setSelectedDriver(closestItem.driver);
+              }
             }
           } catch {
             /* ignore */
@@ -1398,19 +1469,60 @@ export default function RegularHomeScreen({}: Props) {
           );
         })}
 
-        {/* Drivers last so markers sit above place pins and receive taps first (MapLibre draw order). */}
-        {nearbyDrivers.map((driver) => (
-          <PointAnnotation
-            key={`driver_${driver.driver_user_id}`}
-            id={`driver_${driver.driver_user_id}`}
-            coordinate={[driver.lon, driver.lat]}
-            onSelected={() => setSelectedDriver(driver)}
-          >
-            <View style={styles.driverMarker} accessibilityRole="button" accessibilityLabel={t("map_nearby_drivers_chip")}>
-              <Ionicons name="car-sport" size={22} color="#fff" />
-            </View>
-          </PointAnnotation>
-        ))}
+        {/*
+          Drivers render last so they sit above place pins (MapLibre draw order).
+          `driverMapItems` clusters overlapping drivers so the user never sees a
+          single icon standing in for several; tapping a cluster zooms in.
+        */}
+        {driverMapItems.map((item) => {
+          if (item.type === "cluster") {
+            const emphasized = item.drivers.some(
+              (d) => d.driver_user_id === selectedDriver?.driver_user_id
+            );
+            return (
+              <PointAnnotation
+                key={item.id}
+                id={item.id}
+                coordinate={[item.lon, item.lat]}
+                onSelected={() => handleClusterTap(item.lat, item.lon)}
+              >
+                <View
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    t("map_driver_cluster_label", { count: item.drivers.length }) ||
+                    `${item.drivers.length} nearby drivers`
+                  }
+                >
+                  <RideDriverClusterMarker
+                    count={item.drivers.length}
+                    emphasized={emphasized}
+                  />
+                </View>
+              </PointAnnotation>
+            );
+          }
+
+          // Both singles and spread-out near-identical drivers render the same
+          // marker; `spread` items just have slightly offset coordinates.
+          const driver = item.driver;
+          const isSelected = selectedDriver?.driver_user_id === driver.driver_user_id;
+          const size: "compact" | "expanded" = isSelected ? "expanded" : "compact";
+          return (
+            <PointAnnotation
+              key={item.id}
+              id={item.id}
+              coordinate={[item.lon, item.lat]}
+              onSelected={() => setSelectedDriver(driver)}
+            >
+              <View
+                accessibilityRole="button"
+                accessibilityLabel={t("map_nearby_drivers_chip")}
+              >
+                <RideDriverMapMarker size={size} />
+              </View>
+            </PointAnnotation>
+          );
+        })}
       </MapView>
 
       <MapInlineSearch
@@ -1507,12 +1619,6 @@ export default function RegularHomeScreen({}: Props) {
             </TouchableOpacity>
           </View>
         </View>
-      )}
-
-      {!selectedPlace && !destination && (
-        <TouchableOpacity style={styles.recenterButton} onPress={resetCamera}>
-          <Text style={styles.recenterButtonText}>🎯</Text>
-        </TouchableOpacity>
       )}
 
       {/* Selected Place Bottom Sheet */}
@@ -1993,194 +2099,40 @@ export default function RegularHomeScreen({}: Props) {
         </Animated.View>
       )}
 
-      {/* Language Selector Modal */}
-      <Modal
+      {/* Compact, map-anchored driver info popup (replaces legacy form modal + list picker). */}
+      <DriverInfoPopup
         visible={!!selectedDriver}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setSelectedDriver(null)}
-      >
-        <TouchableOpacity style={styles.rideModalOverlay} activeOpacity={1} onPress={() => setSelectedDriver(null)}>
-          <TouchableOpacity activeOpacity={1} style={styles.rideModalCard} onPress={() => {}}>
-            <ScrollView keyboardShouldPersistTaps="handled" bounces={false} showsVerticalScrollIndicator={false}>
-              <View style={styles.rideModalBuildBand}>
-                <Text style={styles.rideModalBuildBandText}>{t("ride_ui_version_strip", { tag: RIDE_UI_BUILD })}</Text>
-              </View>
-              {userId == null ? (
-                <View style={styles.rideModalSessionWarn}>
-                  <Text style={styles.rideModalSessionWarnText}>{t("ride_session_invalid")}</Text>
-                </View>
-              ) : (
-                <Text style={styles.rideModalDebugId}>{t("ride_debug_user_id", { id: String(userId) })}</Text>
-              )}
-              <Text style={styles.rideModalTitle}>{t("ride_driver_info")}</Text>
-              <Text style={styles.rideModalText}>
-                {t("full_name")}: {selectedDriver?.full_name}
-              </Text>
-              <Text style={styles.rideModalText}>
-                {t("username")}: {selectedDriver?.username}
-              </Text>
-              <Text style={styles.rideModalText}>
-                {t("distance")}:{" "}
-                {selectedDriver && userLocation
-                  ? haversineDistanceKm(userLocation.lat, userLocation.lon, selectedDriver.lat, selectedDriver.lon)
-                  : selectedDriver?.distance_km}{" "}
-                {t("ride_km")}
-              </Text>
-
-              <Text style={styles.rideModalSectionLabel}>{t("ride_pickup")}</Text>
-              <View
-                style={[
-                  styles.rideModalFieldBox,
-                  rideFieldHighlight.pickup && styles.rideModalFieldBoxError,
-                ]}
-              >
-                <Text style={styles.rideModalText}>
-                  {userLocation ? t("ride_using_current_location") : t("ride_location_unavailable_hint")}
-                </Text>
-              </View>
-
-              <Text style={styles.rideModalSectionLabel}>{t("ride_destination")}</Text>
-              <Text style={styles.rideModalHint}>{t("ride_search_destination_hint")}</Text>
-              <TextInput
-                style={styles.rideModalSearchInput}
-                value={ridePlaceSearchQuery}
-                onChangeText={setRidePlaceSearchQuery}
-                placeholder={t("search_places")}
-                placeholderTextColor="#888"
-                autoCorrect={false}
-              />
-              {rideModalPlaceResults.length > 0 ? (
-                <View style={styles.rideModalSearchResults}>
-                  {rideModalPlaceResults.map((place) => (
-                    <TouchableOpacity
-                      key={`ride_dest_${place.id}`}
-                      style={styles.rideModalSearchRow}
-                      onPress={() => applyPlaceToRideDestination(place)}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={styles.rideModalSearchRowTitle} numberOfLines={2}>
-                        {getPlaceName(place)}
-                      </Text>
-                      <Text style={styles.rideModalSearchRowSub} numberOfLines={1}>
-                        {getCityName(place.city)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ) : null}
-              <View
-                style={[
-                  styles.rideModalFieldBox,
-                  rideFieldHighlight.destination && styles.rideModalFieldBoxError,
-                ]}
-              >
-                <TextInput
-                  style={styles.rideModalTextInput}
-                  value={rideDestinationInput}
-                  onChangeText={(text) => {
-                    setRideDestinationInput(text);
-                    if (rideFieldHighlight.destination) {
-                      setRideFieldHighlight((h) => ({ ...h, destination: false }));
-                    }
-                  }}
-                  placeholder={t("ride_destination_input_placeholder")}
-                  placeholderTextColor="#888"
-                  multiline
-                />
-                <TouchableOpacity
-                  style={styles.rideModalMapLink}
-                  onPress={() => {
-                    if (selectedDriver) {
-                      pendingRideDriverRef.current = selectedDriver;
-                      rideMapPickSkipRouteRef.current = true;
-                      setSelectedDriver(null);
-                      setIsPickingMapDestination(true);
-                    }
-                  }}
-                  hitSlop={{ top: 8, bottom: 8 }}
-                >
-                  <Text style={styles.rideModalMapLinkText}>{t("ride_choose_on_map_button")}</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.ridePassengerRow}>
-                <TouchableOpacity
-                  style={styles.passengerBtn}
-                  onPress={() => setRidePassengers((prev) => Math.max(1, prev - 1))}
-                >
-                  <Text style={styles.passengerBtnText}>-</Text>
-                </TouchableOpacity>
-                <Text style={styles.rideModalText}>{t("ride_number_of_people")}: {ridePassengers}</Text>
-                <TouchableOpacity
-                  style={styles.passengerBtn}
-                  onPress={() => setRidePassengers((prev) => Math.min(12, prev + 1))}
-                >
-                  <Text style={styles.passengerBtnText}>+</Text>
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity
-                style={styles.rideRequestButton}
-                onPress={handleCreateRideRequest}
-                disabled={creatingRideRequest}
-              >
-                {creatingRideRequest ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.rideRequestButtonText}>{t("ride_send_request")}</Text>
-                )}
-              </TouchableOpacity>
-              {rideSendErrorHint ? (
-                <Text style={styles.rideModalErrorHint}>
-                  {t("ride_debug_error_hint", { hint: rideSendErrorHint })}
-                </Text>
-              ) : null}
-            </ScrollView>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      <Modal
-        visible={rideDriverPickerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setRideDriverPickerVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.rideModalOverlay}
-          activeOpacity={1}
-          onPress={() => setRideDriverPickerVisible(false)}
-        >
-          <TouchableOpacity activeOpacity={1} style={styles.rideDriverPickerCard} onPress={() => {}}>
-            <Text style={styles.rideModalTitle}>{t("ride_choose_driver_title")}</Text>
-            <FlatList
-              data={nearbyDrivers}
-              keyExtractor={(item) => `pick_${item.driver_user_id}`}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.rideDriverPickerRow}
-                  onPress={() => {
-                    setRideDriverPickerVisible(false);
-                    setSelectedDriver(item);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="car-sport" size={22} color="#0f5b63" />
-                  <View style={styles.rideDriverPickerRowText}>
-                    <Text style={styles.rideDriverPickerName} numberOfLines={1}>
-                      {item.full_name}
-                    </Text>
-                    <Text style={styles.rideDriverPickerMeta} numberOfLines={1}>
-                      @{item.username} · {item.distance_km} {t("ride_km")}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={22} color="#888" />
-                </TouchableOpacity>
-              )}
-            />
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+        driver={selectedDriver}
+        destinationText={
+          rideDestinationInput?.trim() ||
+          destination?.name?.trim() ||
+          (destination
+            ? `${destination.lat.toFixed(5)}, ${destination.lon.toFixed(5)}`
+            : null)
+        }
+        distanceKm={
+          selectedDriver && userLocation
+            ? Number(
+                haversineDistanceKm(
+                  userLocation.lat,
+                  userLocation.lon,
+                  selectedDriver.lat,
+                  selectedDriver.lon
+                )
+              )
+            : selectedDriver?.distance_km ?? null
+        }
+        sending={creatingRideRequest}
+        errorHint={rideSendErrorHint}
+        initialPassengers={ridePassengers}
+        onClose={() => {
+          setSelectedDriver(null);
+          setRideSendErrorHint(null);
+        }}
+        onSendRequest={({ passengers }) => {
+          void handleCreateRideRequest({ passengers });
+        }}
+      />
 
       {/* Language Selector Modal */}
       <Modal
@@ -2530,13 +2482,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     color: "#0f5b63",
-  },
-  recenterButton: {
-    position: "absolute", right: 20, bottom: 100, width: 44, height: 44, borderRadius: 22, backgroundColor: "#FFF",
-    alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 5,
-  },
-  recenterButtonText: {
-    fontSize: 20,
   },
   // Bottom Sheet Styles - Google Maps style
   bottomSheetContainer: {

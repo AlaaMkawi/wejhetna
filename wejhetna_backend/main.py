@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import SQLAlchemyError
@@ -7,7 +7,7 @@ from sqlalchemy import func
 from schemas import LocationCreate, LocationResponse
 from pydantic import BaseModel, EmailStr, ConfigDict
 from passlib.context import CryptContext
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict, Tuple
 from datetime import datetime, timezone, timedelta
 from fastapi import File, UploadFile, Form
 from fastapi.staticfiles import StaticFiles
@@ -45,6 +45,9 @@ from models import (
     DriverAvailability,
     RideRequest,
     RideRequestStatus,
+    DriverRating,
+    DriverReport,
+    DriverReportStatus,
 )
 from schemas import (
     CityCreate,
@@ -69,6 +72,7 @@ from schemas import (
     AdvertisementPublicOut,
     AdminPendingAdvertisementOut,
     AdvertisementAdminActionResponse,
+    MyAdvertisementOut,
     DriverAvailabilityUpdateRequest,
     DriverAvailabilityLocationUpdateRequest,
     NearbyAvailableDriverOut,
@@ -80,6 +84,15 @@ from schemas import (
     RideRequestDriverOut,
     RideVerifyCodeRequest,
     RideCompleteRequest,
+    DriverRatingCreateRequest,
+    DriverRatingOut,
+    DriverRatingAdminOut,
+    DriverRatingSummaryOut,
+    DriverReportCreateRequest,
+    DriverReportAdminActionRequest,
+    DriverReportOut,
+    DriverReportsCountSummaryOut,
+    RideFeedbackStatusOut,
 )
 import requests
 from dependencies import (
@@ -91,12 +104,16 @@ from services.advertisement_service import (
     create_advertisement_request,
     list_pending_advertisements,
     list_public_approved_advertisements,
+    list_my_advertisements,
     approve_advertisement,
     reject_advertisement,
+    delete_advertisement_by_owner,
+    delete_advertisement_by_admin,
     CategoryNotFoundError,
     CityNotFoundError,
     AdvertisementNotFoundError,
     AdvertisementInvalidStateError,
+    AdvertisementPermissionError,
     AdvertisementImageValidationError,
     AdvertisementS3ConfigError,
     AdvertisementS3UploadError,
@@ -631,6 +648,11 @@ class DriverApplicationOut(BaseModel):
     car_license_image_url: str
     car_insurance_image_url: str
     car_photos_urls: Optional[List[str]] = None
+
+    # Aggregated feedback surfaced on the admin driver list for quick scanning.
+    # Optional so older admin-app builds continue to deserialize the response.
+    rating_avg: Optional[float] = None
+    rating_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2181,6 +2203,71 @@ def admin_reject_advertisement(
     )
 
 
+# -------------------------------------------------------------------------
+# Owner-side: list own advertisements + delete (any status).
+# Admin-side: delete any advertisement (moderation).
+# -------------------------------------------------------------------------
+
+@app.get("/advertisements/mine", response_model=List[MyAdvertisementOut])
+def list_my_advertisements_endpoint(
+    user_id: int = Query(..., description="Owner user id"),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the caller's own advertisements (any status) newest first.
+    Feeds the "My advertisements" profile screen so the user can track approval
+    and delete their own poster if they want.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return list_my_advertisements(db, user_id=user_id)
+
+
+@app.delete("/advertisements/{advertisement_id}", status_code=204)
+def delete_my_advertisement(
+    advertisement_id: int,
+    user_id: int = Query(..., description="Owner user id (must own the advertisement)"),
+    db: Session = Depends(get_db),
+):
+    """
+    Owner-only deletion of an advertisement (any status). The owner can withdraw
+    a pending request or take down an already-published poster before it expires.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    try:
+        delete_advertisement_by_owner(
+            db, advertisement_id=advertisement_id, user_id=user_id
+        )
+    except AdvertisementNotFoundError:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    except AdvertisementPermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail="You are not allowed to delete this advertisement.",
+        )
+    return Response(status_code=204)
+
+
+@app.delete("/admin/advertisements/{advertisement_id}", status_code=204)
+def admin_delete_advertisement(
+    advertisement_id: int,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(get_current_admin_user),
+):
+    """
+    Admin hard-delete an advertisement (e.g. inappropriate, outdated, violates
+    rules). Works regardless of status / remaining time.
+    """
+    try:
+        delete_advertisement_by_admin(db, advertisement_id=advertisement_id)
+    except AdvertisementNotFoundError:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    return Response(status_code=204)
+
+
 from datetime import datetime, timezone, timedelta  # make sure this import exists
 
 
@@ -2415,8 +2502,29 @@ def list_pending_drivers(db: Session = Depends(get_db)):
         .all()
     )
 
+    # Aggregate ratings once for every driver in the response (avoids N+1 on the admin list).
+    driver_user_ids = [user.id for user, _, _ in rows]
+    rating_map: Dict[int, Tuple[float, int]] = {}
+    if driver_user_ids:
+        agg_rows = (
+            db.query(
+                DriverRating.driver_user_id,
+                func.avg(DriverRating.stars),
+                func.count(DriverRating.id),
+            )
+            .filter(DriverRating.driver_user_id.in_(driver_user_ids))
+            .group_by(DriverRating.driver_user_id)
+            .all()
+        )
+        for driver_user_id, avg_stars, total in agg_rows:
+            rating_map[int(driver_user_id)] = (
+                float(avg_stars) if avg_stars is not None else 0.0,
+                int(total or 0),
+            )
+
     result: List[DriverApplicationOut] = []
     for user, profile, vehicle in rows:
+        avg, count = rating_map.get(user.id, (0.0, 0))
         result.append(
             DriverApplicationOut(
                 user_id=user.id,
@@ -2435,6 +2543,8 @@ def list_pending_drivers(db: Session = Depends(get_db)):
                 car_license_image_url=vehicle.car_license_image_url,
                 car_insurance_image_url=vehicle.car_insurance_image_url,
                 car_photos_urls=vehicle.car_photos_urls,
+                rating_avg=round(avg, 2) if count > 0 else None,
+                rating_count=count,
             )
         )
     return result
@@ -2855,48 +2965,53 @@ class BoundaryCheckRequest(BaseModel):
     lat: float
     lon: float
 
+def _find_city_containing_point(db: Session, lat: float, lon: float) -> Optional[City]:
+    """
+    Returns the service-area City whose boundary contains (lat, lon), or None.
+
+    Only the 3 supported cities (Rahat, Lakiya, Tel Sheva) have a non-null
+    `boundary` polygon populated, so membership automatically restricts matches
+    to the service area without any extra filter.
+
+    Used by:
+    - /cities/check-boundary (public boundary probe used by the app UI)
+    - create_ride_request (server-side guard for the destination rule)
+    """
+    from geoalchemy2 import Geometry
+    from sqlalchemy import cast
+
+    if lat is None or lon is None:
+        return None
+
+    point_geom = func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
+    return (
+        db.query(City)
+        .filter(City.boundary.isnot(None))
+        .filter(
+            func.ST_Within(
+                point_geom,
+                # boundary is a Geography; ST_Within needs Geometry on both sides.
+                cast(City.boundary, Geometry(srid=4326)),
+            )
+        )
+        .first()
+    )
+
+
+def _is_point_in_service_cities(db: Session, lat: float, lon: float) -> bool:
+    return _find_city_containing_point(db, lat, lon) is not None
+
+
 @app.post("/cities/check-boundary")
 def check_location_in_service_cities(
     data: BoundaryCheckRequest,
     db: Session = Depends(get_db),
 ):
     """
-    בודק אם נקודה (lat, lon) נמצאת בתוך boundaries של אחת מ-3 הערים:
-    רהט, לקיה, תל שבע.
-    
-    מחזיר:
-    - is_within: True אם הנקודה בתוך אחת מהערים
-    - city_id: ID של העיר (אם נמצאה)
-    - city_name: שם העיר (אם נמצאה)
+    Returns whether (lat, lon) falls inside the boundary of any supported
+    service city (Rahat, Lakiya, Tel Sheva).
     """
-    from geoalchemy2 import Geography, Geometry
-    from sqlalchemy import cast
-    
-    # יצירת נקודה מה-lat/lon
-    lat = data.lat
-    lon = data.lon
-    
-    # יצירת נקודה כ-Geometry (ST_Within עובד רק עם Geometry, לא Geography)
-    point_geom = func.ST_SetSRID(
-        func.ST_MakePoint(lon, lat),
-        4326
-    )
-    
-    # חיפוש עיר עם boundary שמכילה את הנקודה
-    # רק ערים שיש להן boundary (לא NULL)
-    # חשוב: ST_Within עובד רק עם Geometry, אז צריך להמיר את שניהם
-    city = (
-        db.query(City)
-        .filter(City.boundary.isnot(None))
-        .filter(
-            func.ST_Within(
-                point_geom,  # Geometry
-                cast(City.boundary, Geometry(srid=4326))  # המיר Geography ל-Geometry
-            )
-        )
-        .first()
-    )
-    
+    city = _find_city_containing_point(db, data.lat, data.lon)
     if city:
         return {
             "is_within": True,
@@ -2905,14 +3020,13 @@ def check_location_in_service_cities(
             "city_name_he": city.name_he,
             "city_name_en": city.name_en,
         }
-    else:
-        return {
-            "is_within": False,
-            "city_id": None,
-            "city_name_ar": None,
-            "city_name_he": None,
-            "city_name_en": None,
-        }
+    return {
+        "is_within": False,
+        "city_id": None,
+        "city_name_ar": None,
+        "city_name_he": None,
+        "city_name_en": None,
+    }
 
 
 @app.post("/admin/translations/sync-cities")
@@ -4654,9 +4768,44 @@ def list_nearby_available_drivers(
         .all()
     )
 
+    # Pre-aggregate rating summaries and latest approved vehicle so the popup on
+    # the client can render name / stars / car info from a single request.
+    driver_ids = [user.id for _, user, _ in rows]
+    rating_map: dict[int, tuple[float, int]] = {}
+    vehicle_map: dict[int, DriverVehicle] = {}
+    if driver_ids:
+        rating_rows = (
+            db.query(
+                DriverRating.driver_user_id,
+                func.avg(DriverRating.stars).label("avg_stars"),
+                func.count(DriverRating.id).label("count_stars"),
+            )
+            .filter(DriverRating.driver_user_id.in_(driver_ids))
+            .group_by(DriverRating.driver_user_id)
+            .all()
+        )
+        rating_map = {
+            row.driver_user_id: (float(row.avg_stars or 0.0), int(row.count_stars or 0))
+            for row in rating_rows
+        }
+        veh_rows = (
+            db.query(DriverVehicle, DriverProfile)
+            .join(DriverProfile, DriverVehicle.driver_profile_id == DriverProfile.id)
+            .filter(
+                DriverProfile.user_id.in_(driver_ids),
+                DriverVehicle.status == VehicleStatus.APPROVED,
+            )
+            .order_by(DriverVehicle.updated_at.desc())
+            .all()
+        )
+        for veh, prof in veh_rows:
+            vehicle_map.setdefault(prof.user_id, veh)
+
     result: List[NearbyAvailableDriverOut] = []
     for availability, user, location in rows:
         distance_km = _distance_km_between_points(db, lon, lat, float(location.lon), float(location.lat))
+        avg, count = rating_map.get(user.id, (0.0, 0))
+        veh = vehicle_map.get(user.id)
         result.append(
             NearbyAvailableDriverOut(
                 driver_user_id=user.id,
@@ -4665,6 +4814,11 @@ def list_nearby_available_drivers(
                 lat=float(location.lat),
                 lon=float(location.lon),
                 distance_km=distance_km,
+                rating_avg=round(avg, 2),
+                rating_count=count,
+                car_type=veh.car_type if veh else None,
+                plate_number=veh.plate_number if veh else None,
+                production_year=veh.production_year if veh else None,
             )
         )
     return result
@@ -4697,6 +4851,28 @@ def create_ride_request(data: RideRequestCreateRequest, db: Session = Depends(ge
             status_code=400,
             detail="number_of_people and number_of_seats_required must be positive",
         )
+
+    # ---------------------------------------------------------------
+    # Destination must be inside one of the 3 service cities.
+    # IMPORTANT: pickup / driver / user live locations are intentionally
+    # NOT validated here — drivers and passengers can start from anywhere,
+    # the only constraint is the final destination.
+    # ---------------------------------------------------------------
+    if data.destination_lat is not None and data.destination_lon is not None:
+        try:
+            if not _is_point_in_service_cities(
+                db, float(data.destination_lat), float(data.destination_lon)
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Destination is outside supported service cities",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # Never fail hard on boundary infra errors — treat as pass-through.
+            # The mobile client already pre-validates at destination pick time.
+            pass
 
     _blocking_ride_statuses = (
         RideRequestStatus.PENDING.value,
@@ -5270,3 +5446,370 @@ def complete_ride_trip(ride_request_id: int, data: RideCompleteRequest, db: Sess
     db.refresh(ride)
 
     return RideRequestStatusOut(id=ride.id, status=_ride_request_status_str(ride), message="Ride completed")
+
+
+# =========================
+# RIDE – DRIVER RATING / REPORT (post-ride feedback)
+# =========================
+
+
+def _get_driver_rating_summary(db: Session, driver_user_id: int) -> tuple[float, int]:
+    row = (
+        db.query(
+            func.avg(DriverRating.stars).label("avg_stars"),
+            func.count(DriverRating.id).label("count_stars"),
+        )
+        .filter(DriverRating.driver_user_id == driver_user_id)
+        .first()
+    )
+    if row is None:
+        return 0.0, 0
+    return float(row.avg_stars or 0.0), int(row.count_stars or 0)
+
+
+@app.get("/drivers/{driver_user_id}/rating-summary", response_model=DriverRatingSummaryOut)
+def get_driver_rating_summary(driver_user_id: int, db: Session = Depends(get_db)):
+    driver = db.query(User).filter(User.id == driver_user_id, User.role == UserRole.DRIVER).first()
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    avg, count = _get_driver_rating_summary(db, driver_user_id)
+    return DriverRatingSummaryOut(
+        driver_user_id=driver_user_id,
+        rating_avg=round(avg, 2),
+        rating_count=count,
+    )
+
+
+@app.get(
+    "/drivers/{driver_user_id}/ratings",
+    response_model=List[DriverRatingAdminOut],
+)
+def list_driver_ratings(
+    driver_user_id: int,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    """
+    Full ratings history for a single driver (newest first).
+    Used by the admin driver-details screen to show all individual feedback.
+    """
+    driver = (
+        db.query(User)
+        .filter(User.id == driver_user_id, User.role == UserRole.DRIVER)
+        .first()
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    safe_limit = max(1, min(int(limit or 100), 500))
+    rows = (
+        db.query(DriverRating, User)
+        .outerjoin(User, User.id == DriverRating.regular_user_id)
+        .filter(DriverRating.driver_user_id == driver_user_id)
+        .order_by(DriverRating.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+    result: List[DriverRatingAdminOut] = []
+    for rating, regular in rows:
+        result.append(
+            DriverRatingAdminOut(
+                id=rating.id,
+                ride_request_id=rating.ride_request_id,
+                driver_user_id=rating.driver_user_id,
+                regular_user_id=rating.regular_user_id,
+                regular_full_name=(regular.full_name if regular else "") or "",
+                regular_username=(regular.username if regular else "") or "",
+                stars=int(rating.stars),
+                comment=rating.comment,
+                created_at=rating.created_at,
+            )
+        )
+    return result
+
+
+@app.get(
+    "/admin/drivers/{driver_user_id}/reports-summary",
+    response_model=DriverReportsCountSummaryOut,
+)
+def admin_driver_reports_summary_for_driver(
+    driver_user_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Count of reports per status scoped to a single driver.
+    Drives the small recent-reports card on the admin driver-details screen.
+    """
+    driver = (
+        db.query(User)
+        .filter(User.id == driver_user_id, User.role == UserRole.DRIVER)
+        .first()
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    rows = (
+        db.query(DriverReport.status, func.count(DriverReport.id))
+        .filter(DriverReport.driver_user_id == driver_user_id)
+        .group_by(DriverReport.status)
+        .all()
+    )
+    counts: Dict[str, int] = {s.value: 0 for s in DriverReportStatus}
+    for status, c in rows:
+        key = status.value if hasattr(status, "value") else str(status)
+        counts[key] = int(c or 0)
+
+    pending = counts.get(DriverReportStatus.PENDING.value, 0)
+    reviewed = counts.get(DriverReportStatus.REVIEWED.value, 0)
+    dismissed = counts.get(DriverReportStatus.DISMISSED.value, 0)
+    return DriverReportsCountSummaryOut(
+        driver_user_id=driver_user_id,
+        pending=pending,
+        reviewed=reviewed,
+        dismissed=dismissed,
+        total=pending + reviewed + dismissed,
+    )
+
+
+@app.get("/rides/requests/{ride_request_id}/feedback-status", response_model=RideFeedbackStatusOut)
+def get_ride_feedback_status(
+    ride_request_id: int,
+    regular_user_id: int,
+    db: Session = Depends(get_db),
+):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.regular_user_id != regular_user_id:
+        raise HTTPException(status_code=403, detail="Passenger is not allowed to view this ride")
+    rated = (
+        db.query(DriverRating)
+        .filter(
+            DriverRating.ride_request_id == ride_request_id,
+            DriverRating.regular_user_id == regular_user_id,
+        )
+        .first()
+        is not None
+    )
+    reported = (
+        db.query(DriverReport)
+        .filter(
+            DriverReport.ride_request_id == ride_request_id,
+            DriverReport.regular_user_id == regular_user_id,
+        )
+        .first()
+        is not None
+    )
+    st = _coerce_ride_request_status(ride.status)
+    return RideFeedbackStatusOut(
+        ride_request_id=ride_request_id,
+        rated=rated,
+        reported=reported,
+        can_rate=(st == RideRequestStatus.COMPLETED),
+    )
+
+
+@app.post(
+    "/rides/requests/{ride_request_id}/rate",
+    response_model=DriverRatingOut,
+    status_code=201,
+)
+def rate_ride_driver(
+    ride_request_id: int,
+    data: DriverRatingCreateRequest,
+    db: Session = Depends(get_db),
+):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.regular_user_id != data.regular_user_id:
+        raise HTTPException(status_code=403, detail="Passenger is not allowed to rate this ride")
+    if _coerce_ride_request_status(ride.status) != RideRequestStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Only completed rides can be rated")
+
+    existing = (
+        db.query(DriverRating)
+        .filter(
+            DriverRating.ride_request_id == ride_request_id,
+            DriverRating.regular_user_id == data.regular_user_id,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Ride already rated")
+
+    rating = DriverRating(
+        ride_request_id=ride_request_id,
+        driver_user_id=ride.driver_user_id,
+        regular_user_id=data.regular_user_id,
+        stars=data.stars,
+        comment=(data.comment or "").strip() or None,
+    )
+    db.add(rating)
+    db.commit()
+    db.refresh(rating)
+    return rating
+
+
+@app.post(
+    "/rides/requests/{ride_request_id}/report",
+    response_model=DriverReportOut,
+    status_code=201,
+)
+def report_ride_driver(
+    ride_request_id: int,
+    data: DriverReportCreateRequest,
+    db: Session = Depends(get_db),
+):
+    ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride request not found")
+    if ride.regular_user_id != data.regular_user_id:
+        raise HTTPException(status_code=403, detail="Passenger is not allowed to report this ride")
+
+    report = DriverReport(
+        ride_request_id=ride_request_id,
+        driver_user_id=ride.driver_user_id,
+        regular_user_id=data.regular_user_id,
+        message=data.message.strip(),
+        status=DriverReportStatus.PENDING,
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+
+    driver = db.query(User).filter(User.id == report.driver_user_id).first()
+    regular = db.query(User).filter(User.id == report.regular_user_id).first()
+    return DriverReportOut(
+        id=report.id,
+        ride_request_id=report.ride_request_id,
+        driver_user_id=report.driver_user_id,
+        driver_full_name=driver.full_name if driver else "",
+        driver_username=driver.username if driver else "",
+        regular_user_id=report.regular_user_id,
+        regular_full_name=regular.full_name if regular else "",
+        regular_username=regular.username if regular else "",
+        message=report.message,
+        status=report.status.value,
+        admin_notes=report.admin_notes,
+        created_at=report.created_at,
+        reviewed_at=report.reviewed_at,
+        reviewed_by_admin_id=report.reviewed_by_admin_id,
+    )
+
+
+# =========================
+# ADMIN – DRIVER REPORTS
+# =========================
+
+
+def _driver_report_to_out(
+    report: DriverReport,
+    driver: Optional[User],
+    regular: Optional[User],
+) -> DriverReportOut:
+    return DriverReportOut(
+        id=report.id,
+        ride_request_id=report.ride_request_id,
+        driver_user_id=report.driver_user_id,
+        driver_full_name=driver.full_name if driver else "",
+        driver_username=driver.username if driver else "",
+        regular_user_id=report.regular_user_id,
+        regular_full_name=regular.full_name if regular else "",
+        regular_username=regular.username if regular else "",
+        message=report.message,
+        status=report.status.value if hasattr(report.status, "value") else str(report.status),
+        admin_notes=report.admin_notes,
+        created_at=report.created_at,
+        reviewed_at=report.reviewed_at,
+        reviewed_by_admin_id=report.reviewed_by_admin_id,
+    )
+
+
+@app.get("/admin/driver-reports", response_model=List[DriverReportOut])
+def admin_list_driver_reports(
+    status_filter: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    List driver reports for the admin moderation UI.
+    `status_filter` accepts PENDING / REVIEWED / DISMISSED (defaults to all).
+    """
+    q = db.query(DriverReport).order_by(DriverReport.created_at.desc())
+    if status_filter:
+        try:
+            st = DriverReportStatus(status_filter)
+            q = q.filter(DriverReport.status == st)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid status_filter")
+    reports = q.all()
+    if not reports:
+        return []
+
+    driver_ids = {r.driver_user_id for r in reports}
+    regular_ids = {r.regular_user_id for r in reports}
+    users = (
+        db.query(User)
+        .filter(User.id.in_(list(driver_ids | regular_ids)))
+        .all()
+    )
+    user_map = {u.id: u for u in users}
+    return [
+        _driver_report_to_out(r, user_map.get(r.driver_user_id), user_map.get(r.regular_user_id))
+        for r in reports
+    ]
+
+
+@app.post(
+    "/admin/driver-reports/{report_id}/review",
+    response_model=DriverReportOut,
+)
+def admin_review_driver_report(
+    report_id: int,
+    data: DriverReportAdminActionRequest,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    report = db.query(DriverReport).filter(DriverReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    try:
+        new_status = DriverReportStatus(data.status)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    report.status = new_status
+    report.admin_notes = (data.admin_notes or "").strip() or None
+    if new_status == DriverReportStatus.PENDING:
+        report.reviewed_at = None
+        report.reviewed_by_admin_id = None
+    else:
+        report.reviewed_at = datetime.now(timezone.utc)
+        report.reviewed_by_admin_id = data.admin_user_id
+    db.commit()
+    db.refresh(report)
+
+    driver = db.query(User).filter(User.id == report.driver_user_id).first()
+    regular = db.query(User).filter(User.id == report.regular_user_id).first()
+    return _driver_report_to_out(report, driver, regular)
+
+
+@app.get("/admin/driver-reports/summary")
+def admin_driver_reports_summary(db: Session = Depends(get_db)):
+    """Count of reports per status, for the admin dashboard badge."""
+    rows = (
+        db.query(DriverReport.status, func.count(DriverReport.id))
+        .group_by(DriverReport.status)
+        .all()
+    )
+    counts = {s.value: 0 for s in DriverReportStatus}
+    for status, c in rows:
+        key = status.value if hasattr(status, "value") else str(status)
+        counts[key] = int(c or 0)
+    return counts
