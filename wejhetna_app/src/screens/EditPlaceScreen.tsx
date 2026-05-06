@@ -1,19 +1,8 @@
 // src/screens/EditPlaceScreen.tsx
 
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-  Platform,
-  StatusBar,
-} from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { View, Text, TextInput, StyleSheet, ActivityIndicator, TouchableOpacity, ScrollView, Image, Platform, StatusBar } from "react-native";
 import { useTranslation } from "react-i18next";
 import { launchImageLibrary } from "react-native-image-picker";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
@@ -85,7 +74,7 @@ export default function EditPlaceScreen() {
         const foundPlace = places.find(p => p.id === placeId);
         
         if (!foundPlace) {
-          Alert.alert(
+          appAlert(
             t("error") || "שגיאה",
             t("place_not_found") || "המקום לא נמצא"
           );
@@ -95,7 +84,7 @@ export default function EditPlaceScreen() {
 
         // Check if business owner can edit this place
         if (userRole === "BUSINESS_OWNER" && foundPlace.owner_user_id !== userId) {
-          Alert.alert(
+          appAlert(
             t("error") || "שגיאה",
             t("cannot_edit_place") || "אין לך הרשאה לערוך מקום זה"
           );
@@ -115,7 +104,7 @@ export default function EditPlaceScreen() {
         setSocialLinks(foundPlace.social_links || "");
         setMainImageUrl(getValidImageUrl(foundPlace.main_image_url) ?? "");
       } catch (error: any) {
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error.message || t("failed_to_load_place") || "נכשל בטעינת המקום"
         );
@@ -141,7 +130,7 @@ export default function EditPlaceScreen() {
         setCategories(categoriesRes);
       } catch (err) {
         console.error(err);
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           t("failed_to_load_data") || "נכשל בטעינת הנתונים"
         );
@@ -205,7 +194,7 @@ export default function EditPlaceScreen() {
 
         const asset = res.assets?.[0];
         if (!asset || !asset.uri) {
-          Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
+          appAlert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
           return;
         }
 
@@ -223,7 +212,7 @@ export default function EditPlaceScreen() {
           setMainImageUrl(fileUrl);
         } catch (e: any) {
           console.log("Upload error", e?.message || e);
-          Alert.alert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
+          appAlert(t("error") || "שגיאה", t("failed_to_upload_image") || "נכשל בהעלאת התמונה");
         } finally {
           setUploadingImage(false);
         }
@@ -319,13 +308,13 @@ export default function EditPlaceScreen() {
 
       // Show success alert after navigation
       setTimeout(() => {
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_updated_successfully") || "המקום עודכן בהצלחה"
         );
       }, 300);
     } catch (error: any) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         error.message || t("failed_to_update_place") || "נכשל בעדכון המקום"
       );

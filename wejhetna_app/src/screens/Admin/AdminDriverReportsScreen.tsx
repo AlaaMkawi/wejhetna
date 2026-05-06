@@ -1,19 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { useFocusEffect } from "@react-navigation/native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -119,7 +106,7 @@ export default function AdminDriverReportsScreen({ route }: Props) {
       setActionTarget(null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(t("error") || "Error", msg);
+      appAlert(t("error") || "Error", msg);
     } finally {
       setSavingAction(false);
     }

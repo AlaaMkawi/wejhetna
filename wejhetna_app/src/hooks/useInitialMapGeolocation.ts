@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { Alert, Linking } from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { Linking } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import i18n from "../i18n";
 import { getCurrentPositionReliable } from "../utils/locationPermission";
@@ -82,7 +83,7 @@ export function useInitialMapGeolocation(
           const cancelText =
             currentLanguage === "ar" ? "إلغاء" : currentLanguage === "he" ? "ביטול" : "Cancel";
 
-          Alert.alert(title, message, [
+          appAlert(title, message, [
             { text: cancelText, style: "cancel" },
             {
               text: allowText,

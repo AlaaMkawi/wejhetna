@@ -1,7 +1,8 @@
 // src/screens/businessOwner/BusinessOwnerPickLocationScreen.tsx
 
 import React, { useState } from "react";
-import { View, StyleSheet, Text, Alert, TouchableOpacity, Platform, StatusBar } from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   MapView,
@@ -53,7 +54,7 @@ export default function BusinessOwnerPickLocationScreen() {
       try {
         const boundaryCheck = await checkLocationInServiceCities(lat, lon);
         if (!boundaryCheck.is_within) {
-          Alert.alert(
+          appAlert(
             t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
             t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום בתוך אחת מהערים.",
             [{ text: t("ok") || "אישור" }]
@@ -89,7 +90,7 @@ export default function BusinessOwnerPickLocationScreen() {
         try {
           const boundaryCheck = await checkLocationInServiceCities(latitude, longitude);
           if (!boundaryCheck.is_within) {
-            Alert.alert(
+            appAlert(
               t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
               t("current_location_outside_service_area") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nהמיקום הנוכחי שלך נמצא מחוץ לאזור השירות.",
               [{ text: t("ok") || "אישור" }]
@@ -105,7 +106,7 @@ export default function BusinessOwnerPickLocationScreen() {
           console.error("Error checking boundary:", error);
           // אם יש שגיאה בבדיקה, מציגים הודעה למשתמש
           const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
-          Alert.alert(
+          appAlert(
             t("boundary_check_error") || "שגיאה בבדיקת גבולות",
             `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
             [{ text: t("ok") || "אישור" }]
@@ -124,12 +125,12 @@ export default function BusinessOwnerPickLocationScreen() {
           const nearbyResult = await checkNearbyForOwner(latitude, longitude);
 
           if (nearbyResult.status === "HAS_OWNER") {
-            Alert.alert(
+            appAlert(
               "Location Already Claimed",
               "This location already has a business owner. Please select a different location."
             );
           } else if (nearbyResult.status === "CAN_CLAIM" && nearbyResult.candidate) {
-            Alert.alert(
+            appAlert(
               "Existing Place Found",
               `Found an existing place: ${nearbyResult.candidate.name}. You can claim this place.`,
               [
@@ -178,7 +179,7 @@ export default function BusinessOwnerPickLocationScreen() {
           }
         } catch (err: any) {
           console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
-          Alert.alert(
+          appAlert(
             t("error") || "Error",
             err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
           );
@@ -188,7 +189,7 @@ export default function BusinessOwnerPickLocationScreen() {
       },
       (error) => {
         console.log("GPS error", error);
-        Alert.alert(t("error") || "Error", t("could_not_get_location") || "Could not get your location");
+        appAlert(t("error") || "Error", t("could_not_get_location") || "Could not get your location");
         setGpsLoading(false);
       },
       {
@@ -201,7 +202,7 @@ export default function BusinessOwnerPickLocationScreen() {
 
   async function handleConfirm() {
     if (selectedLat == null || selectedLon == null) {
-      Alert.alert(t("error") || "Error", t("please_select_location") || "Please select a location");
+      appAlert(t("error") || "Error", t("please_select_location") || "Please select a location");
       return;
     }
 
@@ -209,7 +210,7 @@ export default function BusinessOwnerPickLocationScreen() {
     try {
       const boundaryCheck = await checkLocationInServiceCities(selectedLat, selectedLon);
       if (!boundaryCheck.is_within) {
-        Alert.alert(
+        appAlert(
           t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
           t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום אחר.",
           [{ text: t("ok") || "אישור" }]
@@ -224,7 +225,7 @@ export default function BusinessOwnerPickLocationScreen() {
     } catch (error: any) {
       console.error("Error checking city boundary:", error);
       const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
-      Alert.alert(
+      appAlert(
         t("boundary_check_error") || "שגיאה בבדיקת גבולות",
         `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
         [{ text: t("ok") || "אישור" }]
@@ -237,12 +238,12 @@ export default function BusinessOwnerPickLocationScreen() {
       const nearbyResult = await checkNearbyForOwner(selectedLat, selectedLon);
 
       if (nearbyResult.status === "HAS_OWNER") {
-        Alert.alert(
+        appAlert(
           "Location Already Claimed",
           "This location already has a business owner. Please select a different location."
         );
       } else if (nearbyResult.status === "CAN_CLAIM" && nearbyResult.candidate) {
-        Alert.alert(
+        appAlert(
           "Existing Place Found",
           `Found an existing place: ${nearbyResult.candidate.name}. You can claim this place.`,
           [
@@ -291,7 +292,7 @@ export default function BusinessOwnerPickLocationScreen() {
       }
     } catch (err: any) {
       console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
-      Alert.alert(
+      appAlert(
         t("error") || "Error",
         err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
       );

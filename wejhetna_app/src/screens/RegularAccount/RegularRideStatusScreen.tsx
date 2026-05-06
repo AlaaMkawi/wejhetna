@@ -1,14 +1,6 @@
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -31,9 +23,13 @@ import {
   PostRideFeedbackModal,
   type PostRideFeedbackTarget,
 } from "../../components/ride/PostRideFeedbackModal";
-import { RIDE_STATUS_POLL_INTERVAL_MS, RIDE_UI_BUILD } from "../../../config";
+import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
-import { markPassengerCancelledOwnRide, markVerificationMismatchSelfAlert } from "../../utils/rideCancelAlertGate";
+import {
+  markPassengerCancelledOwnRide,
+  markVerificationMismatchSelfAlert,
+  tryConsumeRideCancelledUiAlert,
+} from "../../utils/rideCancelAlertGate";
 import { markTripStartHandledLocally } from "../../utils/rideTripStartPromotionGate";
 import { RideVerificationAttemptHint } from "../../components/ride/RideVerificationAttemptHint";
 import { RideVerifySuccessModal } from "../../components/ride/RideVerifySuccessModal";
@@ -42,11 +38,13 @@ import {
   navigateToRidePickupNavigation,
   navigateToUserRideRequestsTab,
 } from "../../utils/rideNavigateToTripScreen";
+import { Colors, Radius, Shadow, Spacing, Typography } from "../../theme";
+import { useListBottomPad } from "../../theme/safeArea";
 
 /** ETA at or below this (minutes) shows “arriving soon” copy before “arriving now”. */
 const ARRIVING_SOON_ETA_MIN = 3;
 
-function passengerPhaseKey(
+export function passengerPhaseKey(
   st: RideRequestStatus,
   eta: number | null | undefined
 ): string | null {
@@ -71,7 +69,7 @@ function passengerPhaseKey(
   return null;
 }
 
-function hasValidPickup(latest: RegularLatestRideRequest): boolean {
+export function hasValidPickup(latest: RegularLatestRideRequest): boolean {
   const la = latest.pickup_lat;
   const lo = latest.pickup_lon;
   return (
@@ -82,7 +80,7 @@ function hasValidPickup(latest: RegularLatestRideRequest): boolean {
   );
 }
 
-function formatRideRequestTimestamp(iso: string, locale: string): string {
+export function formatRideRequestTimestamp(iso: string, locale: string): string {
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) {
@@ -94,8 +92,21 @@ function formatRideRequestTimestamp(iso: string, locale: string): string {
   }
 }
 
+export function driverDisplayInitials(ride: RegularLatestRideRequest): string {
+  const n = ride.driver_full_name?.trim();
+  if (n) {
+    const parts = n.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      return ((parts[0][0] ?? "") + (parts[1][0] ?? "")).toUpperCase();
+    }
+    return n.slice(0, 2).toUpperCase();
+  }
+  return (ride.driver_username ?? "?").slice(0, 2).toUpperCase();
+}
+
 export default function RegularRideStatusScreen() {
   const { t, i18n } = useTranslation();
+  const scrollBottomPad = useListBottomPad(120);
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [userId, setUserId] = useState<number | null>(null);
   const [rideList, setRideList] = useState<RegularLatestRideRequest[]>([]);
@@ -141,6 +152,17 @@ export default function RegularRideStatusScreen() {
     }
     return rideList.filter((r) => r.id !== activeRide.id);
   }, [rideList, activeRide]);
+
+  const pendingCount = useMemo(
+    () => rideList.filter((r) => r.status === "pending").length,
+    [rideList]
+  );
+  const activeCount = useMemo(() => (activeRide != null ? 1 : 0), [activeRide]);
+  const historyRowCount = useMemo(() => historyRides.length, [historyRides]);
+  const completedCount = useMemo(
+    () => rideList.filter((r) => r.status === "completed").length,
+    [rideList]
+  );
 
   const refresh = useCallback(async () => {
     const stored = await AsyncStorage.getItem("userId");
@@ -231,7 +253,7 @@ export default function RegularRideStatusScreen() {
     }
     const rideRequestId = activeRide.id;
     const regularUserId = userId;
-    Alert.alert(t("ride_passenger_cancel_confirm_title"), t("ride_passenger_cancel_confirm_message"), [
+    appAlert(t("ride_passenger_cancel_confirm_title"), t("ride_passenger_cancel_confirm_message"), [
       { text: t("cancel"), style: "cancel" },
       {
         text: t("ride_passenger_cancel_button"),
@@ -245,11 +267,10 @@ export default function RegularRideStatusScreen() {
             });
             markPassengerCancelledOwnRide();
             await refresh();
-            Alert.alert(t("success"), t("ride_passenger_cancel_success"), [{ text: t("ok") }]);
           } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
             const key = rideApiDetailToTranslationKey(msg);
-            Alert.alert(t("error"), key ? t(key) : msg, [{ text: t("ok") }]);
+            appAlert(t("error"), key ? t(key) : msg, [{ text: t("ok") }]);
           } finally {
             setCancellingPassengerRide(false);
           }
@@ -262,7 +283,7 @@ export default function RegularRideStatusScreen() {
     if (!activeRide || userId == null) return;
     const code = passengerVerifyInput.trim();
     if (code.length < 4) {
-      Alert.alert(t("error"), t("ride_verify_code_too_short"), [{ text: t("ok") }]);
+      appAlert(t("error"), t("ride_verify_code_too_short"), [{ text: t("ok") }]);
       return;
     }
     setBusyPassengerVerify(true);
@@ -284,14 +305,18 @@ export default function RegularRideStatusScreen() {
       if (key === "ride_error_verify_attempts_exceeded") {
         markVerificationMismatchSelfAlert();
         const parent = navigation.getParent() as NativeStackNavigationProp<RootStackParamList> | undefined;
-        Alert.alert(
-          t("ride_cancelled_verification_mismatch_title"),
-          t("ride_cancelled_verification_mismatch_message"),
-          [{ text: t("ok"), onPress: () => parent && navigateToUserRideRequestsTab(parent, "REGULAR") }]
-        );
+        if (tryConsumeRideCancelledUiAlert(activeRide.id)) {
+          appAlert(
+            t("ride_cancelled_verification_mismatch_title"),
+            t("ride_cancelled_verification_mismatch_message"),
+            [{ text: t("ok"), onPress: () => parent && navigateToUserRideRequestsTab(parent, "REGULAR") }]
+          );
+        } else if (parent) {
+          navigateToUserRideRequestsTab(parent, "REGULAR");
+        }
         return;
       }
-      Alert.alert(t("error"), key ? t(key) : msg, [{ text: t("ok") }]);
+      appAlert(t("error"), key ? t(key) : msg, [{ text: t("ok") }]);
     } finally {
       setBusyPassengerVerify(false);
     }
@@ -373,13 +398,28 @@ export default function RegularRideStatusScreen() {
 
   const renderBody = () => {
     if (userId == null) {
-      return <Text style={styles.muted}>{t("ride_session_invalid")}</Text>;
+      return (
+        <View style={styles.sessionCard}>
+          <Ionicons name="alert-circle-outline" size={22} color={Colors.warning} style={{ marginBottom: 8 }} />
+          <Text style={styles.muted}>{t("ride_session_invalid")}</Text>
+        </View>
+      );
     }
     if (loadError) {
-      return <Text style={styles.errorText}>{t("ride_failed_load_requests")}</Text>;
+      return (
+        <View style={styles.errorCard}>
+          <Ionicons name="cloud-offline-outline" size={24} color={Colors.danger} style={{ marginBottom: 8 }} />
+          <Text style={styles.errorText}>{t("ride_failed_load_requests")}</Text>
+        </View>
+      );
     }
     if (rideList.length === 0) {
-      return <Text style={styles.empty}>{t("ride_tracking_empty")}</Text>;
+      return (
+        <View style={styles.emptyCard}>
+          <Ionicons name="car-outline" size={40} color={Colors.textMuted} />
+          <Text style={styles.empty}>{t("ride_tracking_empty")}</Text>
+        </View>
+      );
     }
 
     const locale =
@@ -398,15 +438,27 @@ export default function RegularRideStatusScreen() {
           const distLine = liveEtaDistLines.distLine;
           const showPassengerCancel = isActiveBlockingRideStatus(st);
           const passengerVerificationUnlocked = latest.passenger_verification_unlocked === true;
-          const showPassengerGoOutOnly = st === "arrived" && !passengerVerificationUnlocked;
+          // Do not use "go out only" layout while the API is showing the pickup code (arrived+code).
+          const showPassengerGoOutOnly =
+            st === "arrived" && !passengerVerificationUnlocked && !latest.verification_code;
 
           const showPassengerDriverFollowBanner =
             hasValidPickup(latest) && (st === "on_the_way" || st === "driving_to_customer");
 
           return (
-            <View style={styles.card}>
-              <Text style={styles.activeSectionLabel}>{t("ride_active_ride_section")}</Text>
-              <Text style={styles.statusLine}>{t(`ride_status_${st}`)}</Text>
+            <View style={[styles.card, styles.cardEmphasis]}>
+              <View style={styles.activeCardTop}>
+                <View style={styles.activeTitleRow}>
+                  <Text style={styles.activeSectionLabel}>{t("ride_active_ride_section")}</Text>
+                  <View style={styles.livePill}>
+                    <View style={styles.liveDot} />
+                    <Text style={styles.livePillText}>{t("ride_card_live")}</Text>
+                  </View>
+                </View>
+                <View style={styles.statusPill}>
+                  <Text style={styles.statusPillText}>{t(`ride_status_${st}`)}</Text>
+                </View>
+              </View>
               {showPassengerDriverFollowBanner ? (
                 <View style={styles.passengerDriverEnRouteBox}>
                   <Text style={styles.passengerDriverEnRouteText}>
@@ -419,7 +471,7 @@ export default function RegularRideStatusScreen() {
                     }
                     activeOpacity={0.85}
                   >
-                    <Ionicons name="navigate" size={22} color="#fff" />
+                    <Ionicons name="navigate" size={22} color={Colors.textInverse} />
                     <Text style={styles.followDriverButtonText}>
                       {t("ride_passenger_view_driver_route_button")}
                     </Text>
@@ -433,11 +485,28 @@ export default function RegularRideStatusScreen() {
               ) : null}
               {!showPassengerGoOutOnly && phaseLine ? <Text style={styles.phaseLine}>{phaseLine}</Text> : null}
               {!showPassengerGoOutOnly ? (
-                <Text style={styles.driverLine}>
-                  {latest.driver_full_name} · @{latest.driver_username}
-                </Text>
+                <View style={styles.driverRow}>
+                  <View style={styles.driverAvatar}>
+                    <Text style={styles.driverAvatarText}>{driverDisplayInitials(latest)}</Text>
+                  </View>
+                  <View style={styles.driverTextCol}>
+                    <Text style={styles.driverLine} numberOfLines={2}>
+                      {latest.driver_full_name} · @{latest.driver_username}
+                    </Text>
+                  </View>
+                </View>
               ) : null}
-              {!showPassengerGoOutOnly ? <Text style={styles.destLine}>{latest.destination_text}</Text> : null}
+              {!showPassengerGoOutOnly ? (
+                <View style={styles.routeBlock}>
+                  <View style={styles.routeRow}>
+                    <Ionicons name="flag" size={16} color={Colors.accent} />
+                    <View style={styles.routeTextCol}>
+                      <Text style={styles.routeKicker}>{t("ride_destination")}</Text>
+                      <Text style={styles.destLine}>{latest.destination_text}</Text>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
               {!showPassengerGoOutOnly && latest.estimated_trip_time != null ? (
                 <Text style={styles.meta}>
                   {t("ride_estimated_trip_time")}: {latest.estimated_trip_time} {t("ride_min")}
@@ -457,7 +526,7 @@ export default function RegularRideStatusScreen() {
                   }}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="navigate" size={20} color="#fff" />
+                  <Ionicons name="navigate" size={20} color={Colors.textInverse} />
                   <Text style={styles.resumeTripButtonText}>
                     {t("ride_trip_resume_navigation_button")}
                   </Text>
@@ -472,7 +541,7 @@ export default function RegularRideStatusScreen() {
                   activeOpacity={0.85}
                 >
                   {cancellingPassengerRide ? (
-                    <ActivityIndicator color="#c62828" />
+                    <ActivityIndicator color={Colors.danger} />
                   ) : (
                     <Text style={styles.cancelRequestButtonText}>
                       {showPassengerGoOutOnly ? t("ride_passenger_cancel_ride") : t("ride_passenger_cancel_button")}
@@ -481,7 +550,7 @@ export default function RegularRideStatusScreen() {
                 </TouchableOpacity>
               ) : null}
 
-              {st === "arrived" && passengerVerificationUnlocked && latest.verification_code ? (
+              {st === "arrived" && latest.verification_code ? (
                 <View style={styles.codeBox}>
                   <Text style={styles.codeHint}>{t("ride_tracking_share_code_hint")}</Text>
                   <Text style={styles.codeDigits}>{latest.verification_code}</Text>
@@ -504,7 +573,10 @@ export default function RegularRideStatusScreen() {
     const historyBlock =
       historyRides.length > 0 ? (
         <View style={styles.historyBlock}>
-          <Text style={styles.historySectionTitle}>{t("ride_history_section_title")}</Text>
+          <View style={styles.historySectionHeader}>
+            <Text style={styles.historySectionTitle}>{t("ride_history_section_title")}</Text>
+            <View style={styles.historySectionLine} />
+          </View>
           {historyRides.map((h) => {
             const status = feedbackStatuses[h.id];
             const canGiveFeedback = h.status === "completed";
@@ -512,14 +584,33 @@ export default function RegularRideStatusScreen() {
             const reported = !!status?.reported;
             return (
               <View key={h.id} style={styles.historyRow}>
-                <Text style={styles.historyRowDate}>{formatRideRequestTimestamp(h.created_at, locale ?? "he-IL")}</Text>
-                <Text style={styles.historyRowStatus}>{t(`ride_status_${h.status}`)}</Text>
-                <Text style={styles.historyRowDest} numberOfLines={2}>
-                  {h.destination_text}
-                </Text>
-                <Text style={styles.historyRowDriver} numberOfLines={1}>
-                  {h.driver_full_name} · @{h.driver_username}
-                </Text>
+                <View style={styles.historyRowTop}>
+                  <View style={styles.histAvatar}>
+                    <Text style={styles.histAvatarText}>{driverDisplayInitials(h)}</Text>
+                  </View>
+                  <View style={styles.historyRowMain}>
+                    <View style={styles.historyNameRow}>
+                      <Text style={styles.historyRowDriver} numberOfLines={1}>
+                        {h.driver_full_name} · @{h.driver_username}
+                      </Text>
+                      <Text style={styles.historyRowDate}>
+                        {formatRideRequestTimestamp(h.created_at, locale ?? "he-IL")}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.historyStatusPill,
+                        h.status === "completed" && styles.historyStatusPillSuccess,
+                        (h.status === "rejected" || h.status === "cancelled") && styles.historyStatusPillDanger,
+                      ]}
+                    >
+                      <Text style={styles.historyStatusPillText}>{t(`ride_status_${h.status}`)}</Text>
+                    </View>
+                    <Text style={styles.historyRowDest} numberOfLines={2}>
+                      {h.destination_text}
+                    </Text>
+                  </View>
+                </View>
                 {canGiveFeedback ? (
                   <View style={styles.historyFeedbackRow}>
                     <TouchableOpacity
@@ -530,7 +621,7 @@ export default function RegularRideStatusScreen() {
                       <Ionicons
                         name={rated ? "checkmark-circle" : "star-outline"}
                         size={14}
-                        color={rated ? "#047857" : "#0f5b63"}
+                        color={rated ? Colors.success : Colors.primary}
                       />
                       <Text
                         style={[
@@ -551,7 +642,7 @@ export default function RegularRideStatusScreen() {
                       <Ionicons
                         name={reported ? "checkmark-circle" : "flag-outline"}
                         size={14}
-                        color={reported ? "#047857" : "#c5322a"}
+                        color={reported ? Colors.success : Colors.danger}
                       />
                       <Text
                         style={[
@@ -581,18 +672,57 @@ export default function RegularRideStatusScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: scrollBottomPad }]}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>{t("ride_tracking_title")}</Text>
         {loading ? (
-          <ActivityIndicator color="#0f5b63" style={styles.loader} />
+          <View style={styles.centerLoad}>
+            <ActivityIndicator color={Colors.primary} size="large" />
+          </View>
         ) : (
-          renderBody()
+          <>
+            {userId != null && !loadError ? (
+              <>
+                <View style={styles.heroCard}>
+                  <View style={styles.heroGlow1} />
+                  <View style={styles.heroGlow2} />
+                  <View style={styles.heroRow}>
+                    <View style={styles.heroAvatar}>
+                      <Ionicons name="map" size={26} color={Colors.textInverse} />
+                    </View>
+                    <View style={styles.heroTitles}>
+                      <Text style={styles.heroEyebrow}>{t("ride_passenger_hub_eyebrow")}</Text>
+                      <Text style={styles.heroTitle}>{t("ride_tracking_title")}</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.snapshotBlock}>
+                  <Text style={styles.snapshotTitle}>{t("ride_driver_snapshot_label")}</Text>
+                  <Text style={styles.snapshotSub}>{t("ride_passenger_rides_caption")}</Text>
+                  <View style={styles.statGrid}>
+                    {(
+                      [
+                        { k: "p", v: String(pendingCount), label: t("ride_stat_pending") },
+                        { k: "a", v: String(activeCount), label: t("ride_stat_active") },
+                        { k: "h", v: String(historyRowCount), label: t("ride_stat_history") },
+                        { k: "c", v: String(completedCount), label: t("ride_stat_completed") },
+                      ] as const
+                    ).map((s) => (
+                      <View key={s.k} style={styles.statCard}>
+                        <Text style={styles.statValue}>{s.v}</Text>
+                        <Text style={styles.statLabel}>{s.label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              </>
+            ) : null}
+            {renderBody()}
+          </>
         )}
-        <Text style={styles.build}>{t("ride_ui_version_strip", { tag: RIDE_UI_BUILD })}</Text>
       </ScrollView>
       <RideVerifySuccessModal
         visible={verifySuccessVisible}
@@ -635,93 +765,237 @@ export default function RegularRideStatusScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#F2F2F7" },
-  scroll: { paddingHorizontal: 16, paddingBottom: 120, paddingTop: 12 },
-  title: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#111",
-    marginBottom: 16,
-    textAlign: "center",
+  safe: { flex: 1, backgroundColor: Colors.bg },
+  scroll: { paddingHorizontal: 16, paddingTop: 8, flexGrow: 1 },
+  centerLoad: { minHeight: 200, alignItems: "center", justifyContent: "center", paddingVertical: 40 },
+  /** Hero (aligned with driver dashboard) */
+  heroCard: {
+    borderRadius: Radius.xxl,
+    backgroundColor: Colors.primary,
+    padding: Spacing.lg,
+    marginBottom: Spacing.md,
+    overflow: "hidden",
+    ...Shadow.card,
   },
-  loader: { marginTop: 24 },
+  heroGlow1: {
+    position: "absolute",
+    top: -40,
+    right: -30,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  heroGlow2: {
+    position: "absolute",
+    bottom: -50,
+    left: -20,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: "rgba(245,158,11,0.15)",
+  },
+  heroRow: { flexDirection: "row", alignItems: "center", zIndex: 1 },
+  heroAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroTitles: { marginStart: 12, flex: 1 },
+  heroEyebrow: {
+    color: "rgba(255,255,255,0.75)",
+    fontSize: Typography.sizeSm,
+    fontWeight: Typography.weightSemibold,
+    textTransform: "uppercase",
+    letterSpacing: 1.2,
+  },
+  heroTitle: {
+    color: Colors.textInverse,
+    fontSize: Typography.sizeXl,
+    fontWeight: Typography.weightHeavy,
+    marginTop: 2,
+  },
+  snapshotBlock: { marginBottom: Spacing.lg },
+  snapshotTitle: { fontSize: Typography.sizeLg, fontWeight: Typography.weightBold, color: Colors.text, marginBottom: 4 },
+  snapshotSub: { fontSize: Typography.sizeSm, color: Colors.textSecondary, marginBottom: Spacing.sm },
+  statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, justifyContent: "space-between" },
+  statCard: {
+    width: "48%",
+    minWidth: 150,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: Spacing.md,
+    ...Shadow.soft,
+  },
+  statValue: { fontSize: Typography.sizeDisplay, fontWeight: Typography.weightHeavy, color: Colors.text },
+  statLabel: { fontSize: Typography.sizeSm, color: Colors.textSecondary, marginTop: 2 },
+  sessionCard: {
+    alignItems: "center",
+    backgroundColor: Colors.warningSoft,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1,
+    borderColor: "rgba(180, 83, 9, 0.25)",
+    marginTop: 4,
+  },
+  errorCard: {
+    alignItems: "center",
+    backgroundColor: Colors.dangerSoft,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1,
+    borderColor: "rgba(185, 28, 28, 0.2)",
+    marginTop: 4,
+  },
+  emptyCard: {
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 4,
+    ...Shadow.soft,
+  },
   empty: {
     textAlign: "center",
-    color: "#666",
-    marginTop: 32,
-    fontSize: 15,
+    color: Colors.textSecondary,
+    marginTop: 12,
+    fontSize: Typography.sizeMd,
     lineHeight: 22,
   },
-  muted: { textAlign: "center", color: "#664d03", marginTop: 16 },
-  errorText: { textAlign: "center", color: "#842029", marginTop: 16 },
+  muted: { textAlign: "center", color: Colors.warning, fontSize: Typography.sizeBase, lineHeight: 20 },
+  errorText: { textAlign: "center", color: Colors.danger, fontSize: Typography.sizeBase, lineHeight: 20 },
   card: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadow.soft,
   },
+  cardEmphasis: { borderColor: "rgba(15, 91, 99, 0.35)", backgroundColor: Colors.primarySoft, ...Shadow.card },
+  activeCardTop: { marginBottom: 10 },
+  activeTitleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 },
   activeSectionLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#0f5b63",
-    marginBottom: 10,
+    fontSize: Typography.sizeSm,
+    fontWeight: Typography.weightBold,
+    color: Colors.primary,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    flex: 1,
+  },
+  livePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(15, 91, 99, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.2)",
+  },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.success },
+  livePillText: { fontSize: 10, fontWeight: Typography.weightBold, color: Colors.primary, textTransform: "uppercase" },
+  statusPill: { alignSelf: "flex-start", backgroundColor: Colors.infoSoft, paddingVertical: 4, paddingHorizontal: 10, borderRadius: Radius.pill },
+  statusPillText: { fontSize: 12, fontWeight: Typography.weightBold, color: Colors.text, textTransform: "capitalize" },
+  driverRow: { flexDirection: "row", alignItems: "center", marginTop: 4, marginBottom: 8, gap: 10 },
+  driverAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  driverAvatarText: { color: Colors.textInverse, fontSize: 14, fontWeight: Typography.weightBold },
+  driverTextCol: { flex: 1, minWidth: 0 },
+  routeBlock: {
+    marginTop: 4,
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  routeRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  routeTextCol: { flex: 1, minWidth: 0 },
+  routeKicker: {
+    fontSize: 10,
+    fontWeight: Typography.weightSemibold,
+    color: Colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   noActiveCard: {
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    padding: 14,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.15)",
+    borderColor: "rgba(15, 91, 99, 0.15)",
+    ...Shadow.soft,
   },
   noActiveBanner: {
-    fontSize: 14,
-    color: "#555",
+    fontSize: Typography.sizeBase,
+    color: Colors.textSecondary,
     textAlign: "center",
     lineHeight: 20,
   },
-  historyBlock: {
-    marginTop: 8,
-  },
-  historySectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111",
-    marginBottom: 12,
-    marginTop: 8,
-  },
+  historyBlock: { marginTop: 4, marginBottom: 8 },
+  historySectionHeader: { marginTop: 8, marginBottom: 4 },
+  historySectionTitle: { fontSize: Typography.sizeLg, fontWeight: Typography.weightBold, color: Colors.text, marginBottom: 6 },
+  historySectionLine: { height: 2, borderRadius: 1, backgroundColor: Colors.primarySoft, width: 40 },
   historyRow: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xl,
+    padding: Spacing.md,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.06)",
+    borderColor: Colors.border,
+    ...Shadow.soft,
   },
+  historyRowTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  histAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: Colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.2)",
+  },
+  histAvatarText: { color: Colors.primary, fontSize: 14, fontWeight: Typography.weightBold },
+  historyRowMain: { flex: 1, minWidth: 0 },
+  historyNameRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 },
   historyRowDate: {
-    fontSize: 12,
-    color: "#888",
-    marginBottom: 6,
+    fontSize: 11,
+    color: Colors.textMuted,
+    flexShrink: 0,
   },
-  historyRowStatus: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#0f5b63",
-    marginBottom: 6,
-  },
+  historyStatusPill: { alignSelf: "flex-start", backgroundColor: Colors.infoSoft, paddingVertical: 3, paddingHorizontal: 8, borderRadius: Radius.pill, marginBottom: 6 },
+  historyStatusPillSuccess: { backgroundColor: Colors.successSoft },
+  historyStatusPillDanger: { backgroundColor: Colors.dangerSoft },
+  historyStatusPillText: { fontSize: 11, fontWeight: Typography.weightBold, color: Colors.text, textTransform: "capitalize" },
   historyRowDest: {
-    fontSize: 14,
-    color: "#333",
-    marginBottom: 4,
+    fontSize: Typography.sizeBase,
+    color: Colors.text,
     lineHeight: 20,
   },
   historyRowDriver: {
-    fontSize: 13,
-    color: "#666",
+    fontSize: Typography.sizeBase,
+    fontWeight: Typography.weightSemibold,
+    color: Colors.text,
+    flex: 1,
+    minWidth: 0,
   },
   historyFeedbackRow: {
     flexDirection: "row",
@@ -729,7 +1003,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#e5e7eb",
+    borderTopColor: Colors.divider,
   },
   feedbackChip: {
     flex: 1,
@@ -739,16 +1013,12 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    borderRadius: 10,
+    borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.3)",
-    backgroundColor: "#e6f2f3",
+    borderColor: "rgba(15,91,99,0.25)",
+    backgroundColor: Colors.primarySoft,
   },
-  feedbackChipText: {
-    color: "#0f5b63",
-    fontWeight: "700",
-    fontSize: 12,
-  },
+  feedbackChipText: { color: Colors.primary, fontWeight: Typography.weightBold, fontSize: 12 },
   feedbackChipReport: {
     flex: 1,
     flexDirection: "row",
@@ -757,41 +1027,26 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    borderRadius: 10,
+    borderRadius: Radius.lg,
     borderWidth: 1,
     borderColor: "rgba(197,50,42,0.3)",
-    backgroundColor: "#fde8e6",
+    backgroundColor: Colors.dangerSoft,
   },
-  feedbackChipReportText: {
-    color: "#c5322a",
-    fontWeight: "700",
-    fontSize: 12,
-  },
-  feedbackChipDone: {
-    backgroundColor: "#ecfdf5",
-    borderColor: "rgba(4,120,87,0.3)",
-  },
-  feedbackChipTextDone: {
-    color: "#047857",
-  },
-  statusLine: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#0f5b63",
-    marginBottom: 6,
-  },
+  feedbackChipReportText: { color: Colors.danger, fontWeight: Typography.weightBold, fontSize: 12 },
+  feedbackChipDone: { backgroundColor: Colors.successSoft, borderColor: "rgba(4, 120, 87, 0.25)" },
+  feedbackChipTextDone: { color: Colors.success },
   passengerDriverEnRouteBox: {
-    backgroundColor: "#e8f5e9",
-    borderRadius: 12,
+    backgroundColor: Colors.successSoft,
+    borderRadius: Radius.lg,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.22)",
+    borderColor: "rgba(15,91,99,0.2)",
   },
   passengerDriverEnRouteText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#1b5e20",
+    fontSize: Typography.sizeMd,
+    fontWeight: Typography.weightBold,
+    color: "#166534",
     textAlign: "center",
     marginBottom: 12,
     lineHeight: 22,
@@ -800,107 +1055,99 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0f5b63",
-    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
     paddingVertical: 12,
     paddingHorizontal: 14,
+    ...Shadow.soft,
   },
-  followDriverButtonText: { color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 },
+  followDriverButtonText: { color: Colors.textInverse, fontSize: Typography.sizeMd, fontWeight: Typography.weightBold, marginStart: 10 },
   resumeTripButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0f5b63",
-    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
     paddingVertical: 12,
     paddingHorizontal: 14,
     marginTop: 12,
+    ...Shadow.soft,
   },
-  resumeTripButtonText: { color: "#fff", fontSize: 15, fontWeight: "700", marginLeft: 10 },
+  resumeTripButtonText: { color: Colors.textInverse, fontSize: Typography.sizeMd, fontWeight: Typography.weightBold, marginStart: 10 },
   passengerGoOutBanner: {
-    backgroundColor: "#e3f2fd",
-    borderRadius: 10,
+    backgroundColor: Colors.infoSoft,
+    borderRadius: Radius.lg,
     padding: 14,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "rgba(21,101,192,0.35)",
+    borderColor: "rgba(29, 78, 216, 0.25)",
   },
   passengerGoOutBannerText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#0d47a1",
+    fontSize: Typography.sizeMd,
+    fontWeight: Typography.weightBold,
+    color: Colors.info,
     textAlign: "center",
     lineHeight: 23,
   },
-  phaseLine: {
-    fontSize: 14,
-    color: "#333",
-    marginBottom: 10,
-    lineHeight: 20,
-  },
-  driverLine: { fontSize: 15, color: "#222", marginBottom: 6 },
-  destLine: { fontSize: 14, color: "#444", marginBottom: 8 },
-  meta: { fontSize: 13, color: "#555", marginBottom: 4 },
-  dist: { fontSize: 13, color: "#444", marginBottom: 4 },
-  eta: { fontSize: 15, fontWeight: "600", color: "#111", marginTop: 4 },
+  phaseLine: { fontSize: Typography.sizeBase, color: Colors.text, marginBottom: 10, lineHeight: 20 },
+  driverLine: { fontSize: Typography.sizeBase, color: Colors.text, lineHeight: 20 },
+  destLine: { fontSize: Typography.sizeBase, color: Colors.text, marginTop: 2 },
+  meta: { fontSize: Typography.sizeSm, color: Colors.textSecondary, marginTop: 6, marginBottom: 2 },
+  dist: { fontSize: Typography.sizeSm, color: Colors.textSecondary, marginBottom: 2 },
+  eta: { fontSize: Typography.sizeMd, fontWeight: Typography.weightSemibold, color: Colors.text, marginTop: 4 },
   cancelRequestButton: {
     marginTop: 16,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#c62828",
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
+    borderColor: Colors.danger,
     alignItems: "center",
     justifyContent: "center",
     minHeight: 48,
+    backgroundColor: Colors.surface,
   },
-  cancelRequestButtonDisabled: {
-    opacity: 0.55,
-  },
-  cancelRequestButtonText: {
-    color: "#c62828",
-    fontWeight: "700",
-    fontSize: 15,
-  },
+  cancelRequestButtonDisabled: { opacity: 0.55 },
+  cancelRequestButtonText: { color: Colors.danger, fontWeight: Typography.weightBold, fontSize: Typography.sizeMd },
   codeBox: {
     marginTop: 16,
     padding: 14,
-    borderRadius: 12,
-    backgroundColor: "#eef6f7",
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.primarySoft,
     borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.25)",
+    borderColor: "rgba(15, 91, 99, 0.25)",
   },
-  codeHint: { fontSize: 13, color: "#333", marginBottom: 8, lineHeight: 19 },
+  codeHint: { fontSize: Typography.sizeSm, color: Colors.text, marginBottom: 8, lineHeight: 19 },
   codeDigits: {
     fontSize: 28,
-    fontWeight: "800",
+    fontWeight: Typography.weightHeavy,
     letterSpacing: 4,
-    color: "#0f5b63",
+    color: Colors.primary,
     textAlign: "center",
   },
   passengerVerifyInput: {
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.35)",
-    borderRadius: 10,
+    borderColor: "rgba(15, 91, 99, 0.35)",
+    borderRadius: Radius.lg,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 18,
-    fontWeight: "600",
-    color: "#111",
-    backgroundColor: "#fff",
+    fontWeight: Typography.weightSemibold,
+    color: Colors.text,
+    backgroundColor: Colors.surface,
     textAlign: "center",
   },
   passengerVerifyButton: {
     marginTop: 12,
-    backgroundColor: "#0f5b63",
-    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
     paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",
     minHeight: 48,
+    ...Shadow.soft,
   },
   passengerVerifyButtonDisabled: { opacity: 0.55 },
-  passengerVerifyButtonText: { color: "#fff", fontSize: 15, fontWeight: "700" },
-  build: { fontSize: 11, color: "#999", textAlign: "center", marginTop: 28 },
+  passengerVerifyButtonText: { color: Colors.textInverse, fontSize: Typography.sizeMd, fontWeight: Typography.weightBold },
 });

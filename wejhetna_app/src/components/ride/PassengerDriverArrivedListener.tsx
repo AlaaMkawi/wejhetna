@@ -1,11 +1,9 @@
 import React, { useEffect, useRef } from "react";
-import { Alert } from "react-native";
+import { appAlert } from "../../utils/appAlert";
+
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
-import { useNavigation, useNavigationState } from "@react-navigation/native";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import { RootStackParamList } from "../../navigation/types";
-import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScreen";
+import { useNavigationState } from "@react-navigation/native";
 import {
   getRegularLatestRideRequest,
   normalizeRideRequestStatus,
@@ -14,6 +12,7 @@ import {
   type RideRequestStatus,
 } from "../../api/rides";
 import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
+import { isPassengerRideUserRole } from "../../utils/ridePassengerRole";
 
 /**
  * Global (app-wide) popup for the PASSENGER the moment the driver has arrived
@@ -27,14 +26,14 @@ import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
  *     the driver), return them to their requests tab.
  *   - Otherwise, stay put – the alert is informational only.
  *
+ * REGULAR and BUSINESS_OWNER passengers; same as transport-tab ride UX.
  * Only one popup is shown per transition; a guard ref prevents duplicates.
  */
 export default function PassengerDriverArrivedListener() {
   const { t } = useTranslation();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  // Keep a reactive snapshot of the active top-level route so the alert
-  // handler knows whether to bounce back to requests or stay put.
+  // Keep a reactive snapshot of the active top-level route so we know whether
+  // the passenger is already in a pickup screen and the inline UI is enough.
   const routeName = useNavigationState((state) => {
     if (!state) return null;
     try {
@@ -67,7 +66,7 @@ export default function PassengerDriverArrivedListener() {
 
     const tick = async () => {
       const role = await AsyncStorage.getItem("userRole");
-      if (!mounted || role !== "REGULAR") return;
+      if (!mounted || !isPassengerRideUserRole(role)) return;
 
       const stored = await AsyncStorage.getItem("userId");
       const uid = parseStoredUserId(stored);
@@ -95,20 +94,16 @@ export default function PassengerDriverArrivedListener() {
             currentRouteName === "RideTrackingMap" ||
             currentRouteName === "RouteDetails";
 
-          Alert.alert(
-            t("ride_passenger_driver_arrived_title"),
-            t("ride_passenger_driver_arrived_message"),
-            [
-              {
-                text: t("ok"),
-                onPress: () => {
-                  if (insidePickupScreen) {
-                    navigateToUserRideRequestsTab(navigation, "REGULAR");
-                  }
-                },
-              },
-            ]
-          );
+          // If the passenger is already viewing a live pickup screen, the arrival
+          // is communicated inline by that screen's UI. Skip the global alert to
+          // avoid a redundant popup.
+          if (!insidePickupScreen) {
+            appAlert(
+              t("ride_passenger_driver_arrived_title"),
+              t("ride_passenger_driver_arrived_message"),
+              [{ text: t("ok") }]
+            );
+          }
         }
       }
 
@@ -136,7 +131,7 @@ export default function PassengerDriverArrivedListener() {
       mounted = false;
       clearInterval(id);
     };
-  }, [navigation, t]);
+  }, [t]);
 
   return null;
 }

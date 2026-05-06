@@ -20,6 +20,7 @@ import NewUsersScreen from "../screens/Admin/NewUsersScreen";
 import UsersSelectorScreen from "../screens/Admin/UsersSelectorScreen";
 import ProfileScreen from "../screens/ProfileScreen";
 import AdvertisementsScreen from "../screens/AdvertisementsScreen";
+
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { requestForegroundLocationPermission } from "../utils/locationPermission";
 import {
@@ -34,7 +35,6 @@ type AdminTabsProps = NativeStackScreenProps<RootStackParamList, "AdminTabs">;
 const Tab = createBottomTabNavigator<AdminTabParamList>();
 
 const ADMIN_TAB_LABEL_KEY: Record<string, TabBarLabelKey> = {
-  fitnessDummy: "tab_admin_tools",
   alreadyUsers: "tab_admin_users",
   AdminHome: "tab_map",
   newUsers: "tab_admin_new_users",
@@ -46,8 +46,6 @@ type IconPair = { active: string; inactive: string };
 
 function iconPairForRoute(name: keyof AdminTabParamList): IconPair {
   switch (name) {
-    case "fitnessDummy":
-      return { active: "build", inactive: "build-outline" };
     case "alreadyUsers":
       return { active: "people", inactive: "people-outline" };
     case "AdminHome":
@@ -68,7 +66,7 @@ const CustomAdminTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =
   const { t } = useTranslation();
 
   return (
-    <View style={[tabBarLayout.outer, { paddingBottom: Math.max(insets.bottom, 6) }]}>
+    <View style={[tabBarLayout.outer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={tabBarLayout.row}>
         {state.routes.map((route, index) => {
           const { name } = route;
@@ -155,11 +153,6 @@ export default function AdminTabNavigator({ route }: AdminTabsProps) {
       }}
       initialRouteName="AdminHome"
     >
-      <Tab.Screen
-        name="fitnessDummy"
-        component={UsersSelectorScreen}
-        initialParams={{ adminUserId, role }}
-      />
       <Tab.Screen
         name="alreadyUsers"
         component={UsersSelectorScreen}

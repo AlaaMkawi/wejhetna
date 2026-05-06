@@ -26,6 +26,8 @@ export type DriverToPickupRouteVisualization = {
   routeLoading: boolean;
   /** Raw OSRM duration for the current leg (seconds), when available. */
   osrmLegDurationSec: number | null;
+  /** OSRM leg length (meters) for the last fetched route, when available. */
+  osrmLegDistanceM: number | null;
 };
 
 /**
@@ -152,5 +154,7 @@ export function useDriverToPickupRouteVisualization(
     etaSecondsRemaining,
     routeLoading,
     osrmLegDurationSec,
+    /** Last OSRM leg length (meters), for UI such as progress along the leg. */
+    osrmLegDistanceM,
   };
 }

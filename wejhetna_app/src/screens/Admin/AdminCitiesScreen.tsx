@@ -1,17 +1,8 @@
 // src/screens/AdminCitiesScreen.tsx
 
 import React, { useEffect, useState, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  Modal,
-  TextInput,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { useTranslation } from "react-i18next";
 import i18n from "../../i18n";
@@ -73,7 +64,7 @@ export default function AdminCitiesScreen() {
       setCities(data);
       setFilteredCities(data);
     } catch {
-      Alert.alert(t("error") || "Error", t("failed_to_load_cities") || "Failed to load cities");
+      appAlert(t("error") || "Error", t("failed_to_load_cities") || "Failed to load cities");
     } finally {
       setLoading(false);
     }
@@ -125,17 +116,17 @@ export default function AdminCitiesScreen() {
     const trimmedEn = nameEn.trim();
 
     if (!trimmedAr) {
-      Alert.alert(t("validation") || "Validation", t("arabic_name_required") || "Arabic name is required.");
+      appAlert(t("validation") || "Validation", t("arabic_name_required") || "Arabic name is required.");
       return;
     }
 
     if (!trimmedEn) {
-      Alert.alert(t("validation") || "Validation", t("english_name_required") || "English name is required.");
+      appAlert(t("validation") || "Validation", t("english_name_required") || "English name is required.");
       return;
     }
 
     if (!trimmedHe) {
-      Alert.alert(t("validation") || "Validation", t("hebrew_name_required") || "Hebrew name is required.");
+      appAlert(t("validation") || "Validation", t("hebrew_name_required") || "Hebrew name is required.");
       return;
     }
 
@@ -172,12 +163,12 @@ export default function AdminCitiesScreen() {
 
       await loadCities();
     } catch {
-      Alert.alert(t("error") || "Error", t("failed_to_save_city") || "Failed to save city");
+      appAlert(t("error") || "Error", t("failed_to_save_city") || "Failed to save city");
     }
   };
 
   const handleDeleteCityFromList = async (city: City) => {
-    Alert.alert(
+    appAlert(
       t("delete_city") || "Delete City",
       `${t("delete_city_confirmation") || "Are you sure you want to delete the city"} "${city.name_ar}"?`,
       [
@@ -206,9 +197,9 @@ export default function AdminCitiesScreen() {
               }
 
               await loadCities();
-              Alert.alert(t("success") || "Success", t("city_deleted_successfully") || "City deleted successfully");
+              appAlert(t("success") || "Success", t("city_deleted_successfully") || "City deleted successfully");
             } catch (error: any) {
-              Alert.alert(t("error") || "Error", error.message || t("failed_to_delete_city") || "Failed to delete city");
+              appAlert(t("error") || "Error", error.message || t("failed_to_delete_city") || "Failed to delete city");
             }
           },
         },

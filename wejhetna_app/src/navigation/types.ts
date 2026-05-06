@@ -2,6 +2,8 @@
 import type { DriverApplication } from "../screens/Admin/AdminDriversScreen";
 
 export type RootStackParamList = {
+  /** Cold-start bootstrap: reads persisted session and navigates to Home or main app. */
+  SessionRestore: undefined;
   Home: undefined;
   SignUp: undefined;
   AdminLogin: undefined;
@@ -177,7 +179,6 @@ export type AuthStackParamList = {
 };
 
 export type AdminTabParamList = {
-  fitnessDummy: { adminUserId: number; role: "ADMIN" };
   alreadyUsers: { adminUserId: number; role: "ADMIN" };
   AdminHome: { adminUserId: number; role: "ADMIN"; selectedPlaceId?: number };
   newUsers: { adminUserId: number; role: "ADMIN" };

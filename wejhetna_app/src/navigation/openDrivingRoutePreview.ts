@@ -1,5 +1,6 @@
-import { Alert } from "react-native";
+
 import type { RootStackParamList } from "./types";
+import { appAlert } from "../utils/appAlert";
 import { checkLocationInServiceCities } from "../api/places";
 import {
   ensureForegroundLocationForNavigation,
@@ -29,6 +30,15 @@ export type OpenDrivingRoutePreviewParams = {
   navigationPhase?: "preview" | "active";
   /** Optional extras to be merged into RouteDetails params (e.g. rideContext). */
   routeDetailsExtras?: Partial<RootStackParamList["RouteDetails"]>;
+  /**
+   * Skip the "destination must be inside the 3 service cities" check.
+   *
+   * The service-area rule only applies to the **final ride destination**.
+   * Pickup / driver / passenger live locations can be anywhere, so flows
+   * that reuse this helper to route *toward a pickup point* (e.g. the
+   * driver heading to the passenger) must opt out of the boundary check.
+   */
+  skipDestinationBoundaryCheck?: boolean;
 };
 
 /**
@@ -44,9 +54,10 @@ export async function openDrivingRoutePreview({
   originOverride,
   navigationPhase,
   routeDetailsExtras,
+  skipDestinationBoundaryCheck,
 }: OpenDrivingRoutePreviewParams): Promise<void> {
   if (!destination) {
-    Alert.alert(t("error"), t("please_select_destination"));
+    appAlert(t("error"), t("please_select_destination"));
     return;
   }
 
@@ -56,7 +67,7 @@ export async function openDrivingRoutePreview({
     const permissionOk = await ensureForegroundLocationForNavigation();
     console.log("[GPS][routePreview] permissionOk", permissionOk);
     if (!permissionOk) {
-      Alert.alert(
+      appAlert(
         t("location_required_title"),
         t("location_required_for_navigation")
       );
@@ -67,17 +78,25 @@ export async function openDrivingRoutePreview({
     console.log("[GPS][routePreview] freshLocation", freshLocation);
     setUserLocation?.(freshLocation);
 
-    console.log("[GPS][routePreview] boundaryCheck start", {
-      destination: { lat: destination.lat, lon: destination.lon },
-    });
-    const boundaryCheck = await checkLocationInServiceCities(destination.lat, destination.lon);
-    console.log("[GPS][routePreview] boundaryCheck result", boundaryCheck);
-    if (!boundaryCheck.is_within) {
-      Alert.alert(
-        t("location_outside_service_area"),
-        t("destination_must_be_in_service_cities")
-      );
-      return;
+    // Destination boundary rule applies to the FINAL ride destination only.
+    // Pickup-oriented flows (driver heading to passenger, passenger viewing
+    // driver's approach) reuse this helper but must not block on the 3-city
+    // restriction — the pickup point can be anywhere.
+    if (!skipDestinationBoundaryCheck) {
+      console.log("[GPS][routePreview] boundaryCheck start", {
+        destination: { lat: destination.lat, lon: destination.lon },
+      });
+      const boundaryCheck = await checkLocationInServiceCities(destination.lat, destination.lon);
+      console.log("[GPS][routePreview] boundaryCheck result", boundaryCheck);
+      if (!boundaryCheck.is_within) {
+        appAlert(
+          t("location_outside_service_area"),
+          t("destination_must_be_in_service_cities")
+        );
+        return;
+      }
+    } else {
+      console.log("[GPS][routePreview] boundaryCheck skipped (pickup-mode)");
     }
 
     const osrmOrigin =
@@ -126,11 +145,11 @@ export async function openDrivingRoutePreview({
     console.log("[GPS][routePreview] error details", { code: err?.code, message: err?.message });
     const code = err?.code;
     if (code === 1) {
-      Alert.alert(t("location_required_title"), t("location_required_for_navigation"));
+      appAlert(t("location_required_title"), t("location_required_for_navigation"));
     } else if (isLocationTimeoutOrUnavailableError(error)) {
-      Alert.alert(t("route_location_timeout_title"), t("route_location_timeout_body"));
+      appAlert(t("route_location_timeout_title"), t("route_location_timeout_body"));
     } else {
-      Alert.alert(
+      appAlert(
         t("route_error"),
         err?.message || t("could_not_get_route")
       );

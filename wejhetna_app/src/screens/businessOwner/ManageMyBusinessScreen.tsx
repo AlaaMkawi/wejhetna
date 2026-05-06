@@ -1,22 +1,8 @@
 // src/screens/businessOwner/ManageMyBusinessScreen.tsx
 
 import React, { useState, useRef } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Image,
-  Alert,
-  ActivityIndicator,
-  Platform,
-  StatusBar,
-  Linking,
-  Modal,
-  I18nManager,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Image, ActivityIndicator, Platform, StatusBar, Linking, Modal, I18nManager } from "react-native";
 import { useNavigation, useFocusEffect, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useTranslation } from "react-i18next";
@@ -696,7 +682,7 @@ export default function ManageMyBusinessScreen() {
 
   // Handle image deletion (no reload to prevent scroll reset)
   async function handleDeletePhoto(index: number) {
-    Alert.alert(
+    appAlert(
       t("delete_photo") || "Delete Photo",
       t("delete_photo_confirmation") || "Are you sure you want to delete this photo?",
       [
@@ -1234,7 +1220,7 @@ export default function ManageMyBusinessScreen() {
               <TouchableOpacity
                 style={styles.deleteAnnouncementButton}
                 onPress={async () => {
-                  Alert.alert(
+                  appAlert(
                     t("delete_announcement") || "Delete Announcement",
                     t("delete_announcement_confirmation") || "Are you sure you want to delete this announcement?",
                     [

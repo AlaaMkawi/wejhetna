@@ -1,22 +1,8 @@
 // src/screens/DriverAccount/DriverHomeScreen.tsx
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ScrollView,
-  Image,
-  PanResponder,
-  StatusBar,
-  Dimensions,
-  Modal,
-  ActivityIndicator,
-  Linking,
-  DeviceEventEmitter,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, PanResponder, StatusBar, Dimensions, Modal, ActivityIndicator, Linking, DeviceEventEmitter } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -34,6 +20,7 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import { isOpenNow } from "../../utils/openingHours";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
@@ -61,6 +48,8 @@ const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-round
 const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
 const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי (75% מהמסך)
 const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
+const MAP_PICK_DEST_FAB_BOTTOM = 124;
+const MAP_PICK_DEST_BANNER_BOTTOM = MAP_PICK_DEST_FAB_BOTTOM + 56 + 12;
 
 const NEGEV_BOUNDS = {
   ne: [35.10, 31.42],
@@ -286,6 +275,8 @@ type Props = {
 
 export default function DriverHomeScreen({ }: Props) {
   const { t } = useTranslation();
+  const mapPickFabBottom = useOverlayBottomOffset(MAP_PICK_DEST_FAB_BOTTOM);
+  const mapPickBannerBottom = useOverlayBottomOffset(MAP_PICK_DEST_BANNER_BOTTOM);
   const routeParams = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
@@ -497,7 +488,7 @@ export default function DriverHomeScreen({ }: Props) {
         setAnnouncementTargetLang(targetLang);
         setAnnouncementIsTranslated(true);
       } catch (error: any) {
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error.message || t("translation_failed") || "נכשל בתרגום"
         );
@@ -520,7 +511,7 @@ export default function DriverHomeScreen({ }: Props) {
         setDescriptionTargetLang(targetLang);
         setDescriptionIsTranslated(true);
       } catch (error: any) {
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error.message || t("translation_failed") || "נכשל בתרגום"
         );
@@ -541,20 +532,20 @@ export default function DriverHomeScreen({ }: Props) {
       if (isPlaceSaved) {
         await unsavePlace(userId, selectedPlace.id);
         setIsPlaceSaved(false);
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_removed_from_saved") || "המקום הוסר מהשמורים"
         );
       } else {
         await savePlace(userId, selectedPlace.id);
         setIsPlaceSaved(true);
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_saved_successfully") || "המקום נשמר בהצלחה"
         );
       }
     } catch (error: any) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         error.message || t("failed_to_save_place") || "נכשל בשמירת המקום"
       );
@@ -1080,7 +1071,11 @@ export default function DriverHomeScreen({ }: Props) {
       />
 
       <TouchableOpacity
-        style={[styles.pickDestinationFab, isPickingMapDestination && styles.pickDestinationFabActive]}
+        style={[
+          styles.pickDestinationFab,
+          { bottom: mapPickFabBottom },
+          isPickingMapDestination && styles.pickDestinationFabActive,
+        ]}
         onPress={() => {
           setIsPickingMapDestination((v) => {
             const next = !v;
@@ -1104,7 +1099,10 @@ export default function DriverHomeScreen({ }: Props) {
       </TouchableOpacity>
 
       {isPickingMapDestination && (
-        <View style={styles.pickDestinationBanner} pointerEvents="box-none">
+        <View
+          style={[styles.pickDestinationBanner, { bottom: mapPickBannerBottom }]}
+          pointerEvents="box-none"
+        >
           <View style={styles.pickDestinationBannerInner}>
             <View style={styles.pickDestinationBannerTextCol}>
               <Text style={styles.pickDestinationBannerTitle}>{t("map_pick_destination_banner_title")}</Text>
@@ -1273,32 +1271,33 @@ export default function DriverHomeScreen({ }: Props) {
               )}
             </View>
 
-            {/* Action Buttons Row */}
-            <View style={styles.actionButtonsRow}>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="share-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("share") || "שיתוף"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.actionButtonSecondary}
-                onPress={handleToggleSave}
-                disabled={savingPlace || !userId}
-              >
-                <Ionicons 
-                  name={isPlaceSaved ? "bookmark" : "bookmark-outline"} 
-                  size={20} 
-                  color={isPlaceSaved ? "#0f5b63" : "#0f5b63"} 
-                />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
-                </Text>
-              </TouchableOpacity>
-              
+            {/* Action buttons: share/save row, then full-width primary CTA */}
+            <View style={styles.actionButtonsBlock}>
+              <View style={styles.actionButtonsRowTop}>
+                <TouchableOpacity style={styles.actionButtonSecondary}>
+                  <Ionicons name="share-outline" size={20} color="#0f5b63" />
+                  <Text style={styles.actionButtonSecondaryText}>
+                    {t("share") || "שיתוף"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionButtonSecondary}
+                  onPress={handleToggleSave}
+                  disabled={savingPlace || !userId}
+                >
+                  <Ionicons
+                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"}
+                    size={20}
+                    color={isPlaceSaved ? "#0f5b63" : "#0f5b63"}
+                  />
+                  <Text style={styles.actionButtonSecondaryText}>
+                    {isPlaceSaved ? t("saved") || "שמור" : t("save") || "שמירה"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
               {destination && (
                 <TouchableOpacity
-                  style={styles.actionButtonPrimary}
+                  style={styles.actionButtonPrimaryFull}
                   onPress={getRoute}
                   disabled={routeLoading}
                 >
@@ -1316,8 +1315,8 @@ export default function DriverHomeScreen({ }: Props) {
               )}
 
               {!destination && (
-            <TouchableOpacity
-                  style={styles.actionButtonPrimary}
+                <TouchableOpacity
+                  style={styles.actionButtonPrimaryFull}
                   onPress={() => {
                     if (selectedPlace && selectedPlace.location) {
                       handlePlaceTap(selectedPlace);
@@ -1328,8 +1327,8 @@ export default function DriverHomeScreen({ }: Props) {
                   <Text style={styles.actionButtonPrimaryText}>
                     {t("set_destination") || "Set Destination"}
                   </Text>
-            </TouchableOpacity>
-          )}
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* Announcement Banner */}
@@ -1538,7 +1537,7 @@ export default function DriverHomeScreen({ }: Props) {
                       ? selectedPlace.social_links! 
                       : `https://${selectedPlace.social_links}`;
                     Linking.openURL(url).catch(() => {
-                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                      appAlert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
                     });
                   }}
                   activeOpacity={0.7}
@@ -1823,7 +1822,6 @@ const styles = StyleSheet.create({
   pickDestinationFab: {
     position: "absolute",
     left: 20,
-    bottom: 100,
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -1847,7 +1845,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 16,
     right: 16,
-    bottom: 168,
     zIndex: 1099,
   },
   pickDestinationBannerInner: {
@@ -1973,10 +1970,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
   },
-  actionButtonsRow: {
-    flexDirection: "row",
+  actionButtonsBlock: {
     paddingHorizontal: 16,
     paddingBottom: 16,
+    gap: 10,
+  },
+  actionButtonsRowTop: {
+    flexDirection: "row",
     gap: 8,
   },
   actionButtonSecondary: {
@@ -1986,32 +1986,37 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#F2F2F7",
     borderRadius: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 8,
+    minHeight: 48,
   },
   actionButtonSecondaryText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
     color: "#0f5b63",
+    textAlign: "center",
+    flexShrink: 1,
   },
-  actionButtonPrimary: {
-    flex: 1.5,
+  actionButtonPrimaryFull: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#0f5b63",
     borderRadius: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 8,
+    width: "100%",
   },
   actionButtonPrimaryText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
     color: "#FFFFFF",
-    },
-    imageGalleryContainer: {
+    textAlign: "center",
+    flexShrink: 1,
+  },
+  imageGalleryContainer: {
       paddingHorizontal: 16,
       paddingBottom: 16,
     },

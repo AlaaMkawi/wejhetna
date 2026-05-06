@@ -1,16 +1,8 @@
 // src/screens/SavedPlacesScreen.tsx
 
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  Image,
-  Alert,
-} from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image } from "react-native";
 import { useTranslation } from "react-i18next";
 import { useNavigation} from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -119,7 +111,7 @@ export default function SavedPlacesScreen() {
         setSavedPlaces(places);
       } catch (error) {
         console.error("Error loading saved places:", error);
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           t("failed_to_load_saved_places") || "נכשל בטעינת המקומות השמורים"
         );
@@ -137,12 +129,12 @@ export default function SavedPlacesScreen() {
     try {
       await unsavePlace(userId, placeId);
       setSavedPlaces(savedPlaces.filter(p => p.id !== placeId));
-      Alert.alert(
+      appAlert(
         t("success") || "הצלחה",
         t("place_removed_from_saved") || "המקום הוסר מהשמורים"
       );
     } catch (error: any) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         error.message || t("failed_to_unsave_place") || "נכשל בהסרת המקום"
       );
@@ -152,7 +144,7 @@ export default function SavedPlacesScreen() {
   };
 
   const handlePlacePress = (place: PlaceForMap) => {
-    Alert.alert(
+    appAlert(
       getPlaceName(place),
       t("view_place_details_question") || "האם תרצה לצפות בנתונים של המקום?",
       [
@@ -165,7 +157,7 @@ export default function SavedPlacesScreen() {
           onPress: () => {
             // Navigate to map based on user role
             if (!userId) {
-              Alert.alert(
+              appAlert(
                 t("error") || "שגיאה",
                 t("error_loading_profile") || "Could not load profile"
               );

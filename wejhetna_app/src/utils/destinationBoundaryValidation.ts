@@ -1,5 +1,5 @@
-import { Alert } from "react-native";
 import type { TFunction } from "i18next";
+import { appAlert } from "./appAlert";
 import { checkLocationInServiceCities } from "../api/places";
 
 export type TranslateFn = TFunction;
@@ -19,7 +19,7 @@ export async function assertDestinationInServiceCities(
   try {
     const boundaryCheck = await checkLocationInServiceCities(lat, lon);
     if (!boundaryCheck.is_within) {
-      Alert.alert(t("location_outside_service_area"), t("destination_must_be_in_service_cities"), [
+      appAlert(t("location_outside_service_area"), t("destination_must_be_in_service_cities"), [
         { text: t("ok") },
       ]);
       return false;
@@ -32,7 +32,7 @@ export async function assertDestinationInServiceCities(
     const now = Date.now();
     if (now - lastBoundaryFailureAlertAt > BOUNDARY_ALERT_COOLDOWN_MS) {
       lastBoundaryFailureAlertAt = now;
-      Alert.alert(t("boundary_check_error"), t("boundary_check_error_message"), [{ text: t("ok") }]);
+      appAlert(t("boundary_check_error"), t("boundary_check_error_message"), [{ text: t("ok") }]);
     }
     return false;
   }

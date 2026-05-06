@@ -450,10 +450,9 @@ class RideVerifyCodeRequest(BaseModel):
 
 
 class RideCompleteRequest(BaseModel):
-    """Either the driver or the passenger confirms they reached the destination on the shared trip screen."""
+    """Passenger confirms the end of the trip after arrival (driver cannot call complete)."""
     ride_request_id: int = Field(..., ge=1)
-    driver_user_id: Optional[int] = Field(None, ge=1)
-    regular_user_id: Optional[int] = Field(None, ge=1)
+    regular_user_id: int = Field(..., ge=1)
 
 
 class DriverRatingCreateRequest(BaseModel):

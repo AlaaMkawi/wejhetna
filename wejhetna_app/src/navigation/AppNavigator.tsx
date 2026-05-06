@@ -46,6 +46,7 @@ import AdvertisementDetailsScreen from "../screens/AdvertisementDetailsScreen";
 import MyAdvertisementsScreen from "../screens/MyAdvertisementsScreen";
 import AdminAdvertisementsPendingScreen from "../screens/Admin/AdminAdvertisementsPendingScreen";
 import AdminAdvertisementDetailsScreen from "../screens/Admin/AdminAdvertisementDetailsScreen";
+import SessionRestoreScreen from "../screens/SessionRestoreScreen";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -53,8 +54,13 @@ export default function AppNavigator() {
   return (
     <Stack.Navigator
       id="RootStack"          // מזהה נחמד ל־navigator (פותח את השגיאה)
-      initialRouteName="Home"
+      initialRouteName="SessionRestore"
     >
+      <Stack.Screen
+        name="SessionRestore"
+        component={SessionRestoreScreen}
+        options={{ headerShown: false, animation: "none" }}
+      />
       <Stack.Screen
         name="Home"
         component={HomeScreen}

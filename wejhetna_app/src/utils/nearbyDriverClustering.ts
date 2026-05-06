@@ -104,10 +104,17 @@ export type ClusterDriversOptions = {
 };
 
 const DEFAULT_OPTIONS: Required<ClusterDriversOptions> = {
-  clusterRadiusPx: 44,
-  spreadZoom: 16,
+  // Slightly tighter than the marker plate so two adjacent (but not
+  // overlapping) drivers stay individually selectable; clusters only form
+  // when the icons would actually overlap in pixel space.
+  clusterRadiusPx: 36,
+  // Spread same-spot drivers a touch earlier so the user does not have to
+  // pinch all the way to max zoom before a stack expands into a fan.
+  spreadZoom: 15,
   sameSpotThresholdM: 12,
-  spreadRingPx: 34,
+  // Wider fan keeps each spread marker comfortably tappable even on dense
+  // clusters of identical-coordinate drivers.
+  spreadRingPx: 38,
 };
 
 /**

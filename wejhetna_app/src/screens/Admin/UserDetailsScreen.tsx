@@ -1,18 +1,8 @@
 // src/screens/Admin/UserDetailsScreen.tsx
 
 import React, { useState, useEffect, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-  StatusBar,
-  Platform,
-  Image,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, StatusBar, Platform, Image } from "react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -175,7 +165,7 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
       ? t("remove_business_owner_message") || `Remove ${user.full_name}? Their account will be set to PENDING (cannot log in), but their business places will remain on the map.`
       : t("delete_user_message") || `Are you sure you want to permanently delete ${user.full_name}? This action cannot be undone.`;
 
-    Alert.alert(
+    appAlert(
       isBusinessOwner ? t("remove_business_owner") || "Remove Business Owner" : t("delete_user") || "Delete User",
       message,
       [
@@ -208,14 +198,14 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
       try {
         json = JSON.parse(responseText);
       } catch {
-        Alert.alert(t("error") || "Error", `Server error: ${responseText.substring(0, 100)}`);
+        appAlert(t("error") || "Error", `Server error: ${responseText.substring(0, 100)}`);
         return;
       }
 
       if (!res.ok) {
-        Alert.alert(t("error") || "Error", json.detail || t("delete_failed") || "Failed to delete user");
+        appAlert(t("error") || "Error", json.detail || t("delete_failed") || "Failed to delete user");
       } else {
-        Alert.alert(
+        appAlert(
           t("success") || "Success",
           user.role === "BUSINESS_OWNER"
             ? t("business_owner_removed") || "Business owner removed. Their places remain on the map."
@@ -226,7 +216,7 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
         );
       }
     } catch (e: any) {
-      Alert.alert(t("error") || "Error", t("network_error") || "Network error: " + e.message);
+      appAlert(t("error") || "Error", t("network_error") || "Network error: " + e.message);
     } finally {
       setDeleting(false);
     }

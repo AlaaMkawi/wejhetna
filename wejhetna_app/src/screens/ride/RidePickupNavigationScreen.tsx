@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { NativeStackScreenProps, NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
 import {
@@ -11,11 +11,16 @@ import {
   RegularLatestRideRequest,
   getDriverRideRequests,
   getRegularLatestRideRequest,
-  parseStoredUserId,
   normalizeRideRequestStatus,
+  parseStoredUserId,
   updateDriverLocation,
 } from "../../api/rides";
 import { requestCurrentPositionWithRetry } from "../../utils/locationPermission";
+import {
+  isDriverRideStatusEligibleForPickupNav,
+  isPassengerRideStatusEligibleForPickupNav,
+} from "../../utils/ridePickupNavigationGuards";
+import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScreen";
 
 const TEAL = "#0f5b63";
 
@@ -51,6 +56,8 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
   const [myDriverGps, setMyDriverGps] = useState<{ lat: number; lon: number } | null>(null);
   const [driverUserId, setDriverUserId] = useState<number | null>(null);
   const launchedRef = useRef(false);
+  /** Passenger: driver already at pickup while this shell is still waiting to launch nav. */
+  const passengerArrivedRedirectDoneRef = useRef(false);
 
   const resolveRole = useCallback(async () => {
     try {
@@ -80,6 +87,19 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
   useEffect(() => {
     void resolveRole();
   }, [resolveRole]);
+
+  useEffect(() => {
+    if (role !== "REGULAR") return;
+    if (passengerArrivedRedirectDoneRef.current) return;
+    const ride = ridePassenger;
+    if (!ride || ride.id !== rideRequestId) return;
+    if (normalizeRideRequestStatus(ride.status) !== "arrived") return;
+    passengerArrivedRedirectDoneRef.current = true;
+    const parent = navigation.getParent() as NativeStackNavigationProp<RootStackParamList> | undefined;
+    if (parent) {
+      navigateToUserRideRequestsTab(parent, "REGULAR");
+    }
+  }, [role, ridePassenger, rideRequestId, navigation]);
 
   useEffect(() => {
     if (role !== "DRIVER") return;
@@ -116,7 +136,10 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
     if (role !== "DRIVER") return;
     const ride = rideDriver;
     if (!ride) return;
-    const status = normalizeRideRequestStatus(ride.status);
+    if (!isDriverRideStatusEligibleForPickupNav(ride.status)) {
+      setError("state");
+      return;
+    }
     const pickupValid =
       ride.pickup_lat != null &&
       ride.pickup_lon != null &&
@@ -124,10 +147,6 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
       Number.isFinite(ride.pickup_lon);
     if (!pickupValid) {
       setError("pickup");
-      return;
-    }
-    if (status !== "on_the_way" && status !== "driving_to_customer" && status !== "accepted") {
-      setError("state");
       return;
     }
     if (!myDriverGps) return;
@@ -147,6 +166,9 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
       },
       originOverride: myDriverGps,
       navigationPhase: "active",
+      // Pickup point can be anywhere — 3-city rule applies only to the
+      // final ride destination, never to where the driver is picking up.
+      skipDestinationBoundaryCheck: true,
       routeDetailsExtras: {
         rideContext: {
           rideRequestId,
@@ -174,8 +196,7 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
     if (role !== "REGULAR") return;
     const ride = ridePassenger;
     if (!ride) return;
-    const status = normalizeRideRequestStatus(ride.status);
-    if (status !== "on_the_way" && status !== "driving_to_customer") {
+    if (!isPassengerRideStatusEligibleForPickupNav(ride.status)) {
       setError("state");
       return;
     }
@@ -219,6 +240,9 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
       // Fresh OSRM fetch on every entry keeps the polyline up-to-date.
       originOverride: driverLive,
       navigationPhase: "active",
+      // Passenger-side viewer of the driver's approach: same pickup point
+      // semantics, so the 3-city destination rule must not apply here.
+      skipDestinationBoundaryCheck: true,
       routeDetailsExtras: {
         rideContext: {
           rideRequestId,
@@ -240,18 +264,17 @@ export default function RidePickupNavigationScreen({ route, navigation }: Props)
     });
   }, [role, ridePassenger, navigation, rideRequestId, t]);
 
-  // If the passenger lands here before the driver has pushed any live location, poll briefly.
+  // Passenger: keep ride snapshot fresh until nav handoff (no live GPS yet, or rare status-only updates).
   useEffect(() => {
     if (role !== "REGULAR") return;
     if (launchedRef.current) return;
     const ride = ridePassenger;
-    if (!ride) return;
-    if (ride.driver_live_lat != null && ride.driver_live_lon != null) return;
+    if (!ride || ride.id !== rideRequestId) return;
     const id = setInterval(() => {
       void resolveRole();
-    }, 2000);
+    }, 2500);
     return () => clearInterval(id);
-  }, [role, ridePassenger, resolveRole]);
+  }, [role, ridePassenger, rideRequestId, resolveRole]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>

@@ -14,12 +14,14 @@ import {
 import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import { RootStackParamList } from "../../navigation/types";
 import { navigateToRideTripToDestination } from "../../utils/rideNavigateToTripScreen";
+import { isPassengerRideUserRole } from "../../utils/ridePassengerRole";
 import { shouldSuppressInProgressTripPromotion } from "../../utils/rideTripStartPromotionGate";
 import { RideVerifySuccessModal } from "./RideVerifySuccessModal";
 
 /**
  * When the *other* party completes OTP, this device sees `arrived` → `in_progress` on poll:
  * same 5s success overlay as the verifying user, then navigate to shared trip screen.
+ * Driver + passenger riders (REGULAR, BUSINESS_OWNER).
  */
 export default function RideTripStartListener() {
   const { t } = useTranslation();
@@ -46,7 +48,8 @@ export default function RideTripStartListener() {
 
     const tick = async () => {
       const role = await AsyncStorage.getItem("userRole");
-      if (!mounted || role !== "DRIVER" && role !== "REGULAR") return;
+      if (!mounted) return;
+      if (role !== "DRIVER" && !isPassengerRideUserRole(role)) return;
 
       const stored = await AsyncStorage.getItem("userId");
       const uid = parseStoredUserId(stored);

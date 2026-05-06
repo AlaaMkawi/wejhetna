@@ -1,22 +1,12 @@
 // src/screens/AdminPlaceFormScreen.tsx
 import { Picker } from "@react-native-picker/picker";
+import { appAlert } from "../../utils/appAlert";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  TouchableOpacity,
-  ScrollView,
-  Platform,
-  StatusBar,
-} from "react-native";
+import { View, Text, TextInput, StyleSheet, ActivityIndicator, TouchableOpacity, ScrollView, Platform, StatusBar } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
 import {
@@ -115,7 +105,7 @@ export default function AdminPlaceFormScreen() {
         }
       } catch (err) {
         console.error(err);
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           t("error_loading_cities_categories") ||
             "שגיאה בטעינת ערים/קטגוריות מהשרת"
@@ -171,35 +161,35 @@ export default function AdminPlaceFormScreen() {
 
   async function handleSubmit() {
     if (!isNameValid) {
-      Alert.alert(t("error") || "שגיאה", t("place_name_required") || "שם המקום חובה");
+      appAlert(t("error") || "שגיאה", t("place_name_required") || "שם המקום חובה");
       return;
     }
     if (!isNameArValid) {
-      Alert.alert(t("error") || "שגיאה", t("place_name_arabic_required") || "שם המקום בערבית חובה");
+      appAlert(t("error") || "שגיאה", t("place_name_arabic_required") || "שם המקום בערבית חובה");
       return;
     }
     if (!isNameHeValid) {
-      Alert.alert(t("error") || "שגיאה", t("place_name_hebrew_required") || "שם המקום בעברית חובה");
+      appAlert(t("error") || "שגיאה", t("place_name_hebrew_required") || "שם המקום בעברית חובה");
       return;
     }
 
     if (!isCityValid) {
-      Alert.alert(t("error") || "שגיאה", t("city_selection_required") || "חובה לבחור עיר");
+      appAlert(t("error") || "שגיאה", t("city_selection_required") || "חובה לבחור עיר");
       return;
     }
 
     if (!isCategoryValid) {
-      Alert.alert(t("error") || "שגיאה", t("category_required_for_business") || "לעסק חובה לבחור קטגוריה");
+      appAlert(t("error") || "שגיאה", t("category_required_for_business") || "לעסק חובה לבחור קטגוריה");
       return;
     }
 
     if (!isLocationValid) {
-      Alert.alert(t("error") || "שגיאה", t("location_selection_required") || "חובה לבחור מיקום על המפה במסך הקודם");
+      appAlert(t("error") || "שגיאה", t("location_selection_required") || "חובה לבחור מיקום על המפה במסך הקודם");
       return;
     }
 
     if (!isPhoneValid) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         t("phone_length_validation") || "מספר הטלפון (אם הוזן) חייב להיות באורך 9 או 10 ספרות"
       );
@@ -234,7 +224,7 @@ export default function AdminPlaceFormScreen() {
         osm_id: pickedOsmId ?? null,
       });
 
-      Alert.alert(
+      appAlert(
         t("success") || "הצלחה",
         t("place_created_successfully") || "המקום נוצר בהצלחה 🎉",
         [
@@ -273,7 +263,7 @@ export default function AdminPlaceFormScreen() {
       const reason =
         err?.message || (t("place_creation_failed_unknown") || "נכשלה יצירת המקום (שגיאה לא ידועה)");
 
-      Alert.alert(
+      appAlert(
         t("error_saving_place") || "שגיאה בשמירת המקום",
         `${t("place_creation_failed") || "נכשלה יצירת המקום."}\n\n${t("possible_reason") || "סיבה אפשרית:"}\n${reason}\n\n${t("would_you_like_to_try_again") || "האם תרצי לנסות שוב?"}`,
         [

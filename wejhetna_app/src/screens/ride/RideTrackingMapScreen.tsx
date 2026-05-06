@@ -1,13 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { ActivityIndicator, Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
@@ -30,10 +23,14 @@ import {
 import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import { requestCurrentPositionWithRetry } from "../../utils/locationPermission";
 import { RideDriverMapMarker } from "../../components/map/RideDriverMapMarker";
+import { RouteEndpointMarker } from "../../components/map/RouteEndpointMarker";
+import { OffRoutePathConnector } from "../../components/map/OffRoutePathConnector";
 import { useDriverTrailHeading } from "../../components/map/useDriverTrailHeading";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
 import { haversineMeters } from "../../utils/routePolyline";
 import { markDriverCancelledOwnRide } from "../../utils/rideCancelAlertGate";
+import { NavigationInfoPanel, type NavInfoStat } from "../../components/navigation/NavigationInfoPanel";
+import i18n from "../../i18n";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -106,6 +103,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     remainingDistanceMeters,
     etaSecondsRemaining,
     routeLoading,
+    osrmLegDistanceM,
   } = useDriverToPickupRouteVisualization(driverDot, pickup);
 
   const driverTrailHeadingDeg = useDriverTrailHeading(
@@ -114,12 +112,24 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     6
   );
 
+  /**
+   * First coordinate of the trimmed remaining route — used as the target of
+   * the dotted off-road connector and the small "start of road" dot.
+   */
+  const routeRemainingStart = useMemo<[number, number] | null>(() => {
+    const coords = routeRemainingFc?.features?.[0]?.geometry?.coordinates;
+    if (!coords || coords.length === 0) return null;
+    const [lon, lat] = coords[0] as [number, number];
+    if (typeof lon !== "number" || typeof lat !== "number") return null;
+    return [lon, lat];
+  }, [routeRemainingFc]);
+
   const statusStr = useMemo(() => {
     if (mode === "driver" && rideDriver) {
       return normalizeRideRequestStatus(rideDriver.status);
     }
     if (mode === "passenger" && ridePassenger) {
-      return ridePassenger.status;
+      return normalizeRideRequestStatus(ridePassenger.status);
     }
     return "pending" as const;
   }, [mode, rideDriver, ridePassenger]);
@@ -369,7 +379,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
 
   const onDriverCancelRidePress = useCallback(() => {
     if (driverUserId == null || driverCancellingRide) return;
-    Alert.alert(
+    appAlert(
       t("ride_driver_cancel_ride_confirm_title"),
       t("ride_driver_cancel_ride_confirm_message"),
       [
@@ -383,15 +393,10 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
               try {
                 await cancelRideRequest(rideRequestId, driverUserId);
                 markDriverCancelledOwnRide();
-                Alert.alert(t("ride_cancelled_by_driver_title"), t("ride_cancelled_by_driver_message"), [
-                  {
-                    text: t("ok"),
-                    onPress: () => navigateDriverOutToRequests(),
-                  },
-                ]);
+                navigateDriverOutToRequests();
               } catch (e: unknown) {
                 const msg = e instanceof Error ? e.message : String(e);
-                Alert.alert(t("error"), msg, [{ text: t("ok") }]);
+                appAlert(t("error"), msg, [{ text: t("ok") }]);
               } finally {
                 setDriverCancellingRide(false);
               }
@@ -408,6 +413,57 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     }
     return apiDistKm;
   }, [remainingDistanceMeters, apiDistKm]);
+
+  const legProgress01 = useMemo(() => {
+    if (osrmLegDistanceM == null || osrmLegDistanceM <= 0 || remainingDistanceMeters == null) {
+      return 0;
+    }
+    return Math.max(0, Math.min(1, 1 - remainingDistanceMeters / osrmLegDistanceM));
+  }, [osrmLegDistanceM, remainingDistanceMeters]);
+
+  const arrivalClockLine = useMemo(() => {
+    if (etaSecondsRemaining != null && Number.isFinite(etaSecondsRemaining)) {
+      const locale = i18n.language === "he" ? "he-IL" : "ar";
+      return new Date(Date.now() + etaSecondsRemaining * 1000).toLocaleTimeString(locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+    if (apiEtaMin != null) {
+      const locale = i18n.language === "he" ? "he-IL" : "ar";
+      return new Date(Date.now() + apiEtaMin * 60_000).toLocaleTimeString(locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+    return null;
+  }, [etaSecondsRemaining, apiEtaMin, i18n.language]);
+
+  const trackingNavStats = useMemo((): [NavInfoStat, NavInfoStat, NavInfoStat] => {
+    return [
+      {
+        label: t("ride_tracking_passenger_live_eta_label"),
+        value: liveEtaPrimaryLine ?? t("ride_tracking_eta_pending"),
+        icon: "time-outline",
+        highlight: true,
+        valueFlexible: true,
+      },
+      {
+        label: t("distance"),
+        value:
+          distDisplayKm != null
+            ? t("ride_distance_to_pickup_km", { km: distDisplayKm })
+            : t("ride_tracking_distance_pending"),
+        icon: "navigate-outline",
+        valueFlexible: true,
+      },
+      {
+        label: t("eta_arrival"),
+        value: arrivalClockLine ?? "—",
+        icon: "location-outline",
+      },
+    ];
+  }, [t, liveEtaPrimaryLine, distDisplayKm, arrivalClockLine]);
 
   const activeRide =
     mode === "driver"
@@ -504,10 +560,31 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   />
                 </ShapeSource>
               ) : null}
-              <PointAnnotation id="pickup_mark" coordinate={[pickup.lon, pickup.lat]}>
-                <View style={styles.markerPickup}>
-                  <Ionicons name="navigate" size={20} color="#fff" />
-                </View>
+              {/* Dotted leader line from the live driver dot to the start of
+                  the trimmed remaining route — only shows when the driver is
+                  visibly off the road geometry. */}
+              <OffRoutePathConnector
+                id="rideRouteConnector"
+                from={driverDot}
+                to={routeRemainingStart}
+                color={ROUTE_BLUE}
+                width={3}
+              />
+              {/* Small start dot at the road origin so the route reads as a
+                  proper path (driver → road → destination). */}
+              {routeRemainingStart ? (
+                <PointAnnotation
+                  id="rideRouteStart"
+                  coordinate={routeRemainingStart}
+                >
+                  <RouteEndpointMarker variant="start" color={ROUTE_BLUE} />
+                </PointAnnotation>
+              ) : null}
+              <PointAnnotation
+                id="pickup_mark"
+                coordinate={[pickup.lon, pickup.lat]}
+              >
+                <RouteEndpointMarker variant="end" iconName="navigate" />
               </PointAnnotation>
               {driverDot ? (
                 <PointAnnotation
@@ -532,68 +609,60 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
             ) : null}
           </View>
 
-          <View style={styles.panel}>
-            <Text style={styles.panelStatus}>{t(`ride_status_${statusStr}`)}</Text>
-            {mode === "driver" && rideDriver ? (
-              <View style={styles.driverPassengerInfo}>
-                <Text style={styles.driverPassengerLine}>
-                  {t("ride_driver_map_passenger_line", { username: rideDriver.regular_username })}
-                </Text>
-                {rideDriver.regular_phone ? (
-                  <TouchableOpacity
-                    onPress={() => Linking.openURL(`tel:${rideDriver.regular_phone}`)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.driverPhoneLink}>
-                      {t("ride_driver_map_phone_line", { phone: rideDriver.regular_phone })}
-                    </Text>
-                  </TouchableOpacity>
-                ) : (
-                  <Text style={styles.panelMuted}>{t("ride_phone_visible_after_accept")}</Text>
-                )}
-              </View>
-            ) : null}
-            {distDisplayKm != null ? (
-              <Text style={styles.panelLine}>
-                {t("ride_distance_to_pickup_km", { km: distDisplayKm })}
-              </Text>
-            ) : (
-              <Text style={styles.panelMuted}>{t("ride_tracking_distance_pending")}</Text>
-            )}
-            {remainingDistanceMeters != null && remainingDistanceMeters < 5000 ? (
-              <Text style={styles.panelSubLine}>
-                {t("ride_tracking_remaining_meters", {
-                  meters: Math.max(0, Math.round(remainingDistanceMeters)),
-                })}
-              </Text>
-            ) : null}
-            {mode === "passenger" && !driverDot ? (
-              <Text style={styles.panelHint}>{t("ride_tracking_waiting_driver_location")}</Text>
-            ) : null}
-            {mode === "driver" && !myDriverGps ? (
-              <Text style={styles.panelHint}>{t("ride_tracking_waiting_gps")}</Text>
-            ) : null}
-          </View>
-
           {mode === "passenger" || mode === "driver" ? (
-            <View
-              style={[
-                styles.passengerEtaFooter,
-                { paddingBottom: mode === "passenger" ? Math.max(12, insets.bottom) : 10 },
-              ]}
-            >
-              <Text style={styles.passengerEtaFooterLabel}>{t("ride_tracking_passenger_live_eta_label")}</Text>
-              {liveEtaPrimaryLine ? (
-                <Text style={styles.passengerEtaFooterValue}>{liveEtaPrimaryLine}</Text>
-              ) : (
-                <Text style={styles.passengerEtaFooterPending}>{t("ride_tracking_eta_pending")}</Text>
-              )}
-              <Text style={styles.passengerEtaFooterSub}>
-                {mode === "passenger"
+            <NavigationInfoPanel
+              accentColor={TEAL}
+              isLive
+              showLiveDot
+              liveLabel={t(`ride_status_${statusStr}`)}
+              stats={trackingNavStats}
+              footNote={
+                mode === "passenger"
                   ? t("ride_tracking_passenger_live_eta_sub")
-                  : t("ride_tracking_driver_live_eta_sub")}
-              </Text>
-            </View>
+                  : t("ride_tracking_driver_live_eta_sub")
+              }
+              progress={legProgress01}
+              showProgress={Boolean(
+                osrmLegDistanceM != null && osrmLegDistanceM > 0 && remainingDistanceMeters != null
+              )}
+              startLabel={t("ride_trip_label_driver")}
+              endLabel={t("ride_pickup")}
+              contentPaddingBottom={mode === "passenger" ? Math.max(8, insets.bottom) : 8}
+              style={styles.trackingNavPanel}
+            >
+              {mode === "driver" && rideDriver ? (
+                <View style={styles.driverPassengerInfo}>
+                  <Text style={styles.driverPassengerLine}>
+                    {t("ride_driver_map_passenger_line", { username: rideDriver.regular_username })}
+                  </Text>
+                  {rideDriver.regular_phone ? (
+                    <TouchableOpacity
+                      onPress={() => Linking.openURL(`tel:${rideDriver.regular_phone}`)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.driverPhoneLink}>
+                        {t("ride_driver_map_phone_line", { phone: rideDriver.regular_phone })}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={styles.trackingPanelMuted}>{t("ride_phone_visible_after_accept")}</Text>
+                  )}
+                </View>
+              ) : null}
+              {remainingDistanceMeters != null && remainingDistanceMeters < 5000 ? (
+                <Text style={styles.trackingSubLine}>
+                  {t("ride_tracking_remaining_meters", {
+                    meters: Math.max(0, Math.round(remainingDistanceMeters)),
+                  })}
+                </Text>
+              ) : null}
+              {mode === "passenger" && !driverDot ? (
+                <Text style={styles.trackingPanelHint}>{t("ride_tracking_waiting_driver_location")}</Text>
+              ) : null}
+              {mode === "driver" && !myDriverGps ? (
+                <Text style={styles.trackingPanelHint}>{t("ride_tracking_waiting_gps")}</Text>
+              ) : null}
+            </NavigationInfoPanel>
           ) : null}
 
           {mode === "driver" ? (
@@ -669,19 +738,11 @@ const styles = StyleSheet.create({
   },
   routeLoadingText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   routeLoadingTextPad: { marginLeft: 10 },
-  panel: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#ddd",
-  },
-  panelStatus: { fontSize: 16, fontWeight: "700", color: TEAL, marginBottom: 6 },
-  panelLine: { fontSize: 15, color: "#222", marginTop: 4 },
-  panelSubLine: { fontSize: 13, color: "#444", marginTop: 2 },
-  panelMuted: { fontSize: 13, color: "#777", marginTop: 4 },
-  panelHint: { fontSize: 13, color: "#664d03", marginTop: 8, lineHeight: 18 },
-  driverPassengerInfo: { marginTop: 4, marginBottom: 8 },
+  trackingNavPanel: { borderTopWidth: 0 },
+  trackingSubLine: { fontSize: 13, color: "#444", marginTop: 6 },
+  trackingPanelHint: { fontSize: 13, color: "#664d03", marginTop: 8, lineHeight: 18 },
+  trackingPanelMuted: { fontSize: 13, color: "#777", marginTop: 4 },
+  driverPassengerInfo: { marginTop: 0, marginBottom: 4 },
   driverPassengerLine: { fontSize: 15, fontWeight: "700", color: "#111", marginBottom: 6 },
   driverPhoneLink: {
     fontSize: 15,
@@ -718,42 +779,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: TEAL,
     marginStart: 8,
-  },
-  passengerEtaFooter: {
-    backgroundColor: "#e8f5f0",
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#b2dfdb",
-  },
-  passengerEtaFooterLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#00695c",
-    textAlign: "center",
-    letterSpacing: 0.3,
-  },
-  passengerEtaFooterValue: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: TEAL,
-    textAlign: "center",
-    marginTop: 6,
-    lineHeight: 30,
-  },
-  passengerEtaFooterPending: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#666",
-    textAlign: "center",
-    marginTop: 8,
-  },
-  passengerEtaFooterSub: {
-    fontSize: 12,
-    color: "#555",
-    textAlign: "center",
-    marginTop: 8,
-    lineHeight: 17,
   },
   markerPickup: {
     width: 40,

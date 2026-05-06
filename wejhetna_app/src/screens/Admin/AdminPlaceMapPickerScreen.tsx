@@ -1,7 +1,8 @@
 // src/screens/Admin/AdminPlaceMapPickerScreen.tsx
 
 import React, { useState, useEffect } from "react";
-import { View, StyleSheet, Text, Alert, TouchableOpacity, Platform, StatusBar } from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar } from "react-native";
 import {
   MapView,
   Camera,
@@ -157,7 +158,7 @@ export default function AdminPlaceMapPickerScreen() {
       try {
         const boundaryCheck = await checkLocationInServiceCities(lat, lon);
         if (!boundaryCheck.is_within) {
-          Alert.alert(
+          appAlert(
             t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
             t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום בתוך אחת מהערים.",
             [{ text: t("ok") || "אישור" }]
@@ -197,7 +198,7 @@ export default function AdminPlaceMapPickerScreen() {
         try {
           const boundaryCheck = await checkLocationInServiceCities(latitude, longitude);
           if (!boundaryCheck.is_within) {
-            Alert.alert(
+            appAlert(
               t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
               t("current_location_outside_service_area") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nהמיקום הנוכחי שלך נמצא מחוץ לאזור השירות.",
               [{ text: t("ok") || "אישור" }]
@@ -213,7 +214,7 @@ export default function AdminPlaceMapPickerScreen() {
           console.error("Error checking boundary:", error);
           // אם יש שגיאה בבדיקה, מציגים הודעה למשתמש
           const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
-          Alert.alert(
+          appAlert(
             t("boundary_check_error") || "שגיאה בבדיקת גבולות",
             `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
             [
@@ -267,7 +268,7 @@ export default function AdminPlaceMapPickerScreen() {
       },
       (error) => {
         console.log("GPS error", error);
-        Alert.alert(
+        appAlert(
           t("location_error") || "שגיאה במיקום",
           t("failed_to_read_location") || "לא הצלחנו לקרוא את המיקום מהמכשיר."
         );
@@ -283,7 +284,7 @@ export default function AdminPlaceMapPickerScreen() {
 
   async function handleConfirm() {
     if (selectedLat == null || selectedLon == null) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         t("please_select_location") || "אנא בחר מיקום על המפה או השתמש במיקום הנוכחי."
       );
@@ -298,7 +299,7 @@ export default function AdminPlaceMapPickerScreen() {
       );
 
       if (!boundaryCheck.is_within) {
-        Alert.alert(
+        appAlert(
           t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
           t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום אחר.",
           [{ text: t("ok") || "אישור" }]
@@ -311,7 +312,7 @@ export default function AdminPlaceMapPickerScreen() {
       const finalCityId = detectedCityId || boundaryCheck.city_id;
       
       if (!finalCityId) {
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           t("failed_to_detect_city") || "לא הצלחנו לזהות את העיר. אנא נסה שוב.",
           [{ text: t("ok") || "אישור" }]
@@ -331,7 +332,7 @@ export default function AdminPlaceMapPickerScreen() {
     } catch (error: any) {
       console.error("Error checking city boundary:", error);
       const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
-      Alert.alert(
+      appAlert(
         t("boundary_check_error") || "שגיאה בבדיקת גבולות",
         `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
         [

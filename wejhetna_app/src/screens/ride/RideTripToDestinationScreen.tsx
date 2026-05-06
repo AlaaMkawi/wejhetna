@@ -19,10 +19,14 @@ import {
 } from "../../api/rides";
 import { requestCurrentPositionWithRetry } from "../../utils/locationPermission";
 import { RideDriverMapMarker } from "../../components/map/RideDriverMapMarker";
+import { RouteEndpointMarker } from "../../components/map/RouteEndpointMarker";
+import { OffRoutePathConnector } from "../../components/map/OffRoutePathConnector";
 import { useDriverTrailHeading } from "../../components/map/useDriverTrailHeading";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
 import { RideDestinationDetailsModal } from "../../components/ride/RideDestinationDetailsModal";
 import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScreen";
+import { NavigationInfoPanel, type NavInfoStat } from "../../components/navigation/NavigationInfoPanel";
+import i18n from "../../i18n";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -162,9 +166,23 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
     remainingDistanceMeters,
     etaSecondsRemaining,
     routeLoading,
+    osrmLegDistanceM,
   } = useDriverToPickupRouteVisualization(driverDot, destination);
 
   const driverTrailHeadingDeg = useDriverTrailHeading(driverDot?.lat, driverDot?.lon, 6);
+
+  /**
+   * First coordinate of the trimmed remaining route — used as the target of
+   * the dotted off-road connector and the small "start of road" dot, so the
+   * trip route reads consistently with the pickup-route visual.
+   */
+  const routeRemainingStart = useMemo<[number, number] | null>(() => {
+    const coords = routeRemainingFc?.features?.[0]?.geometry?.coordinates;
+    if (!coords || coords.length === 0) return null;
+    const [lon, lat] = coords[0] as [number, number];
+    if (typeof lon !== "number" || typeof lat !== "number") return null;
+    return [lon, lat];
+  }, [routeRemainingFc]);
 
   const etaLine = useMemo(() => {
     if (etaSecondsRemaining != null && Number.isFinite(etaSecondsRemaining)) {
@@ -186,6 +204,47 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
     }
     return null;
   }, [remainingDistanceMeters]);
+
+  const legProgress = useMemo(() => {
+    if (osrmLegDistanceM == null || osrmLegDistanceM <= 0 || remainingDistanceMeters == null) return 0;
+    return Math.max(0, Math.min(1, 1 - remainingDistanceMeters / osrmLegDistanceM));
+  }, [osrmLegDistanceM, remainingDistanceMeters]);
+
+  const arrivalClock = useMemo(() => {
+    if (etaSecondsRemaining == null || !Number.isFinite(etaSecondsRemaining)) return null;
+    const locale = i18n.language === "he" ? "he-IL" : "ar";
+    return new Date(Date.now() + etaSecondsRemaining * 1000).toLocaleTimeString(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }, [etaSecondsRemaining]);
+
+  const tripNavStats = useMemo((): [NavInfoStat, NavInfoStat, NavInfoStat] => {
+    const distLabel = t("distance");
+    return [
+      {
+        label: t("ride_tracking_passenger_live_eta_label"),
+        value: etaLine ?? t("ride_tracking_eta_pending"),
+        icon: "time-outline",
+        highlight: true,
+        valueFlexible: true,
+      },
+      {
+        label: distLabel,
+        value:
+          distKm != null
+            ? t("ride_trip_distance_remaining_km", { km: distKm })
+            : t("ride_tracking_distance_pending"),
+        icon: "navigate-outline",
+        valueFlexible: true,
+      },
+      {
+        label: t("eta_arrival"),
+        value: arrivalClock ?? "—",
+        icon: "location-outline",
+      },
+    ];
+  }, [t, etaLine, distKm, arrivalClock]);
 
   const cameraSettings = useMemo(() => {
     if (!destination) return null;
@@ -349,10 +408,29 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
                   />
                 </ShapeSource>
               ) : null}
-              <PointAnnotation id="dest_mark" coordinate={[destination.lon, destination.lat]}>
-                <View style={styles.markerDest}>
-                  <Ionicons name="flag" size={18} color="#fff" />
-                </View>
+              {/* Dotted leader line from the live driver dot to the start of
+                  the remaining road route — keeps the trip flow visually
+                  consistent with the pickup tracking flow. */}
+              <OffRoutePathConnector
+                id="tripRouteConnector"
+                from={driverDot}
+                to={routeRemainingStart}
+                color={ROUTE_BLUE}
+                width={3}
+              />
+              {routeRemainingStart ? (
+                <PointAnnotation
+                  id="tripRouteStart"
+                  coordinate={routeRemainingStart}
+                >
+                  <RouteEndpointMarker variant="start" color={ROUTE_BLUE} />
+                </PointAnnotation>
+              ) : null}
+              <PointAnnotation
+                id="dest_mark"
+                coordinate={[destination.lon, destination.lat]}
+              >
+                <RouteEndpointMarker variant="end" iconName="flag" />
               </PointAnnotation>
               {driverDot ? (
                 <PointAnnotation id="driver_trip" coordinate={[driverDot.lon, driverDot.lat]}>
@@ -368,16 +446,20 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
             ) : null}
           </View>
 
-          <View style={styles.panel}>
-            <Text style={styles.panelTitle}>{t("ride_trip_live_progress_title")}</Text>
-            {etaLine ? <Text style={styles.panelLine}>{etaLine}</Text> : (
-              <Text style={styles.panelMuted}>{t("ride_tracking_eta_pending")}</Text>
+          <NavigationInfoPanel
+            accentColor={TEAL}
+            isLive
+            showLiveDot
+            liveLabel={t("ride_trip_live_progress_title")}
+            stats={tripNavStats}
+            progress={legProgress}
+            showProgress={Boolean(
+              osrmLegDistanceM != null && osrmLegDistanceM > 0 && remainingDistanceMeters != null
             )}
-            {distKm != null ? (
-              <Text style={styles.panelLine}>{t("ride_trip_distance_remaining_km", { km: distKm })}</Text>
-            ) : (
-              <Text style={styles.panelMuted}>{t("ride_tracking_distance_pending")}</Text>
-            )}
+            startLabel={t("ride_trip_label_driver")}
+            endLabel={t("ride_destination")}
+            style={styles.tripNavPanel}
+          >
             <View style={styles.participants}>
               <Text style={styles.participantsTitle}>{t("ride_trip_participants_title")}</Text>
               {role === "DRIVER" && rd ? (
@@ -418,7 +500,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
                       </Text>
                     </TouchableOpacity>
                   ) : (
-                    <Text style={styles.panelMuted}>{t("ride_trip_phone_hidden")}</Text>
+                    <Text style={styles.tripPanelMuted}>{t("ride_trip_phone_hidden")}</Text>
                   )}
                   <Text style={styles.participantLine}>
                     {t("ride_trip_label_passenger")}: {t("ride_trip_you_marker")}
@@ -437,7 +519,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
               <Ionicons name="information-circle-outline" size={22} color="#fff" />
               <Text style={styles.destBtnText}>{t("ride_trip_destination_details_button")}</Text>
             </TouchableOpacity>
-          </View>
+          </NavigationInfoPanel>
         </>
       )}
 
@@ -480,17 +562,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   routeLoadingText: { color: "#fff", fontSize: 13, fontWeight: "600", marginLeft: 10 },
-  panel: {
-    backgroundColor: "#fff",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#ddd",
+  tripNavPanel: {
+    borderTopWidth: 0,
   },
-  panelTitle: { fontSize: 16, fontWeight: "700", color: TEAL, marginBottom: 8 },
-  panelLine: { fontSize: 15, color: "#222", marginTop: 4 },
-  panelMuted: { fontSize: 13, color: "#777", marginTop: 4 },
-  participants: { marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#eee" },
+  tripPanelMuted: { fontSize: 13, color: "#777", marginTop: 4 },
+  participants: { marginTop: 6, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#E8EDF0" },
   participantsTitle: { fontSize: 14, fontWeight: "700", color: "#111", marginBottom: 8 },
   participantLine: { fontSize: 14, color: "#333", marginBottom: 4 },
   phoneLink: { fontSize: 14, fontWeight: "600", color: "#1565c0", marginBottom: 6, textDecorationLine: "underline" },

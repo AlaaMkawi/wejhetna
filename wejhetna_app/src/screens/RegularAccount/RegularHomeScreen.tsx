@@ -1,24 +1,8 @@
 // src/screens/RegularAccount/RegularHomeScreen.tsx
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ScrollView,
-  Image,
-  PanResponder,
-  StatusBar,
-  Dimensions,
-  Linking,
-  Modal,
-  ActivityIndicator,
-  DeviceEventEmitter,
-  FlatList,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, Image, PanResponder, StatusBar, Dimensions, Linking, Modal, ActivityIndicator, DeviceEventEmitter, FlatList } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -36,12 +20,17 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
+import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import { isOpenNow } from "../../utils/openingHours";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
 import DriverInfoPopup from "../../components/ride/DriverInfoPopup";
-import { RideDriverMapMarker } from "../../components/map/RideDriverMapMarker";
+import { NearbyDriverTaxiMarker } from "../../components/map/NearbyDriverTaxiMarker";
 import { RideDriverClusterMarker } from "../../components/map/RideDriverClusterMarker";
+import { MapPin, type MapPinCategory } from "../../components/map/MapPin";
+import { UserLocationDot } from "../../components/map/UserLocationDot";
+import { MapPickedDestinationPanel } from "../../components/map/MapPickedDestinationPanel";
+import { quantizeZoomForMarkers } from "../../components/map/markerScale";
 import {
   clusterNearbyDrivers,
   zoomInTargetForCluster,
@@ -60,7 +49,7 @@ import {
   RegularLatestRideRequest,
   rideApiDetailToTranslationKey,
 } from "../../api/rides";
-import { NEARBY_DRIVER_RADIUS_M, RIDE_STATUS_POLL_INTERVAL_MS, RIDE_UI_BUILD } from "../../../config";
+import { NEARBY_DRIVER_RADIUS_M, RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import { getUserProfile } from "../../api/profileApi";
 
 const MAP_STYLE_URL =
@@ -69,19 +58,31 @@ const MAP_STYLE_URL =
 const INITIAL_CENTER: [number, number] = [34.83, 31.24];
 const INITIAL_ZOOM = 12.5;
 
-// Zoom thresholds for displaying different types of places
-// At zoom < 13: Only roads and city outlines (handled by MapTiler style)
-// At zoom 13-14: Road names appear (handled by MapTiler style)
-// At zoom 15-16.4: Only PUBLIC_SERVICE places appear with icons
-// At zoom 16.5+: All places (PUBLIC_SERVICE + BUSINESS) appear with icons
-const PUBLIC_SERVICE_ZOOM_THRESHOLD = 15; // Show public services (mosques, schools, clinics) at zoom 15+
-const BUSINESS_ZOOM_THRESHOLD = 16.5; // Show businesses at zoom 16.5+ (only after public services are already visible)
+/**
+ * Marker visibility / labelling thresholds.
+ *
+ * Spec: "Important categories (hospital, school, etc.) should always be visible" — so
+ * PUBLIC_SERVICE places no longer disappear at low zoom; the smooth pin scaling
+ * (`getMapPinScale`) shrinks them gracefully to ~0.85x instead. Businesses still gate
+ * on zoom (otherwise the map gets visually crowded in city view) but the threshold
+ * is lowered substantially from the previous 16.5 to 14 so they appear much earlier.
+ *
+ * Labels are gated more strictly than markers — at low zoom we want the icons to be
+ * recognisable but we don't want a wall of text overlapping each other.
+ */
+const PUBLIC_SERVICE_VISIBILITY_ZOOM = 0; // always visible — hospitals/schools/etc. never disappear
+const PUBLIC_SERVICE_LABEL_ZOOM = 15; // labels only when zoomed enough to read
+const BUSINESS_VISIBILITY_ZOOM = 14;
+const BUSINESS_LABEL_ZOOM = 16;
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-rounded corners)
 const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
 const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי (75% מהמסך)
 const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
+/** Inset for the map "pick destination" FAB so it sits clearly above the tab bar. */
+const MAP_PICK_DEST_FAB_BOTTOM = 124;
+const MAP_PICK_DEST_BANNER_BOTTOM = MAP_PICK_DEST_FAB_BOTTOM + 56 + 12;
 
 const NEGEV_BOUNDS = {
   ne: [35.10, 31.42],
@@ -329,6 +330,8 @@ type Props = {
 
 export default function RegularHomeScreen({}: Props) {
   const { t } = useTranslation();
+  const mapPickFabBottom = useOverlayBottomOffset(MAP_PICK_DEST_FAB_BOTTOM);
+  const mapPickBannerBottom = useOverlayBottomOffset(MAP_PICK_DEST_BANNER_BOTTOM);
   const routeParams = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
@@ -474,7 +477,7 @@ export default function RegularHomeScreen({}: Props) {
         setPlaces(data);
       } catch (e) {
         console.error("Failed to load places:", e);
-        Alert.alert(
+        appAlert(
           t("error") || "Error",
           t("failed_to_load_places") || "Failed to load places. Please check your connection and try again."
         );
@@ -691,7 +694,7 @@ export default function RegularHomeScreen({}: Props) {
         setAnnouncementTargetLang(targetLang);
         setAnnouncementIsTranslated(true);
       } catch (error: any) {
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error.message || t("translation_failed") || "נכשל בתרגום"
         );
@@ -714,7 +717,7 @@ export default function RegularHomeScreen({}: Props) {
         setDescriptionTargetLang(targetLang);
         setDescriptionIsTranslated(true);
       } catch (error: any) {
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error.message || t("translation_failed") || "נכשל בתרגום"
         );
@@ -735,20 +738,20 @@ export default function RegularHomeScreen({}: Props) {
       if (isPlaceSaved) {
         await unsavePlace(userId, selectedPlace.id);
         setIsPlaceSaved(false);
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_removed_from_saved") || "המקום הוסר מהשמורים"
         );
       } else {
         await savePlace(userId, selectedPlace.id);
         setIsPlaceSaved(true);
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_saved_successfully") || "המקום נשמר בהצלחה"
         );
       }
     } catch (error: any) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         error.message || t("failed_to_save_place") || "נכשל בשמירת המקום"
       );
@@ -845,15 +848,20 @@ export default function RegularHomeScreen({}: Props) {
   });
 
   const onRegionDidChange = async (feature: any) => {
-    const [lon, lat] = feature.geometry.coordinates;
-    const newZoom = feature.properties.zoomLevel;
-    setCurrentZoom(newZoom);
-
-    if (lon < 34.72 || lat > 31.43) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: [34.75, 31.39],
-        animationDuration: 600,
-      });
+    // We used to re-center the camera whenever it drifted past a hardcoded
+    // threshold, but that fought the user's own zoom/pan gestures (the map
+    // appeared to "bounce back" mid-pinch). The Camera's `maxBounds` below
+    // already keeps the view inside the Negev service area naturally, so
+    // here we only need to track the latest zoom level for marker visibility.
+    //
+    // Quantize to half-steps before committing to state so a continuous pinch
+    // gesture only triggers a (re)render of all PointAnnotations when zoom
+    // actually crosses a step — the smooth `transform: scale()` interpolation
+    // in `MapPin` / `UserLocationDot` does the visual smoothing per pin.
+    const newZoom = feature?.properties?.zoomLevel;
+    if (typeof newZoom === "number") {
+      const next = quantizeZoomForMarkers(newZoom);
+      setCurrentZoom((prev) => (prev === next ? prev : next));
     }
   };
 
@@ -913,6 +921,22 @@ export default function RegularHomeScreen({}: Props) {
       return null;
     });
   }, []);
+
+  /**
+   * Closes the picked-point panel by clearing the dropped pin and the associated
+   * destination. The known-place panel uses `destinationAfterClosingPlaceDetails`
+   * to preserve a route, but for an unnamed picked point there is nothing else
+   * to preserve, so we simply clear both.
+   */
+  const dismissPickedDestinationPanel = useCallback(() => {
+    setCustomPin(null);
+    setDestination(null);
+    setRideDestinationInput("");
+  }, []);
+
+  /** True when the active destination came from a map pick (long-press / tap-pick). */
+  const isPickedDestinationActive =
+    !!customPin && !selectedPlace && !!destination;
 
   const handlePlaceTap = async (place: PlaceForMap) => {
     if (!place.location) return;
@@ -1059,7 +1083,7 @@ export default function RegularHomeScreen({}: Props) {
       return;
     }
     if (hasBlockingPassengerRide) {
-      Alert.alert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
+      appAlert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
       return;
     }
 
@@ -1076,14 +1100,14 @@ export default function RegularHomeScreen({}: Props) {
 
     if (missingPickup || missingDest) {
       if (missingPickup) {
-        Alert.alert(t("error"), t("ride_location_unavailable_hint"));
+        appAlert(t("error"), t("ride_location_unavailable_hint"));
       } else if (missingDest) {
-        Alert.alert(t("error"), t("ride_destination_required") || t("ride_destination_input_placeholder"));
+        appAlert(t("error"), t("ride_destination_required") || t("ride_destination_input_placeholder"));
       }
       return;
     }
     if (!userPhone) {
-      Alert.alert(t("error"), t("ride_phone_required"));
+      appAlert(t("error"), t("ride_phone_required"));
       return;
     }
 
@@ -1115,7 +1139,7 @@ export default function RegularHomeScreen({}: Props) {
         : null;
     const passengers = passengersFromPopup ?? ridePassengers;
     if (passengers <= 0) {
-      Alert.alert(t("error"), t("ride_invalid_people_or_seats"));
+      appAlert(t("error"), t("ride_invalid_people_or_seats"));
       return;
     }
     if (passengersFromPopup != null && passengersFromPopup !== ridePassengers) {
@@ -1146,13 +1170,13 @@ export default function RegularHomeScreen({}: Props) {
       setRideSendErrorHint(null);
       setSelectedDriver(null);
       void refreshPassengerLatestRide();
-      Alert.alert(t("success"), t("ride_request_sent"));
+      appAlert(t("success"), t("ride_request_sent"));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       const short = msg.length > 180 ? `${msg.slice(0, 177)}…` : msg;
       setRideSendErrorHint(short || null);
       const key = rideApiDetailToTranslationKey(msg);
-      Alert.alert(t("error"), key ? t(key) : t("ride_failed_create_request"), [{ text: t("ok") || "OK" }]);
+      appAlert(t("error"), key ? t(key) : t("ride_failed_create_request"), [{ text: t("ok") || "OK" }]);
     } finally {
       setCreatingRideRequest(false);
     }
@@ -1160,15 +1184,15 @@ export default function RegularHomeScreen({}: Props) {
 
   const handleRideWithDriverFromPlaceDetails = async () => {
     if (!userId) {
-      Alert.alert(t("error"), t("ride_session_invalid"));
+      appAlert(t("error"), t("ride_session_invalid"));
       return;
     }
     if (hasBlockingPassengerRide) {
-      Alert.alert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
+      appAlert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
       return;
     }
     if (!userLocation) {
-      Alert.alert(t("error"), t("ride_location_unavailable_hint"));
+      appAlert(t("error"), t("ride_location_unavailable_hint"));
       return;
     }
     if (!destination) {
@@ -1189,7 +1213,7 @@ export default function RegularHomeScreen({}: Props) {
       });
       setNearbyDrivers(drivers);
       if (drivers.length === 0) {
-        Alert.alert(t("error"), t("ride_no_drivers_nearby"));
+        appAlert(t("error"), t("ride_no_drivers_nearby"));
         return;
       }
       // Focus the map on the fetched drivers so every available driver is visible.
@@ -1203,7 +1227,7 @@ export default function RegularHomeScreen({}: Props) {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       const key = rideApiDetailToTranslationKey(msg);
-      Alert.alert(t("error"), key ? t(key) : t("ride_failed_load_requests"), [{ text: t("ok") || "OK" }]);
+      appAlert(t("error"), key ? t(key) : t("ride_failed_load_requests"), [{ text: t("ok") || "OK" }]);
     } finally {
       setRideWithDriverLoading(false);
     }
@@ -1290,14 +1314,12 @@ export default function RegularHomeScreen({}: Props) {
           animationMode="flyTo"
         />
 
-        {/* User Location Marker — hidden while picking so the first tap hits the map, not the annotation */}
-        {userLocation && !isPickingMapDestination && (
-          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
-              <View style={styles.userLocationDot} />
-            </View>
-          </PointAnnotation>
-        )}
+        {/*
+         * User location is rendered LAST in this MapView — see the bottom of the children list,
+         * just before driver markers. PointAnnotation z-order follows React child order in
+         * @maplibre/maplibre-react-native, so rendering the user dot after place pins keeps it
+         * "always on top" (per spec) without any explicit zIndex hack.
+         */}
 
         {isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
@@ -1330,149 +1352,75 @@ export default function RegularHomeScreen({}: Props) {
 
         {!isPickingMapDestination &&
           places.map((place) => {
-          if (!place.location) return null;
-          
-          const isSelected = selectedPlace?.id === place.id;
-          const placeIcon = getPlaceIcon(place);
-          
-          // Determine visibility based on zoom level and place type
-          let shouldShow = false;
-          let shouldShowLabel = false;
-          
-          if (place.place_type === 'PUBLIC_SERVICE') {
-            shouldShow = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
-            shouldShowLabel = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
-          } else if (place.place_type === 'BUSINESS') {
-            shouldShow = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
-            shouldShowLabel = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
-          }
-          
-          if (!shouldShow) return null;
+            if (!place.location) return null;
 
-          return (
-            <PointAnnotation
-              key={place.id}
-              id={String(place.id)}
-              coordinate={[place.location.lon, place.location.lat]}
-              onSelected={() => {
-                console.log("Place selected:", place.id, place.name);
-                handlePlaceTap(place);
-              }}
-            >
-              <View style={styles.nativeMarkerContainer}>
-                {/* Icon/Marker based on place type - Google Maps style */}
-                {place.place_type === 'PUBLIC_SERVICE' ? (
-                  <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
-                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
-                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
-                      {/* Icon circle - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.iconContainer, 
-                        isSelected && styles.iconContainerSelected,
-                        { backgroundColor: placeIcon.color }
-                      ]}>
-                        {placeIcon.type === 'mosque' && (
-                          <MaterialCommunityIcons name="mosque" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'school' && (
-                          <Ionicons name="school" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'clinic' && (
-                          <MaterialCommunityIcons name="hospital-building" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'kindergarten' && (
-                          <MaterialCommunityIcons name="baby-face-outline" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'community' && (
-                          <MaterialCommunityIcons name="account-group" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'home' && (
-                          <Ionicons name="home" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'public' && (
-                          <Ionicons name="location" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                      </View>
-                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.pinPoint, 
-                        isSelected && styles.pinPointSelected,
-                        { borderTopColor: placeIcon.color }
-                      ]} />
-                    </View>
-                  </View>
-                ) : (
-                  <View style={[styles.businessMarker, isSelected && styles.markerSelected]}>
-                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
-                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
-                      {/* Icon circle - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.iconContainer, 
-                        isSelected && styles.iconContainerSelected,
-                        { backgroundColor: placeIcon.color }
-                      ]}>
-                        <Ionicons name="business" size={isSelected ? 24 : 16} color="#FFFFFF" />
-                      </View>
-                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.pinPoint, 
-                        isSelected && styles.pinPointSelected,
-                        { borderTopColor: placeIcon.color }
-                      ]} />
-                    </View>
-                </View>
-                )}
+            const isSelected = selectedPlace?.id === place.id;
+            const placeIcon = getPlaceIcon(place);
 
-                {/* Label with icon - Google Maps style */}
-                {shouldShowLabel && (
-                  <View style={[styles.labelWrapper, isSelected && styles.labelSelected]}>
-                    <View style={styles.labelContent}>
-                      {/* Small icon next to text */}
-                      <View style={[styles.labelIconContainer, { backgroundColor: placeIcon.color }]}>
-                        {place.place_type === 'PUBLIC_SERVICE' && (
-                          <>
-                            {placeIcon.type === 'mosque' && (
-                              <MaterialCommunityIcons name="mosque" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'school' && (
-                              <Ionicons name="school" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'clinic' && (
-                              <MaterialCommunityIcons name="hospital-building" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'kindergarten' && (
-                              <MaterialCommunityIcons name="baby-face-outline" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'community' && (
-                              <MaterialCommunityIcons name="account-group" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'home' && (
-                              <Ionicons name="home" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'public' && (
-                              <Ionicons name="location" size={12} color="#FFFFFF" />
-                            )}
-                          </>
-                        )}
-                        {place.place_type === 'BUSINESS' && (
-                          <Ionicons name="business" size={12} color="#FFFFFF" />
-                        )}
-                      </View>
-                    <Text style={styles.nativeMapLabel} numberOfLines={1}>
-                        {getPlaceName(place)}
-                    </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            </PointAnnotation>
-          );
-        })}
+            // Visibility: PUBLIC_SERVICE is always rendered (smooth shrink to ~0.85x at low
+            // zoom in MapPin handles "feels too big at far zoom"); BUSINESS still gates so
+            // city view doesn't get cluttered, but with a much lower threshold than before.
+            // Selected place always renders regardless so the user never loses their pick.
+            let visibilityZoom = 0;
+            let labelZoom = 0;
+            if (place.place_type === "PUBLIC_SERVICE") {
+              visibilityZoom = PUBLIC_SERVICE_VISIBILITY_ZOOM;
+              labelZoom = PUBLIC_SERVICE_LABEL_ZOOM;
+            } else if (place.place_type === "BUSINESS") {
+              visibilityZoom = BUSINESS_VISIBILITY_ZOOM;
+              labelZoom = BUSINESS_LABEL_ZOOM;
+            }
+            const shouldShow = currentZoom >= visibilityZoom || isSelected;
+            const shouldShowLabel = currentZoom >= labelZoom || isSelected;
+
+            if (!shouldShow) return null;
+
+            // `getPlaceIcon` already returns one of the recognised category keys; if a future
+            // backend value sneaks through we fall back to the neutral "default" pin so the
+            // place is still tappable and visible.
+            const category: MapPinCategory =
+              place.place_type === "BUSINESS"
+                ? "business"
+                : ((placeIcon.type as MapPinCategory) ?? "default");
+
+            return (
+              <PointAnnotation
+                key={place.id}
+                id={String(place.id)}
+                coordinate={[place.location.lon, place.location.lat]}
+                onSelected={() => {
+                  console.log("Place selected:", place.id, place.name);
+                  handlePlaceTap(place);
+                }}
+              >
+                <MapPin
+                  category={category}
+                  colorOverride={placeIcon.color}
+                  selected={isSelected}
+                  zoom={currentZoom}
+                  label={getPlaceName(place)}
+                  showLabel={shouldShowLabel}
+                />
+              </PointAnnotation>
+            );
+          })}
 
         {/*
-          Drivers render last so they sit above place pins (MapLibre draw order).
-          `driverMapItems` clusters overlapping drivers so the user never sees a
-          single icon standing in for several; tapping a cluster zooms in.
+         * User location dot — rendered AFTER place pins so it sits on top in MapLibre's
+         * child-order-driven z-stack. Hidden while picking a destination so the first map
+         * tap reaches the basemap (the dot has `pointerEvents="none"` internally too).
+         */}
+        {userLocation && !isPickingMapDestination && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <UserLocationDot zoom={currentZoom} />
+          </PointAnnotation>
+        )}
+
+        {/*
+          Drivers render last so they sit above place pins and the user dot
+          (MapLibre draw order). `driverMapItems` clusters overlapping drivers
+          so the user never sees a single icon standing in for several; tapping
+          a cluster zooms in.
         */}
         {driverMapItems.map((item) => {
           if (item.type === "cluster") {
@@ -1484,6 +1432,7 @@ export default function RegularHomeScreen({}: Props) {
                 key={item.id}
                 id={item.id}
                 coordinate={[item.lon, item.lat]}
+                anchor={{ x: 0.5, y: 1 }}
                 onSelected={() => handleClusterTap(item.lat, item.lon)}
               >
                 <View
@@ -1506,19 +1455,19 @@ export default function RegularHomeScreen({}: Props) {
           // marker; `spread` items just have slightly offset coordinates.
           const driver = item.driver;
           const isSelected = selectedDriver?.driver_user_id === driver.driver_user_id;
-          const size: "compact" | "expanded" = isSelected ? "expanded" : "compact";
           return (
             <PointAnnotation
               key={item.id}
               id={item.id}
               coordinate={[item.lon, item.lat]}
+              anchor={{ x: 0.5, y: 1 }}
               onSelected={() => setSelectedDriver(driver)}
             >
               <View
                 accessibilityRole="button"
-                accessibilityLabel={t("map_nearby_drivers_chip")}
+                accessibilityLabel={t("ride_driver_info")}
               >
-                <RideDriverMapMarker size={size} />
+                <NearbyDriverTaxiMarker selected={isSelected} />
               </View>
             </PointAnnotation>
           );
@@ -1551,22 +1500,14 @@ export default function RegularHomeScreen({}: Props) {
         emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
         noResultsText={t("no_places_found") || "No places found"}
         onSearchFocus={dismissPlaceDetailsPanel}
-        secondaryRow={
-          <TouchableOpacity
-            style={styles.mapNearbyDriversChip}
-            onPress={focusNearbyDriversOnMap}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel={t("map_nearby_drivers_chip")}
-          >
-            <Ionicons name="car-sport" size={18} color="#0f5b63" />
-            <Text style={styles.mapNearbyDriversChipText}>{t("map_nearby_drivers_chip")}</Text>
-          </TouchableOpacity>
-        }
       />
 
       <TouchableOpacity
-        style={[styles.pickDestinationFab, isPickingMapDestination && styles.pickDestinationFabActive]}
+        style={[
+          styles.pickDestinationFab,
+          { bottom: mapPickFabBottom },
+          isPickingMapDestination && styles.pickDestinationFabActive,
+        ]}
         onPress={() => {
           setIsPickingMapDestination((v) => {
             const next = !v;
@@ -1595,7 +1536,10 @@ export default function RegularHomeScreen({}: Props) {
       </TouchableOpacity>
 
       {isPickingMapDestination && (
-        <View style={styles.pickDestinationBanner} pointerEvents="box-none">
+        <View
+          style={[styles.pickDestinationBanner, { bottom: mapPickBannerBottom }]}
+          pointerEvents="box-none"
+        >
           <View style={styles.pickDestinationBannerInner}>
             <View style={styles.pickDestinationBannerTextCol}>
               <Text style={styles.pickDestinationBannerTitle}>{t("map_pick_destination_banner_title")}</Text>
@@ -1767,34 +1711,34 @@ export default function RegularHomeScreen({}: Props) {
               )}
             </View>
 
-            {/* Action Buttons Row */}
-            <View style={styles.actionButtonsRow}>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="share-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("share") || "שיתוף"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.actionButtonSecondary}
-                onPress={handleToggleSave}
-                disabled={savingPlace || !userId}
-              >
-                <Ionicons 
-                  name={isPlaceSaved ? "bookmark" : "bookmark-outline"} 
-                  size={20} 
-                  color={isPlaceSaved ? "#0f5b63" : "#0f5b63"} 
-                />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
-                </Text>
-              </TouchableOpacity>
-              
-              {/* Start Navigation — fresh GPS + destination validation + route preview */}
+            {/* Action buttons: two rows (share/save, then nav/ride) so labels are not truncated */}
+            <View style={styles.actionButtonsBlock}>
+              <View style={styles.actionButtonsRowTop}>
+                <TouchableOpacity style={styles.actionButtonSecondary}>
+                  <Ionicons name="share-outline" size={20} color="#0f5b63" />
+                  <Text style={styles.actionButtonSecondaryText}>
+                    {t("share") || "שיתוף"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionButtonSecondary}
+                  onPress={handleToggleSave}
+                  disabled={savingPlace || !userId}
+                >
+                  <Ionicons
+                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"}
+                    size={20}
+                    color={isPlaceSaved ? "#0f5b63" : "#0f5b63"}
+                  />
+                  <Text style={styles.actionButtonSecondaryText}>
+                    {isPlaceSaved ? t("saved") || "שמור" : t("save") || "שמירה"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
               {destination && (
-                <View style={styles.actionButtonsNavRideWrap}>
+                <View style={styles.actionButtonsRowNavRide}>
                   <TouchableOpacity
-                    style={[styles.actionButtonPrimary, styles.actionButtonPrimaryHalf]}
+                    style={[styles.actionButtonPrimary, styles.actionButtonPrimarySplit]}
                     onPress={getRoute}
                     disabled={routeLoading || rideWithDriverLoading}
                   >
@@ -1803,7 +1747,9 @@ export default function RegularHomeScreen({}: Props) {
                     ) : (
                       <>
                         <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
-                        <Text style={styles.actionButtonPrimaryText} numberOfLines={1}>
+                        <Text
+                          style={[styles.actionButtonPrimaryText, styles.actionButtonCtaLabel]}
+                        >
                           {t("start_navigation") || "Start Navigation"}
                         </Text>
                       </>
@@ -1812,7 +1758,7 @@ export default function RegularHomeScreen({}: Props) {
                   <TouchableOpacity
                     style={[
                       styles.actionButtonRideWithDriver,
-                      styles.actionButtonPrimaryHalf,
+                      styles.actionButtonPrimarySplit,
                       hasBlockingPassengerRide && styles.actionButtonRideWithDriverMuted,
                     ]}
                     onPress={handleRideWithDriverFromPlaceDetails}
@@ -1831,8 +1777,8 @@ export default function RegularHomeScreen({}: Props) {
                           style={[
                             styles.actionButtonRideWithDriverText,
                             hasBlockingPassengerRide && styles.actionButtonRideWithDriverTextMuted,
+                            styles.actionButtonCtaLabel,
                           ]}
-                          numberOfLines={2}
                         >
                           {t("ride_with_driver_button")}
                         </Text>
@@ -1844,7 +1790,7 @@ export default function RegularHomeScreen({}: Props) {
 
               {!destination && (
                 <TouchableOpacity
-                  style={styles.actionButtonPrimary}
+                  style={styles.actionButtonPrimaryFull}
                   onPress={() => {
                     if (selectedPlace && selectedPlace.location) {
                       handlePlaceTap(selectedPlace);
@@ -2066,7 +2012,7 @@ export default function RegularHomeScreen({}: Props) {
                       ? selectedPlace.social_links! 
                       : `https://${selectedPlace.social_links}`;
                     Linking.openURL(url).catch(() => {
-                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                      appAlert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
                     });
                   }}
                   activeOpacity={0.7}
@@ -2098,6 +2044,23 @@ export default function RegularHomeScreen({}: Props) {
           </>
         </Animated.View>
       )}
+
+      {/*
+       * Panel for unnamed map-picked destinations (long-press flow).
+       * Mirrors the action footer of the known-place bottom sheet so the user has
+       * the same Start-Navigation + Ride-with-Driver entry points without exposing
+       * raw coordinates. Hidden while the place sheet is open or while the user is
+       * driver-shopping (selectedDriver) so it never overlaps other ride UI.
+       */}
+      <MapPickedDestinationPanel
+        visible={isPickedDestinationActive && !selectedDriver}
+        onDismiss={dismissPickedDestinationPanel}
+        onStartNavigation={() => void getRoute()}
+        onRideWithDriver={() => void handleRideWithDriverFromPlaceDetails()}
+        navigationLoading={routeLoading}
+        rideWithDriverLoading={rideWithDriverLoading}
+        rideWithDriverMuted={hasBlockingPassengerRide}
+      />
 
       {/* Compact, map-anchored driver info popup (replaces legacy form modal + list picker). */}
       <DriverInfoPopup
@@ -2255,168 +2218,12 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
 
   // מרקר בסגנון גוגל מפות
-  nativeMarkerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'visible', // חשוב כדי שהטקסט לא ייחתך
-  },
-  
-  // מרקר למקומות ציבוריים (מסגד, בית ספר, קופת חולים)
-  publicServiceMarker: {
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  
-  // מרקר לעסקים
-  businessMarker: {
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  
-  // מיכל הפין המלא (עם הצל)
-  pinContainer: {
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  
-  // מיכל הפין למקום נבחר - צל חזק יותר
-  pinContainerSelected: {
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  
-  // מיכל האייקון (הצורה העגולה עם האייקון) - בסגנון Google Maps
-  iconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#4285F4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
-    zIndex: 2,
-  },
-  
-  // מיכל האייקון למקום נבחר - גדול יותר ובולט יותר
-  iconContainerSelected: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 4,
-    zIndex: 3,
-  },
-  
-  // הנקודה התחתונה (הפין - משולש מצביע למטה) - בסגנון Google Maps
-  pinPoint: {
-    width: 0,
-    height: 0,
-    backgroundColor: 'transparent',
-    borderStyle: 'solid',
-    borderLeftWidth: 8,
-    borderRightWidth: 8,
-    borderTopWidth: 12,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderTopColor: '#4285F4',
-    marginTop: -3,
-    zIndex: 1,
-    // Shadow for the pin point
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 3,
-  },
-  
-  // הפין למקום נבחר - גדול יותר
-  pinPointSelected: {
-    borderLeftWidth: 12,
-    borderRightWidth: 12,
-    borderTopWidth: 18,
-    marginTop: -4,
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  
-  markerSelected: {
-    transform: [{ scale: 1.0 }], // לא משנה את הגודל הכללי, רק את האייקון והפין
-  },
-
-  // מעטפת לטקסט (בסגנון Google Maps)
-  labelWrapper: {
-    marginTop: 6,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 0.5,
-    borderColor: 'rgba(0,0,0,0.12)',
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
-    elevation: 3,
-    zIndex: 1,
-    maxWidth: 140,
-  },
-  labelSelected: {
-    backgroundColor: '#F8F9FA',
-    borderColor: 'rgba(0,0,0,0.2)',
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  labelContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  labelIconContainer: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#4285F4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 4,
-  },
-  nativeMapLabel: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#1A1A1A',
-    textAlign: 'left',
-    letterSpacing: -0.1,
-    flex: 1,
-  },
-  mapNearbyDriversChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "#FFFFFF",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.22)",
-    gap: 6,
-  },
-  mapNearbyDriversChipText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#0f5b63",
-  },
+  // Place / category marker styles previously lived here. They have been moved into the
+  // reusable `MapPin` component (`src/components/map/MapPin.tsx`), which now owns the disc,
+  // pin point, label chip, and selected-state visuals — see that file for the design tokens.
   pickDestinationFab: {
     position: "absolute",
     left: 20,
-    bottom: 100,
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -2440,7 +2247,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 16,
     right: 16,
-    bottom: 168,
     zIndex: 1099,
   },
   pickDestinationBannerInner: {
@@ -2658,11 +2464,20 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: "400",
   },
-  actionButtonsRow: {
-    flexDirection: "row",
+  actionButtonsBlock: {
     paddingHorizontal: 16,
     paddingBottom: 16,
+    gap: 10,
+  },
+  actionButtonsRowTop: {
+    flexDirection: "row",
     gap: 8,
+  },
+  actionButtonsRowNavRide: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+    width: "100%",
   },
   actionButtonSecondary: {
     flex: 1,
@@ -2671,40 +2486,54 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#F2F2F7",
     borderRadius: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 8,
+    minHeight: 48,
   },
   actionButtonSecondaryText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
     color: "#0f5b63",
+    textAlign: "center",
+    flexShrink: 1,
   },
   actionButtonPrimary: {
-    flex: 1.5,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#0f5b63",
     borderRadius: 24,
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    gap: 6,
+    gap: 8,
+    minHeight: 50,
+  },
+  actionButtonPrimaryFull: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0f5b63",
+    borderRadius: 24,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 8,
+    width: "100%",
   },
   actionButtonPrimaryText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
     color: "#FFFFFF",
+    textAlign: "center",
+    flexShrink: 1,
   },
-  actionButtonsNavRideWrap: {
-    flex: 1.5,
-    flexDirection: "row",
-    alignItems: "stretch",
-    gap: 8,
-  },
-  actionButtonPrimaryHalf: {
+  actionButtonPrimarySplit: {
     flex: 1,
     minWidth: 0,
+  },
+  actionButtonCtaLabel: {
+    textAlign: "center",
+    flexShrink: 1,
   },
   actionButtonRideWithDriver: {
     flexDirection: "row",
@@ -2712,14 +2541,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#fff",
     borderRadius: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    gap: 8,
     borderWidth: 2,
     borderColor: "#0f5b63",
+    minHeight: 50,
   },
   actionButtonRideWithDriverText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
     color: "#0f5b63",
     textAlign: "center",
@@ -3020,25 +2850,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // User Location Marker
-  userLocationMarker: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "#0f5b63",
-    borderWidth: 3,
-    borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  userLocationDot: {
-    flex: 1,
-    borderRadius: 7,
-    backgroundColor: "#0f5b63",
-  },
+  // The user-location marker styles previously lived here. They now live inside the reusable
+  // `UserLocationDot` component (`src/components/map/UserLocationDot.tsx`), which adds the
+  // pulse animation + smooth zoom scaling on top of the same brand-teal dot.
   // Custom Pin Marker
   customPinMarker: {
     width: 24,

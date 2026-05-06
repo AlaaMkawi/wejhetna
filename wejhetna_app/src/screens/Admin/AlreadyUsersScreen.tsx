@@ -1,18 +1,8 @@
 // src/screens/Admin/AlreadyUsersScreen.tsx
 
 import React, { useEffect, useState, useCallback } from "react";
-import {
-  View,
-  Text,
-  FlatList,
-  ActivityIndicator,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Alert,
-  StatusBar,
-  Platform,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, FlatList, ActivityIndicator, StyleSheet, TextInput, TouchableOpacity, StatusBar, Platform } from "react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AdminTabParamList } from "../../navigation/types";
@@ -115,7 +105,7 @@ export default function AlreadyUsersScreen({ route }: Props) {
       ? `Remove ${user.full_name}? Their account will be set to PENDING (cannot log in), but their business places will remain on the map.`
       : `Are you sure you want to permanently delete ${user.full_name}? This action cannot be undone.`;
 
-    Alert.alert(
+    appAlert(
       isBusinessOwner ? "Remove Business Owner" : "Delete User",
       message,
       [
@@ -157,7 +147,7 @@ export default function AlreadyUsersScreen({ route }: Props) {
       } else {
         // Reload users list
         await loadUsers();
-        Alert.alert(
+        appAlert(
           "Success",
           user.role === "BUSINESS_OWNER"
             ? "Business owner removed. Their places remain on the map."

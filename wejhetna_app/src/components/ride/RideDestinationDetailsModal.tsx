@@ -12,9 +12,13 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
+import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import type { Category, City, PlaceForMap } from "../../api/places";
 import { fetchAllPlaces } from "../../api/places";
 import { haversineMeters } from "../../utils/routePolyline";
+
+const MAP_STYLE_URL =
+  "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 const TEAL = "#0f5b63";
 
@@ -131,6 +135,45 @@ export function RideDestinationDetailsModal({
             keyboardShouldPersistTaps="handled"
             nestedScrollEnabled
           >
+            {/*
+             * Small embedded map so the driver (or passenger) can visually inspect
+             * the destination — particularly important for picked-point destinations
+             * that don't match a known place. Pinch-zoom is enabled so the map can be
+             * inspected without leaving the modal. Hidden when no coordinates exist.
+             */}
+            {destinationLat != null &&
+            destinationLon != null &&
+            Number.isFinite(destinationLat) &&
+            Number.isFinite(destinationLon) ? (
+              <View style={styles.mapPreview}>
+                <MapView
+                  style={styles.mapPreviewMap}
+                  mapStyle={MAP_STYLE_URL}
+                  logoEnabled={false}
+                  attributionEnabled={false}
+                  scrollEnabled
+                  zoomEnabled
+                  pitchEnabled={false}
+                  rotateEnabled={false}
+                >
+                  <Camera
+                    defaultSettings={{
+                      centerCoordinate: [destinationLon, destinationLat],
+                      zoomLevel: 15,
+                    }}
+                    animationMode="none"
+                  />
+                  <PointAnnotation
+                    id="destination_preview"
+                    coordinate={[destinationLon, destinationLat]}
+                  >
+                    <View style={styles.destinationDotOuter}>
+                      <View style={styles.destinationDotInner} />
+                    </View>
+                  </PointAnnotation>
+                </MapView>
+              </View>
+            ) : null}
             {loading ? <ActivityIndicator color={TEAL} style={styles.loader} /> : null}
             {place ? (
               <>
@@ -252,4 +295,29 @@ const styles = StyleSheet.create({
   },
   announce: { fontSize: 14, color: "#555", marginTop: 8, fontStyle: "italic", lineHeight: 20 },
   destFallback: { fontSize: 16, fontWeight: "700", color: "#111", marginBottom: 6 },
+  mapPreview: {
+    width: "100%",
+    height: 180,
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: "hidden",
+    backgroundColor: "#eef2f3",
+  },
+  mapPreviewMap: { flex: 1 },
+  destinationDotOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(15,91,99,0.25)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  destinationDotInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: TEAL,
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
 });

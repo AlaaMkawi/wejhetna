@@ -6,6 +6,7 @@ import React, { useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import AppNavigator from "./src/navigation/AppNavigator";
+import AppDialogHost from "./src/components/dialog/AppDialogHost";
 
 export default function App() {
   const [ready, setReady] = useState(false);
@@ -28,6 +29,7 @@ export default function App() {
     <I18nextProvider i18n={i18n}>
       <SafeAreaProvider>
         <NavigationContainer>
+          <AppDialogHost />
           <AppNavigator />
         </NavigationContainer>
       </SafeAreaProvider>

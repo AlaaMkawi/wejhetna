@@ -2,10 +2,21 @@ import React from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
-/** Matches the brand teal used by the single-driver marker for visual coherence. */
-const CLUSTER_FILL = "#0f5b63";
-const CLUSTER_RING = "#1565c0";
-const CLUSTER_TEXT = "#ffffff";
+/**
+ * Cluster pin that matches the new `NearbyDriverTaxiMarker` look so that a
+ * pile of overlapping drivers reads as "several taxis stacked here". Tapping
+ * is handled by the parent `PointAnnotation`, which zooms the camera so the
+ * cluster naturally splits into individual markers on the next render.
+ *
+ * Anchoring matches `NearbyDriverTaxiMarker` — pair with
+ * `anchor={{ x: 0.5, y: 1 }}` on the parent so the tip lands on the GPS coord.
+ */
+
+const CLUSTER_FILL = "#facc15";
+const CLUSTER_FILL_DEEP = "#eab308";
+const CLUSTER_TEXT = "#1f2937";
+const ACCENT = "#f59e0b";
+const PLATE_BG = "#ffffff";
 
 export type RideDriverClusterMarkerProps = {
   /** Number of drivers inside the cluster. Values over 99 show as "99+". */
@@ -14,42 +25,61 @@ export type RideDriverClusterMarkerProps = {
   emphasized?: boolean;
 };
 
-/**
- * Compact round badge shown when multiple driver pins would overlap. Tapping
- * is handled by the parent `PointAnnotation`, which zooms the camera so the
- * drivers separate into individual markers.
- */
-export function RideDriverClusterMarker({ count, emphasized = false }: RideDriverClusterMarkerProps) {
-  const size = emphasized ? 46 : 40;
-  const inner = size - 6;
+export function RideDriverClusterMarker({
+  count,
+  emphasized = false,
+}: RideDriverClusterMarkerProps) {
+  const pin = emphasized ? 56 : 50;
+  const plate = emphasized ? 30 : 27;
   const label = count > 99 ? "99+" : String(count);
+  const plateTop = pin * 0.16;
 
   return (
-    <View style={styles.hit}>
-      <View style={[styles.shadowPlate, { width: size + 8, height: size + 8 }]}>
+    <View style={[styles.hit, { width: pin, height: pin }]}>
+      <View style={styles.shadowPlate}>
+        <Ionicons
+          name="location"
+          size={pin}
+          color={emphasized ? CLUSTER_FILL_DEEP : CLUSTER_FILL}
+          style={styles.pin}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.pinInnerStroke,
+            {
+              width: pin * 0.78,
+              height: pin * 0.78,
+              borderRadius: (pin * 0.78) / 2,
+              top: plateTop - pin * 0.04,
+              left: (pin - pin * 0.78) / 2,
+              borderColor: emphasized ? ACCENT : "rgba(255,255,255,0.85)",
+              borderWidth: emphasized ? 2 : 1.25,
+            },
+          ]}
+        />
         <View
           style={[
-            styles.ring,
-            { width: size, height: size, borderRadius: size / 2 },
+            styles.plate,
+            {
+              width: plate,
+              height: plate,
+              borderRadius: plate / 2,
+              top: plateTop,
+              left: (pin - plate) / 2,
+            },
           ]}
         >
-          <View
+          <Text
             style={[
-              styles.fill,
-              { width: inner, height: inner, borderRadius: inner / 2 },
+              styles.countText,
+              { fontSize: count > 9 ? 12 : 14 },
             ]}
+            numberOfLines={1}
+            allowFontScaling={false}
           >
-            <Ionicons name="car-sport" size={12} color={CLUSTER_TEXT} style={styles.carGlyph} />
-            <Text
-              style={[
-                styles.countText,
-                { fontSize: count > 9 ? 14 : 16 },
-              ]}
-              numberOfLines={1}
-            >
-              {label}
-            </Text>
-          </View>
+            {label}
+          </Text>
         </View>
       </View>
     </View>
@@ -59,16 +89,21 @@ export function RideDriverClusterMarker({ count, emphasized = false }: RideDrive
 const styles = StyleSheet.create({
   hit: {
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
   },
   shadowPlate: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.35,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.28,
         shadowRadius: 5,
       },
       android: {
@@ -77,28 +112,23 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  ring: {
-    borderWidth: 2.5,
-    borderColor: CLUSTER_RING,
-    backgroundColor: "rgba(255,255,255,0.98)",
-    alignItems: "center",
-    justifyContent: "center",
+  pin: {
+    textAlign: "center",
   },
-  fill: {
-    backgroundColor: CLUSTER_FILL,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  carGlyph: {
+  pinInnerStroke: {
     position: "absolute",
-    top: 3,
-    opacity: 0.85,
+    backgroundColor: "transparent",
+  },
+  plate: {
+    position: "absolute",
+    backgroundColor: PLATE_BG,
+    alignItems: "center",
+    justifyContent: "center",
   },
   countText: {
-    marginTop: 6,
     color: CLUSTER_TEXT,
     fontWeight: "800",
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
     includeFontPadding: false as unknown as boolean,
   },
 });

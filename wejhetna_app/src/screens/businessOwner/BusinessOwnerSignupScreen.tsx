@@ -1,20 +1,8 @@
 // src/businessOwner/BusinessOwnerSignupScreen.tsx
 import React, { useState } from "react";
+import { appAlert } from "../../utils/appAlert";
 import { useTranslation } from "react-i18next";
-import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
-  ImageBackground,
-  StatusBar,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-} from "react-native";
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ImageBackground, StatusBar, Dimensions, KeyboardAvoidingView, Platform, ScrollView } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 // ✅ correct paths from src/screens/businessOwner/
@@ -181,7 +169,7 @@ export default function BusinessOwnerSignupScreen({ route }: any) {
     
     // ✅ Validate email exists if coming from verification flow
     if (verifiedEmailFromRoute && !email.trim()) {
-      Alert.alert(
+      appAlert(
         t("error") || "Error",
         t("invalid_signup_flow") || "Invalid signup flow. Please start again."
       );

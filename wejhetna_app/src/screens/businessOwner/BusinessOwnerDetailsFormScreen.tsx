@@ -1,17 +1,8 @@
 // src/screens/businessOwner/BusinessOwnerDetailsFormScreen.tsx
 
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, TextInput, StyleSheet, ActivityIndicator, TouchableOpacity, ScrollView, Image } from "react-native";
 import { useTranslation } from "react-i18next";
 import { launchImageLibrary } from "react-native-image-picker";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
@@ -299,7 +290,7 @@ export default function BusinessOwnerDetailsFormScreen() {
           const msg = lastError?.message || String(lastError);
           console.log("[UPLOAD] error state set (final):", msg);
           setUploadError(msg);
-          Alert.alert(
+          appAlert(
             t("error") || "Error",
             `${t("upload_failed") || "Upload failed"}: ${msg}`
           );
@@ -308,7 +299,7 @@ export default function BusinessOwnerDetailsFormScreen() {
         const msg = e?.message || String(e);
         console.log("[UPLOAD] error state set (exception):", msg);
         setUploadError(msg);
-        Alert.alert(
+        appAlert(
           t("error") || "Error",
           `${t("upload_failed") || "Upload failed"}: ${e?.message || (t("unknown_error") || "Unknown error")}`
         );
@@ -400,7 +391,7 @@ export default function BusinessOwnerDetailsFormScreen() {
           const msg = lastError?.message || String(lastError);
           console.log("[UPLOAD] error state set (final):", msg);
           setUploadError(msg);
-          Alert.alert(
+          appAlert(
             t("error") || "Error",
             `${t("upload_failed") || "Upload failed"}: ${msg}`
           );
@@ -409,7 +400,7 @@ export default function BusinessOwnerDetailsFormScreen() {
         const msg = e?.message || String(e);
         console.log("[UPLOAD] error state set (exception):", msg);
         setUploadError(msg);
-        Alert.alert(
+        appAlert(
           t("error") || "Error",
           `${t("upload_failed") || "Upload failed"}: ${e?.message || (t("unknown_error") || "Unknown error")}`
         );
@@ -445,34 +436,34 @@ export default function BusinessOwnerDetailsFormScreen() {
 
   async function handleSubmit() {
     if (uploadingLicense || uploadingImages) {
-      Alert.alert(t("error") || "Error", t("please_wait_for_upload") || "Please wait for the upload to finish");
+      appAlert(t("error") || "Error", t("please_wait_for_upload") || "Please wait for the upload to finish");
       return;
     }
     if (!isNameValid) {
-      Alert.alert(t("error") || "Error", t("business_name_english_required") || "Business name (English) is required");
+      appAlert(t("error") || "Error", t("business_name_english_required") || "Business name (English) is required");
       return;
     }
     if (!isNameArValid) {
-      Alert.alert(t("error") || "Error", t("business_name_arabic_required") || "Business name (Arabic) is required");
+      appAlert(t("error") || "Error", t("business_name_arabic_required") || "Business name (Arabic) is required");
       return;
     }
     if (!isNameHeValid) {
-      Alert.alert(t("error") || "Error", t("business_name_hebrew_required") || "Business name (Hebrew) is required");
+      appAlert(t("error") || "Error", t("business_name_hebrew_required") || "Business name (Hebrew) is required");
       return;
     }
 
     if (!isCityValid) {
-      Alert.alert(t("error") || "Error", t("please_select_city") || "Please select a city");
+      appAlert(t("error") || "Error", t("please_select_city") || "Please select a city");
       return;
     }
 
     if (!isCategoryValid) {
-      Alert.alert(t("error") || "Error", t("please_select_category") || "Please select a category");
+      appAlert(t("error") || "Error", t("please_select_category") || "Please select a category");
       return;
     }
 
     if (!isPhoneValid) {
-      Alert.alert(
+      appAlert(
         t("error") || "Error",
         t("phone_must_be_9_or_10_digits") || "Phone number (if provided) must be 9 or 10 digits"
       );
@@ -480,7 +471,7 @@ export default function BusinessOwnerDetailsFormScreen() {
     }
 
     if (!lat || !lon) {
-      Alert.alert(t("error") || "Error", t("location_required") || "Location is required");
+      appAlert(t("error") || "Error", t("location_required") || "Location is required");
       return;
     }
 
@@ -610,7 +601,7 @@ export default function BusinessOwnerDetailsFormScreen() {
       }
       
       console.log("Final error message:", errorMessage);
-      Alert.alert("Error", errorMessage);
+      appAlert("Error", errorMessage);
     } finally {
       setSubmitting(false);
     }

@@ -199,9 +199,9 @@ export type RegularLatestRideRequest = {
   driver_live_lat?: number | null;
   driver_live_lon?: number | null;
   status: RideRequestStatus;
-  /** When true, passenger may see the verification code (after driver confirms passenger is outside). */
+  /** When true, the driver has signaled "passenger is outside" (drives driver-side verify UI; does not hide the code). */
   passenger_verification_unlocked?: boolean;
-  /** Present when driver marked arrival and passenger unlock is on; passenger shares with driver to start the ride. */
+  /** Present while at pickup (arrived) before the code is used; share with the driver to start the ride. */
   verification_code?: string | null;
   verification_failed_attempts?: number;
   regular_phone?: string | null;
@@ -590,34 +590,20 @@ export async function verifyRideStartCode(payload: {
   return parseOrThrow(res, "Failed to verify code");
 }
 
+/** Only the passenger may call complete (after arrival). */
 export async function completeRideTrip(payload: {
   ride_request_id: number;
-  driver_user_id?: number;
-  regular_user_id?: number;
+  regular_user_id: number;
 }) {
   const ride_request_id = Math.trunc(Number(payload.ride_request_id));
   if (!Number.isFinite(ride_request_id) || ride_request_id < 1) {
     throw new Error("Invalid ride request");
   }
-  const body: Record<string, unknown> = { ride_request_id };
-  if (payload.driver_user_id != null && payload.regular_user_id != null) {
+  const uid = Math.trunc(Number(payload.regular_user_id));
+  if (!Number.isFinite(uid) || uid < 1) {
     throw new Error("Invalid ride request");
   }
-  if (payload.driver_user_id != null) {
-    const did = Math.trunc(Number(payload.driver_user_id));
-    if (!Number.isFinite(did) || did < 1) {
-      throw new Error("Invalid ride request");
-    }
-    body.driver_user_id = did;
-  } else if (payload.regular_user_id != null) {
-    const uid = Math.trunc(Number(payload.regular_user_id));
-    if (!Number.isFinite(uid) || uid < 1) {
-      throw new Error("Invalid ride request");
-    }
-    body.regular_user_id = uid;
-  } else {
-    throw new Error("Invalid ride request");
-  }
+  const body: Record<string, unknown> = { ride_request_id, regular_user_id: uid };
   const res = await fetch(`${BASE_URL}/rides/requests/${ride_request_id}/complete`, {
     method: "POST",
     headers: RIDE_FETCH_HEADERS,

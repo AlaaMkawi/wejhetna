@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
-import { Alert } from "react-native";
+import { appAlert } from "../../utils/appAlert";
+
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
 import { useNavigation } from "@react-navigation/native";
@@ -18,10 +19,12 @@ import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import {
   shouldSuppressDriverCancelledGlobalAlert,
   shouldSuppressVerificationMismatchGlobalAlert,
+  tryConsumeRideCancelledUiAlert,
 } from "../../utils/rideCancelAlertGate";
+import { isPassengerRideUserRole } from "../../utils/ridePassengerRole";
 
 /**
- * REGULAR users: poll latest ride; when an active ride becomes `cancelled`, show alert (driver cancel).
+ * Passengers (REGULAR, BUSINESS_OWNER): poll latest ride; when an active ride becomes `cancelled`, show alert (driver cancel).
  * Skips briefly after the passenger cancelled their own ride from the app.
  */
 export default function PassengerDriverCancelledListener() {
@@ -38,7 +41,7 @@ export default function PassengerDriverCancelledListener() {
 
     const tick = async () => {
       const role = await AsyncStorage.getItem("userRole");
-      if (!mounted || role !== "REGULAR") {
+      if (!mounted || !isPassengerRideUserRole(role)) {
         return;
       }
       const stored = await AsyncStorage.getItem("userId");
@@ -68,9 +71,18 @@ export default function PassengerDriverCancelledListener() {
           const note = latest.status_note ?? "";
           const verifyMismatch =
             note.includes("invalid verification") || note.includes("too many invalid");
-          if (verifyMismatch) {
-            if (!shouldSuppressVerificationMismatchGlobalAlert()) {
-              Alert.alert(
+          const showVerifyMismatchUi =
+            verifyMismatch && !shouldSuppressVerificationMismatchGlobalAlert();
+          const showDriverCancelledUi =
+            !verifyMismatch && !shouldSuppressDriverCancelledGlobalAlert();
+          if (
+            showVerifyMismatchUi ||
+            showDriverCancelledUi
+          ) {
+            if (!tryConsumeRideCancelledUiAlert(latest.id)) {
+              /* Dedup slot already used for this ride — cancellation still syncs; no stacked alerts. */
+            } else if (showVerifyMismatchUi) {
+              appAlert(
                 t("ride_cancelled_verification_mismatch_title"),
                 t("ride_cancelled_verification_mismatch_message"),
                 [
@@ -80,11 +92,18 @@ export default function PassengerDriverCancelledListener() {
                   },
                 ]
               );
+            } else if (showDriverCancelledUi) {
+              appAlert(
+                t("ride_cancelled_by_driver_title"),
+                t("ride_cancelled_by_driver_message"),
+                [
+                  {
+                    text: t("ok"),
+                    onPress: () => navigateToUserRideRequestsTab(navigation, "REGULAR"),
+                  },
+                ]
+              );
             }
-          } else if (!shouldSuppressDriverCancelledGlobalAlert()) {
-            Alert.alert(t("ride_cancelled_by_driver_title"), t("ride_cancelled_by_driver_message"), [
-              { text: t("ok") },
-            ]);
           }
         }
       }

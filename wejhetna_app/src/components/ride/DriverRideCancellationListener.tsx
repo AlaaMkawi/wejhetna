@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
-import { Alert } from "react-native";
+import { appAlert } from "../../utils/appAlert";
+
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
 import { useNavigation } from "@react-navigation/native";
@@ -16,6 +17,7 @@ import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import {
   shouldSuppressDriverSideGlobalCancelAlert,
   shouldSuppressVerificationMismatchGlobalAlert,
+  tryConsumeRideCancelledUiAlert,
 } from "../../utils/rideCancelAlertGate";
 
 /**
@@ -60,9 +62,18 @@ export default function DriverRideCancellationListener() {
         if (prev && isActiveBlockingRideStatus(prev.status) && st === "cancelled") {
           const verifyMismatch =
             note.includes("invalid verification") || note.includes("too many invalid");
-          if (verifyMismatch) {
-            if (!shouldSuppressVerificationMismatchGlobalAlert()) {
-              Alert.alert(
+          const showVerifyMismatchUi =
+            verifyMismatch && !shouldSuppressVerificationMismatchGlobalAlert();
+          const showPassengerCancelledUi =
+            !verifyMismatch && !shouldSuppressDriverSideGlobalCancelAlert();
+          if (
+            showVerifyMismatchUi ||
+            showPassengerCancelledUi
+          ) {
+            if (!tryConsumeRideCancelledUiAlert(row.id)) {
+              /* Dedup — avoid stacked dialogs for one cancellation event. */
+            } else if (showVerifyMismatchUi) {
+              appAlert(
                 t("ride_cancelled_verification_mismatch_title"),
                 t("ride_cancelled_verification_mismatch_message"),
                 [
@@ -72,11 +83,18 @@ export default function DriverRideCancellationListener() {
                   },
                 ]
               );
+            } else if (showPassengerCancelledUi) {
+              appAlert(
+                t("ride_cancelled_by_passenger_or_system_title"),
+                t("ride_cancelled_by_passenger_or_system_message"),
+                [
+                  {
+                    text: t("ok"),
+                    onPress: () => navigateToUserRideRequestsTab(navigation, "DRIVER"),
+                  },
+                ]
+              );
             }
-          } else if (!shouldSuppressDriverSideGlobalCancelAlert()) {
-            Alert.alert(t("ride_cancelled_by_passenger_or_system_title"), t("ride_cancelled_by_passenger_or_system_message"), [
-              { text: t("ok") },
-            ]);
           }
         }
       }

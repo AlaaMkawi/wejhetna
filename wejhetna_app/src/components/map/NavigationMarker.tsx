@@ -1,12 +1,18 @@
 import React, { memo, useEffect, useMemo, useRef } from "react";
-import { Animated, StyleSheet, View } from "react-native";
+import { Animated, Platform, StyleSheet, View } from "react-native";
 import { PointAnnotation } from "@maplibre/maplibre-react-native";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 type Props = {
   id?: string;
   coordinate: [number, number]; // [lon, lat]
   /** degrees in screen space (already compensated for map bearing if needed) */
   bearingDeg: number;
+  /**
+   * `minimal` — car icon only (modern turn-by-turn, on-road look).
+   * `full` — legacy ring + cone (debug / alternate styling).
+   */
+  variant?: "minimal" | "full";
 };
 
 function normalizeDeg(d: number): number {
@@ -18,7 +24,24 @@ function shortestDelta(from: number, to: number): number {
   return ((((to - from) % 360) + 540) % 360) - 180;
 }
 
-function NavigationMarkerInner({ id = "nav_user_marker", coordinate, bearingDeg }: Props) {
+/** Same blue family as active route line in RouteDetails (`NAV_BLUE`). */
+const MINIMAL_CAR = "#4285F4";
+
+/**
+ * Moving "you" marker for active turn-by-turn navigation.
+ *
+ * - **minimal** (default): clean car icon with light shadow — reads on the road
+ *   without a circular plate (consumer-maps style).
+ * - **full**: prior design — teal disc + ring + directional cone (kept optional).
+ *
+ * Rotation is animated so small GPS heading jitter does not snap visibly.
+ */
+function NavigationMarkerInner({
+  id = "nav_user_marker",
+  coordinate,
+  bearingDeg,
+  variant = "minimal",
+}: Props) {
   const rot = useRef(new Animated.Value(normalizeDeg(bearingDeg))).current;
   const lastDegRef = useRef(normalizeDeg(bearingDeg));
 
@@ -44,17 +67,35 @@ function NavigationMarkerInner({ id = "nav_user_marker", coordinate, bearingDeg 
     [rot]
   );
 
+  if (variant === "minimal") {
+    return (
+      <PointAnnotation id={id} coordinate={coordinate}>
+        <View style={styles.minimalHit} pointerEvents="none">
+          <Animated.View style={[styles.minimalPlate, { transform: [{ rotate }] }]}>
+            <Ionicons
+              name="car"
+              size={30}
+              color={MINIMAL_CAR}
+              style={styles.minimalIconCrisp}
+            />
+          </Animated.View>
+        </View>
+      </PointAnnotation>
+    );
+  }
+
   return (
     <PointAnnotation id={id} coordinate={coordinate}>
-      <View style={styles.container} pointerEvents="none">
-        {/* subtle glow */}
+      <View style={styles.hit} pointerEvents="none">
         <View style={styles.glow} />
-
-        {/* directional cone + dot */}
-        <Animated.View style={[styles.directionWrapper, { transform: [{ rotate }] }]}>
+        <Animated.View
+          style={[styles.directionWrapper, { transform: [{ rotate }] }]}
+        >
           <View style={styles.cone} />
-          <View style={styles.dotOuter}>
-            <View style={styles.dotInner} />
+          <View style={styles.ring}>
+            <View style={styles.fill}>
+              <Ionicons name="car" size={20} color={ICON} />
+            </View>
           </View>
         </Animated.View>
       </View>
@@ -63,7 +104,7 @@ function NavigationMarkerInner({ id = "nav_user_marker", coordinate, bearingDeg 
 }
 
 function areEqual(prev: Props, next: Props) {
-  // Avoid re-render if coordinate and bearing are effectively the same
+  if (prev.variant !== next.variant) return false;
   if (prev.coordinate[0] !== next.coordinate[0] || prev.coordinate[1] !== next.coordinate[1]) {
     return false;
   }
@@ -74,63 +115,102 @@ function areEqual(prev: Props, next: Props) {
 
 export const NavigationMarker = memo(NavigationMarkerInner, areEqual);
 
-const BLUE = "#1A73E8";
+const NAV_FILL = "#0f5b63";
+const NAV_RING = "#1565c0";
+const ICON = "#ffffff";
+const GLOW = "rgba(15, 91, 99, 0.18)";
+
+const RING_SIZE = 44;
+const RING_BORDER = 3;
+const FILL_SIZE = RING_SIZE - RING_BORDER * 2 - 4;
 
 const styles = StyleSheet.create({
-  container: {
-    width: 54,
-    height: 54,
+  minimalHit: {
+    width: 48,
+    height: 48,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  minimalPlate: {
+    alignItems: "center",
+    justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.35,
+        shadowRadius: 2.5,
+      },
+      android: { elevation: 5 },
+      default: {},
+    }),
+  },
+  /** Light halo so the blue car stays legible on dark map tiles. */
+  minimalIconCrisp: {
+    textShadowColor: "rgba(255,255,255,0.9)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 2,
+  },
+  hit: {
+    width: 64,
+    height: 64,
     alignItems: "center",
     justifyContent: "center",
   },
   glow: {
     position: "absolute",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: BLUE,
-    opacity: 0.16,
+    width: RING_SIZE + 14,
+    height: RING_SIZE + 14,
+    borderRadius: (RING_SIZE + 14) / 2,
+    backgroundColor: GLOW,
   },
   directionWrapper: {
-    width: 54,
-    height: 54,
+    width: 64,
+    height: 64,
     alignItems: "center",
     justifyContent: "center",
   },
   cone: {
     position: "absolute",
-    top: 2,
+    top: 6,
     width: 0,
     height: 0,
-    borderLeftWidth: 10,
-    borderRightWidth: 10,
-    borderBottomWidth: 20,
+    borderLeftWidth: 9,
+    borderRightWidth: 9,
+    borderBottomWidth: 16,
     borderLeftColor: "transparent",
     borderRightColor: "transparent",
-    borderBottomColor: BLUE,
+    borderBottomColor: NAV_RING,
     opacity: 0.32,
-    transform: [{ translateY: -6 }],
   },
-  dotOuter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 3,
-    borderColor: BLUE,
+  ring: {
+    width: RING_SIZE,
+    height: RING_SIZE,
+    borderRadius: RING_SIZE / 2,
+    borderWidth: RING_BORDER,
+    borderColor: NAV_RING,
+    backgroundColor: "rgba(255,255,255,0.98)",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
-    shadowRadius: 3,
-    elevation: 3,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.32,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 6,
+      },
+      default: {},
+    }),
   },
-  dotInner: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: BLUE,
+  fill: {
+    width: FILL_SIZE,
+    height: FILL_SIZE,
+    borderRadius: FILL_SIZE / 2,
+    backgroundColor: NAV_FILL,
+    alignItems: "center",
+    justifyContent: "center",
   },
 });
-

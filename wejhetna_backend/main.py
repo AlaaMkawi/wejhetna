@@ -157,7 +157,9 @@ app = FastAPI(
     title="Wejhetna Backend",
     version="0.1.0"
 )
-Base.metadata.create_all(bind=engine)
+# Skip auto DDL when running unit tests (sqlite test DB + selective table create in tests/conftest).
+if os.getenv("WEJHETNA_SKIP_DB_CREATE_ALL") not in ("1", "true", "True", "yes"):
+    Base.metadata.create_all(bind=engine)
 
 
 def send_email(to_email: str, subject: str, body: str, *, flow: str = "send_email") -> None:
@@ -5078,8 +5080,10 @@ def _ride_request_to_regular_out(db: Session, ride: RideRequest, driver: User) -
         live_eta = 0
 
     unlocked = bool(getattr(ride, "passenger_verification_unlocked", False))
+    # Always expose the pickup code to the regular user while waiting at pickup (arrived).
+    # Driver-side "passenger ready" / unlock is still used for the driver's UI flow, not to gate the code.
     code_for_passenger = None
-    if st == RideRequestStatus.ARRIVED and ride.verification_code and unlocked:
+    if st == RideRequestStatus.ARRIVED and ride.verification_code:
         code_for_passenger = ride.verification_code
 
     st_str = _ride_request_status_str(ride)
@@ -5411,19 +5415,18 @@ def verify_ride_start_code(data: RideVerifyCodeRequest, db: Session = Depends(ge
 
 @app.post("/rides/requests/{ride_request_id}/complete", response_model=RideRequestStatusOut)
 def complete_ride_trip(ride_request_id: int, data: RideCompleteRequest, db: Session = Depends(get_db)):
-    """Called by driver or passenger from the shared trip screen when the vehicle reaches the destination."""
+    """Called by the passenger (regular user or business owner) when the trip should end after arrival.
+
+    The driver cannot complete the trip; this keeps one clear confirmation on the rider's side.
+    """
     if data.ride_request_id != ride_request_id:
         raise HTTPException(status_code=400, detail="Ride request id mismatch")
-    if (data.driver_user_id is None) == (data.regular_user_id is None):
-        raise HTTPException(status_code=400, detail="Provide exactly one of driver_user_id or regular_user_id")
 
     ride = db.query(RideRequest).filter(RideRequest.id == ride_request_id).first()
     if not ride:
         raise HTTPException(status_code=404, detail="Ride request not found")
 
-    if data.driver_user_id is not None and ride.driver_user_id != data.driver_user_id:
-        raise HTTPException(status_code=403, detail="Driver is not allowed to complete this request")
-    if data.regular_user_id is not None and ride.regular_user_id != data.regular_user_id:
+    if ride.regular_user_id != data.regular_user_id:
         raise HTTPException(status_code=403, detail="Passenger is not allowed to complete this request")
 
     st = _coerce_ride_request_status(ride.status)

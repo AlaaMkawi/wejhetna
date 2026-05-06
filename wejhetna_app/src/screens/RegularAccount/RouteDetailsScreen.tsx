@@ -1,16 +1,9 @@
 // src/screens/RegularAccount/RouteDetailsScreen.tsx
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  StatusBar,
-  Platform,
-  Modal,
-  Linking,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Platform, Modal, Linking } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { emitLiveNavigationExit } from "../../navigation/navigationEvents";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -37,6 +30,7 @@ import {
   snapToPolylinePoint,
   trimPolylineAheadOfUser,
   bearingDegrees,
+  pointAtFractionAlongPolyline,
 } from "../../utils/routePolyline";
 import {
   getFreshPositionForNavigationStart,
@@ -49,16 +43,31 @@ import {
   type SmoothedPoint,
 } from "../../utils/gpsSmoothing";
 import { NavigationMarker } from "../../components/map/NavigationMarker";
+import { RouteEtaOnMapLabel } from "../../components/map/RouteEtaOnMapLabel";
+import { RouteEndpointMarker } from "../../components/map/RouteEndpointMarker";
+import { OffRoutePathConnector } from "../../components/map/OffRoutePathConnector";
+import {
+  NavigationInfoPanel,
+  type NavInfoStat,
+} from "../../components/navigation/NavigationInfoPanel";
 import { RideDestinationDetailsModal } from "../../components/ride/RideDestinationDetailsModal";
 import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScreen";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Alert } from "react-native";
+
 import {
   completeRideTrip,
+  getDriverRideRequests,
   getRegularLatestRideRequest,
   markRideArrived,
+  normalizeRideRequestStatus,
   parseStoredUserId,
+  updateDriverLocation,
 } from "../../api/rides";
+import { useOnlineStatus } from "../../hooks/useOnlineStatus";
+import {
+  clearNavigationRouteSnapshot,
+  saveNavigationRouteSnapshot,
+} from "../../db/offlineNavigationRoute";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -66,14 +75,46 @@ const MAP_STYLE_URL =
 const DARK_TEAL = "#0f5b63";
 const NAV_BLUE = "#4285F4";
 
-const OFF_ROUTE_THRESHOLD_M = 48;
+const OFF_ROUTE_THRESHOLD_M = 50;
 const ON_ROUTE_THRESHOLD_M = 28;
 const REROUTE_MIN_INTERVAL_MS = 4500;
+/** Re-fetch OSRM from current position to refresh duration/distance (no live traffic; static road model). */
+const PROACTIVE_ROUTE_REFRESH_MS = 90_000;
+/**
+ * Hz at which we ask the FusedLocation provider to deliver fixes during live nav. Combined with
+ * `distanceFilter: 0` (below) this guarantees a callback every second even when the vehicle is
+ * stationary (e.g. waiting at a traffic light) — Google Maps-style "always alive" tracking.
+ */
+const LIVE_NAV_GPS_INTERVAL_MS = 1000;
+/**
+ * If the GPS callback hasn't fired for this long during active nav we log a watchdog warning. With
+ * `distanceFilter: 0` + 1 Hz interval we expect a fix at least every ~2 s; anything longer means
+ * the OS / provider is starving us and the user would perceive a "frozen" route.
+ */
+const GPS_STALL_WARNING_MS = 5000;
+/**
+ * Heartbeat period used during active nav to recompute ETA / remaining distance / route trimming
+ * from the *last good fix* even when no new GPS sample arrived. Keeps the UI alive at traffic
+ * lights without depending on movement.
+ */
+const NAV_HEARTBEAT_MS = 1500;
+/** If the vehicle moves less than this from the stagnation anchor, we treat time as "blocked" (traffic, waiting). */
+const STAGNATION_MOVE_THRESHOLD_M = 2.8;
+/** If the vehicle has moved this far, clear stagnation (actually advancing). */
+const STAGNATION_CLEAR_MOVE_M = 7;
+const STAGNATION_MAX_SPEED_MPS = 1.1;
+const STAGNATION_MAX_DELAY_SEC = 7200;
+const ETA_CLOCK_TICK_MS = 4000;
 const ARRIVAL_RADIUS_M = 55;
 const SNAP_TRIM_M = 22;
 /** If live start position is this far from the preview-route origin, refetch OSRM from the fresh point. */
 const ROUTE_ORIGIN_DRIFT_REFETCH_M = 45;
-const MAX_ACCEPTABLE_ACCURACY_M = 30;
+/**
+ * Stationary GPS fixes (especially on Android Fused) routinely report accuracy in the 30–60 m
+ * range while the radio settles. Hard-rejecting at 30 m made the UI freeze at traffic lights;
+ * 60 m matches what Google Maps tolerates and lets the smoother absorb the noise.
+ */
+const MAX_ACCEPTABLE_ACCURACY_M = 60;
 const MAX_IMPLIED_SPEED_MPS = 55; // ~198 km/h (reject obvious teleports)
 const MAX_JUMP_METERS = 80;
 const MAX_JUMP_WINDOW_S = 2.0;
@@ -85,6 +126,11 @@ type RouteDetailsRoute = NativeStackScreenProps<RootStackParamList, "RouteDetail
 
 export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRoute) {
   const { t } = useTranslation();
+  const isOnline = useOnlineStatus();
+  const isOnlineRef = useRef(true);
+  useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
   const {
     routeInfo: initialRouteInfo,
     destination,
@@ -127,8 +173,29 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const [routeInfo, setRouteInfo] = useState(initialRouteInfo);
   const [remainingSeconds, setRemainingSeconds] = useState(Math.max(0, initialRouteInfo.duration));
+  /** Remaining distance along the current leg (geometry); updated as the polyline is trimmed. */
+  const [remainingRouteMeters, setRemainingRouteMeters] = useState(initialRouteInfo.distance);
+  /**
+   * Extra seconds when GPS shows almost no progress (queues / traffic). Added to `remainingSeconds`
+   * for ETA and labels so wall-clock arrival moves later; cleared when moving on the road or along the route.
+   */
+  const [stagnationDelaySec, setStagnationDelaySec] = useState(0);
+  const stagnationAccRef = useRef(0);
+  const stagnationAnchorRef = useRef<{ lat: number; lon: number } | null>(null);
+  const stagnationLastGpsTsRef = useRef(0);
+  const lastStagnationUiAtRef = useRef(0);
+  /** Mirrors last value passed to `setStagnationDelaySec` to avoid duplicate updates. */
+  const publishedStagnationRef = useRef(0);
+  const prevRemainingLengthMetersRef = useRef<number | null>(null);
+  /** Passenger follow: wall-clock for stagnation `dt` between driver_live polls. */
+  const passengerStagnationWallTsRef = useRef(0);
+  /**
+   * Bumps periodically during active nav so `Date.now() + effectiveRemaining` re-renders when geometry is flat (idle).
+   */
+  const [etaTick, setEtaTick] = useState(0);
   const watchIdRef = useRef<number | null>(null);
   const hasArrivedRef = useRef(false);
+  const autoStartedLiveNavRef = useRef(false);
   const [showFullRoute, setShowFullRoute] = useState(false);
   const [isFollowingUser, setIsFollowingUser] = useState(false);
   const [currentHeading, setCurrentHeading] = useState<number | null>(null);
@@ -138,9 +205,15 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [rideDestModalOpen, setRideDestModalOpen] = useState(false);
   // Ride-only arrival modal: replaces the generic "You arrived" popup while a ride is active.
   const [rideTripArrivedModal, setRideTripArrivedModal] = useState(false);
+  /** `driver` = waiting for passenger to end trip; `passenger` = must tap to call `complete`. */
+  const [tripArrivalKind, setTripArrivalKind] = useState<null | "driver" | "passenger">(null);
   const [completingRideTrip, setCompletingRideTrip] = useState(false);
+  /** Trip leg: passenger follows driver GPS — fire destination arrival once from driver position. */
+  const tripDestArrivalPromptedRef = useRef(false);
   // Pickup-mode arrival: driver reached passenger's pickup — 5 sec auto-dismiss popup + server notify.
   const [ridePickupArrivedModal, setRidePickupArrivedModal] = useState(false);
+  /** Passenger pickup viewer: detect `arrived` from API even when driver_live stops updating. */
+  const passengerPickupArrivedFromServerRef = useRef(false);
 
   const activeRouteCoordsRef = useRef<RouteLineStringCoords>(
     initialCoords.length >= 2 ? [...initialCoords] : [...initialCoords]
@@ -148,6 +221,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const legDistanceRef = useRef(initialRouteInfo.distance);
   const legDurationRef = useRef(initialRouteInfo.duration);
   const lastRerouteAtRef = useRef(0);
+  const lastProactiveRouteAtRef = useRef(0);
   const offRouteSinceRef = useRef<number | null>(null);
   const isNavigatingRef = useRef(false);
   const isFollowingRef = useRef(false);
@@ -160,6 +234,13 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const lastProgressAtRef = useRef(0);
   const lastCameraMoveAtRef = useRef(0);
   const headingForSmoothRef = useRef<number | null>(null);
+  /**
+   * Wall-clock timestamp (Date.now) of the most recent accepted GPS fix. The nav heartbeat /
+   * stationary watchdog use this to keep the UI alive and to log when the OS stops delivering
+   * callbacks (signal loss, killed location service, etc.) — independently of `position.timestamp`
+   * which can occasionally regress on some devices.
+   */
+  const lastGoodFixWallTsRef = useRef(0);
 
   const routeParamsKey = useMemo(() => {
     const c0 = initialCoords.length >= 1 ? initialCoords[0] : null;
@@ -217,11 +298,18 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     legDurationRef.current = initialRouteInfo.duration;
     setRouteInfo(initialRouteInfo);
     setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+    setRemainingRouteMeters(initialRouteInfo.distance);
     setDisplayRouteFC(lineStringToFeatureCollection(coords));
 
     setSessionPhase(navigationPhaseParam === "active" ? "active" : "preview");
     hasArrivedRef.current = false;
+    tripDestArrivalPromptedRef.current = false;
+    setTripArrivalKind(null);
+    autoStartedLiveNavRef.current = false;
+    lastProactiveRouteAtRef.current = 0;
     setShowArrivalModal(false);
+    setRidePickupArrivedModal(false);
+    passengerPickupArrivedFromServerRef.current = false;
     offRouteSinceRef.current = null;
     headingForSmoothRef.current = null;
     setDisplayHeading(null);
@@ -230,6 +318,15 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     setIsFollowingUser(false);
     setShowFullRoute(false);
     lastGoodFixRef.current = null;
+    stagnationAccRef.current = 0;
+    publishedStagnationRef.current = 0;
+    stagnationAnchorRef.current = null;
+    stagnationLastGpsTsRef.current = 0;
+    lastStagnationUiAtRef.current = 0;
+    prevRemainingLengthMetersRef.current = null;
+    passengerStagnationWallTsRef.current = 0;
+    setStagnationDelaySec(0);
+    setEtaTick(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- synced via routeParamsKey above
   }, [routeParamsKey, navigationPhaseParam, gpsSmoother]);
 
@@ -261,6 +358,73 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   useEffect(() => {
     isNavigatingRef.current = sessionPhase === "active";
+  }, [sessionPhase]);
+
+  /** While active nav has flat geometry (stuck in traffic), keep ETA advancing with local time, not a frozen `useMemo`. */
+  useEffect(() => {
+    if (sessionPhase !== "active") return;
+    const id = setInterval(() => {
+      setEtaTick((n) => n + 1);
+    }, ETA_CLOCK_TICK_MS);
+    return () => clearInterval(id);
+  }, [sessionPhase]);
+
+  /**
+   * Live-navigation heartbeat / GPS watchdog.
+   *
+   * With `distanceFilter: 0` Android Fused normally delivers a fix every ~1 s even when the car
+   * is stationary, so the GPS callback handles all derived-state updates. This effect is purely a
+   * safety net for the "Google Maps at a red light" experience:
+   *   1. Logs a warning if no fix has arrived for `GPS_STALL_WARNING_MS` (signal loss / throttle).
+   *   2. If the GPS callback has been silent long enough that derived UI would otherwise freeze,
+   *      recompute the route trim / remaining distance / remaining seconds from the last good
+   *      fix so the panel keeps breathing. We do not move the marker — last fix is still last fix.
+   *
+   * The heartbeat intentionally does nothing when a recent GPS callback already did the work,
+   * to avoid redundant React work / re-renders during normal driving.
+   */
+  useEffect(() => {
+    if (sessionPhase !== "active") return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      const lastFix = lastGoodFixWallTsRef.current;
+      const fixAge = lastFix > 0 ? now - lastFix : -1;
+
+      if (fixAge >= 0 && fixAge > GPS_STALL_WARNING_MS) {
+        console.warn(
+          "[GPS][nav] no GPS fix received for",
+          Math.round(fixAge / 1000),
+          "s — provider may be throttled or signal is lost"
+        );
+      } else if (GPS_DEBUG) {
+        console.log("[GPS][nav][heartbeat] alive, last fix age(ms)=", fixAge);
+      }
+
+      // Only fall back to last-fix-driven recomputation if the live callback hasn't run recently.
+      const lastProgress = lastProgressAtRef.current;
+      if (lastProgress > 0 && now - lastProgress < NAV_HEARTBEAT_MS * 2) return;
+
+      const last = lastGoodFixRef.current;
+      const coords = activeRouteCoordsRef.current;
+      if (!last || coords.length < 2) return;
+
+      const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
+        last.lat,
+        last.lon,
+        coords,
+        SNAP_TRIM_M
+      );
+      activeRouteCoordsRef.current = trimmed;
+      setDisplayRouteFC(lineStringToFeatureCollection(trimmed));
+      setRemainingRouteMeters(remainingLengthMeters);
+      const legD = legDistanceRef.current;
+      const legT = legDurationRef.current;
+      if (legD > 50) {
+        const ratio = Math.min(1, Math.max(0, remainingLengthMeters / legD));
+        setRemainingSeconds(Math.round(legT * ratio));
+      }
+    }, NAV_HEARTBEAT_MS);
+    return () => clearInterval(id);
   }, [sessionPhase]);
 
   useEffect(() => {
@@ -360,13 +524,23 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       }));
       const rem = Math.max(0, durationS);
       setRemainingSeconds(rem);
+      setRemainingRouteMeters(distanceM);
       setDisplayRouteFC(lineStringToFeatureCollection(coords));
+      stagnationAccRef.current = 0;
+      publishedStagnationRef.current = 0;
+      stagnationAnchorRef.current = null;
+      stagnationLastGpsTsRef.current = 0;
+      prevRemainingLengthMetersRef.current = null;
+      lastStagnationUiAtRef.current = 0;
+      passengerStagnationWallTsRef.current = 0;
+      setStagnationDelaySec(0);
     },
     []
   );
 
   const maybeReroute = useCallback(
     async (lat: number, lon: number) => {
+      if (!isOnlineRef.current) return;
       const dest = destinationRef.current;
       if (!dest) return;
       const now = Date.now();
@@ -376,9 +550,34 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       try {
         const res = await fetchOsrmDrivingRoute({ lat, lon: lon }, dest);
         applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
+        lastProactiveRouteAtRef.current = Date.now();
         lastProgressAtRef.current = 0;
       } catch (e) {
         console.warn("Reroute failed", e);
+      } finally {
+        setRerouting(false);
+      }
+    },
+    [applyNewRoute]
+  );
+
+  /** Full OSRM refresh from current position (throttled) — same engine as off-route, keeps ETA/distance in sync with the road network. */
+  const refreshLiveRouteFromServer = useCallback(
+    async (lat: number, lon: number) => {
+      if (!isOnlineRef.current) return;
+      const dest = destinationRef.current;
+      if (!dest) return;
+      const now = Date.now();
+      if (now - lastProactiveRouteAtRef.current < PROACTIVE_ROUTE_REFRESH_MS) return;
+      lastProactiveRouteAtRef.current = now;
+      lastRerouteAtRef.current = now;
+      setRerouting(true);
+      try {
+        const res = await fetchOsrmDrivingRoute({ lat, lon: lon }, dest);
+        applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
+        lastProgressAtRef.current = 0;
+      } catch (e) {
+        console.warn("Live route refresh failed", e);
       } finally {
         setRerouting(false);
       }
@@ -400,6 +599,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     setCurrentHeading(null);
     hasArrivedRef.current = false;
     setShowArrivalModal(false);
+    clearNavigationRouteSnapshot();
     emitLiveNavigationExit();
     navigation.goBack();
   }, [navigation]);
@@ -422,6 +622,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     lastCameraMoveAtRef.current = 0;
 
     const beginLiveNav = async () => {
+      const storedUid = await AsyncStorage.getItem("userId");
+      const driverUserIdForLocation = parseStoredUserId(storedUid);
+      let lastDriverLocPostMs = 0;
+
       let fresh = userLocationRef.current ?? initialUserLocation;
       try {
         fresh = await getFreshPositionForNavigationStart();
@@ -443,11 +647,27 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       );
 
       if (driftM > ROUTE_ORIGIN_DRIFT_REFETCH_M) {
-        try {
-          const res = await fetchOsrmDrivingRoute(fresh, destination);
-          applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
-        } catch (e) {
-          console.warn("Refetch route from fresh GPS failed", e);
+        if (isOnlineRef.current) {
+          try {
+            const res = await fetchOsrmDrivingRoute(fresh, destination);
+            applyNewRoute(res.coordinates, res.distanceMeters, res.durationSeconds);
+          } catch (e) {
+            console.warn("Refetch route from fresh GPS failed", e);
+            const fallbackCoords: RouteLineStringCoords =
+              initialCoords.length >= 2
+                ? [...initialCoords]
+                : [
+                    [fresh.lon, fresh.lat],
+                    [destination.lon, destination.lat],
+                  ];
+            activeRouteCoordsRef.current = fallbackCoords;
+            legDistanceRef.current = initialRouteInfo.distance;
+            legDurationRef.current = initialRouteInfo.duration;
+            setRouteInfo(initialRouteInfo);
+            setRemainingSeconds(Math.max(0, initialRouteInfo.duration));
+            setDisplayRouteFC(lineStringToFeatureCollection(fallbackCoords));
+          }
+        } else {
           const fallbackCoords: RouteLineStringCoords =
             initialCoords.length >= 2
               ? [...initialCoords]
@@ -478,8 +698,18 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         setDisplayRouteFC(lineStringToFeatureCollection(coords));
       }
 
+      stagnationAccRef.current = 0;
+      publishedStagnationRef.current = 0;
+      stagnationAnchorRef.current = null;
+      stagnationLastGpsTsRef.current = 0;
+      prevRemainingLengthMetersRef.current = null;
+      lastStagnationUiAtRef.current = 0;
+      passengerStagnationWallTsRef.current = 0;
+      setStagnationDelaySec(0);
+
       setSessionPhase("active");
       setIsFollowingUser(true);
+      lastProactiveRouteAtRef.current = Date.now();
 
       setTimeout(() => {
         if (cameraRef.current) {
@@ -499,7 +729,19 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           const acc =
             accuracy != null && !Number.isNaN(accuracy) ? Math.max(0, accuracy) : undefined;
           if (GPS_DEBUG) {
-            console.log("[GPS][watch] raw", { latitude, longitude, acc, ts, heading, speed, course });
+            const stationary = speed != null && !Number.isNaN(speed) && speed < 0.5;
+            console.log("[GPS][watch] raw", {
+              latitude,
+              longitude,
+              acc,
+              ts,
+              heading,
+              speed,
+              course,
+              // Surfaces in logcat that callbacks keep firing while the car is stopped — exactly
+              // the proof we want when debugging "the route freezes at red lights".
+              stationary,
+            });
           }
 
           // 1) Stale / out-of-order rejection
@@ -541,9 +783,27 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             accuracy: acc,
             speed: speed != null && !Number.isNaN(speed) ? speed : undefined,
           };
+          lastGoodFixWallTsRef.current = Date.now();
 
           setUserLocation(newLocation);
           userLocationRef.current = newLocation;
+
+          const rcLoc = rideContextRef.current;
+          if (
+            driverUserIdForLocation != null &&
+            rcLoc?.role === "DRIVER" &&
+            rcLoc.mode !== "pickup"
+          ) {
+            const nowMs = Date.now();
+            if (nowMs - lastDriverLocPostMs >= 2500) {
+              lastDriverLocPostMs = nowMs;
+              void updateDriverLocation({
+                driver_user_id: driverUserIdForLocation,
+                lat: latitude,
+                lon: longitude,
+              }).catch(() => {});
+            }
+          }
 
           const dest = destinationRef.current;
           if (dest && !hasArrivedRef.current) {
@@ -556,6 +816,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                 if (rc.mode === "pickup") {
                   setRidePickupArrivedModal(true);
                 } else {
+                  setTripArrivalKind("driver");
                   setRideTripArrivedModal(true);
                 }
               } else {
@@ -641,9 +902,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             }
           }
 
-          // Reduce re-renders: only update state if display moved enough (~0.5m)
+          // No movement threshold during active navigation: even a fix that lands at the same
+          // smoothed coordinate (driver stopped at a light) is intentionally pushed through so the
+          // marker, heading, and React subtree stay "alive" — exactly like Google Maps. Outside of
+          // active nav we keep the ~0.5 m gate to avoid useless re-renders during preview.
           const prevDisp = displayLocationRef.current;
+          const isActiveNav = isNavigatingRef.current;
           if (
+            isActiveNav ||
             !prevDisp ||
             haversineMeters(prevDisp.lat, prevDisp.lon, displayPoint.lat, displayPoint.lon) >= 0.5
           ) {
@@ -671,6 +937,66 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
               legD > 50 ? Math.min(1, Math.max(0, remainingLengthMeters / legD)) : 0;
             const remSec = Math.round(legT * ratio);
             setRemainingSeconds(remSec);
+            setRemainingRouteMeters(remainingLengthMeters);
+
+            const prevRem = prevRemainingLengthMetersRef.current;
+            if (prevRem != null && prevRem - remainingLengthMeters > 30) {
+              stagnationAccRef.current = 0;
+              publishedStagnationRef.current = 0;
+              setStagnationDelaySec(0);
+              stagnationAnchorRef.current = { lat: latitude, lon: longitude };
+            }
+            prevRemainingLengthMetersRef.current = remainingLengthMeters;
+          }
+
+          if (isNavigatingRef.current) {
+            const tPro = Date.now();
+            if (tPro - lastProactiveRouteAtRef.current >= PROACTIVE_ROUTE_REFRESH_MS) {
+              void refreshLiveRouteFromServer(latitude, longitude);
+            }
+          }
+
+          {
+            const anc0 = stagnationAnchorRef.current;
+            if (anc0 == null) {
+              stagnationAnchorRef.current = { lat: latitude, lon: longitude };
+              stagnationLastGpsTsRef.current = ts;
+            } else {
+              const lastTs0 = stagnationLastGpsTsRef.current;
+              const dtGps = Math.max(0, (ts - lastTs0) / 1000);
+              stagnationLastGpsTsRef.current = ts;
+              if (dtGps >= 0.12) {
+                const movedA = haversineMeters(anc0.lat, anc0.lon, latitude, longitude);
+                const isMovingA =
+                  movedA >= STAGNATION_CLEAR_MOVE_M || speedMps > STAGNATION_MAX_SPEED_MPS;
+                if (isMovingA) {
+                  stagnationAccRef.current = 0;
+                  publishedStagnationRef.current = 0;
+                  setStagnationDelaySec(0);
+                  stagnationAnchorRef.current = { lat: latitude, lon: longitude };
+                } else {
+                  stagnationAccRef.current = Math.min(
+                    STAGNATION_MAX_DELAY_SEC,
+                    stagnationAccRef.current + dtGps
+                  );
+                  const target = Math.min(
+                    STAGNATION_MAX_DELAY_SEC,
+                    Math.round(stagnationAccRef.current)
+                  );
+                  if (target !== publishedStagnationRef.current) {
+                    const tUi = Date.now();
+                    if (
+                      tUi - lastStagnationUiAtRef.current >= 1800 ||
+                      Math.abs(target - publishedStagnationRef.current) >= 3
+                    ) {
+                      lastStagnationUiAtRef.current = tUi;
+                      publishedStagnationRef.current = target;
+                      setStagnationDelaySec(target);
+                    }
+                  }
+                }
+              }
+            }
           }
 
           // Camera follow (short animation; throttled; based on accepted fixes only)
@@ -701,8 +1027,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           enableHighAccuracy: true,
           timeout: 15000,
           maximumAge: 0,
-          distanceFilter: 2,
-          interval: 1000,
+          // distanceFilter MUST be 0 for live navigation. Any value > 0 maps to
+          // FusedLocationProviderClient.setMinUpdateDistanceMeters(...) on Android and causes the OS
+          // to suppress callbacks while the user is stopped — the route freezes at red lights.
+          distanceFilter: 0,
+          interval: LIVE_NAV_GPS_INTERVAL_MS,
         } as Parameters<any>[2]
       );
 
@@ -718,6 +1047,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     initialUserLocation,
     gpsSmoother,
     maybeReroute,
+    refreshLiveRouteFromServer,
   ]);
 
   useEffect(() => {
@@ -730,16 +1060,15 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     };
   }, []);
 
-  // Passenger-pickup viewer mode = the passenger is spectating the driver's pickup route.
-  // We must NOT engage watchPosition (the passenger's own GPS is irrelevant to this view and
-  // would falsely trigger arrival detection), NOR call markRideArrived (driver-only). Instead,
-  // we poll the backend for `driver_live_lat/lon` and feed it through the same rendering
-  // pipeline (setUserLocation + polyline trim + maybeReroute + camera follow) used by the
-  // normal navigation engine.
-  const isPassengerPickup =
-    rideContext?.mode === "pickup" && rideContext?.role === "REGULAR";
+  // Regular user / business owner on a shared ride: follow the driver's live position (pickup
+  // and trip to destination) so the map + ETA match the car — same idea as `RideTrackingMap` pickup.
+  const isPassengerRideFollower = rideContext?.role === "REGULAR";
+  const isPassengerPickup = isPassengerRideFollower && rideContext?.mode === "pickup";
+  /** In-trip to final destination: passenger view tracks driver, not the passenger's phone GPS. */
+  const isPassengerTripFollower =
+    isPassengerRideFollower && rideContext?.mode !== "pickup";
 
-  const startPassengerPickupTracking = useCallback(() => {
+  const startPassengerRideFollowerTracking = useCallback(() => {
     if (!destination) return;
     const wPrev = watchIdRef.current;
     if (wPrev != null) {
@@ -747,39 +1076,54 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       watchIdRef.current = null;
     }
     setShowFullRoute(false);
-    // Passenger never "arrives" on this device; block the arrival path permanently for this view.
-    hasArrivedRef.current = true;
     setShowArrivalModal(false);
+    if (rideContext?.mode === "pickup") {
+      // Pickup leg: passenger phone must not trigger arrival; driver marks arrived separately.
+      hasArrivedRef.current = true;
+      tripDestArrivalPromptedRef.current = false;
+    } else {
+      // Trip to destination: arrival is derived from driver's live position vs destination.
+      hasArrivedRef.current = false;
+      tripDestArrivalPromptedRef.current = false;
+    }
     setSessionPhase("active");
     setIsFollowingUser(true);
     isNavigatingRef.current = true;
     lastProgressAtRef.current = 0;
     lastCameraMoveAtRef.current = 0;
-  }, [destination]);
+    lastProactiveRouteAtRef.current = Date.now();
+    stagnationAccRef.current = 0;
+    publishedStagnationRef.current = 0;
+    stagnationAnchorRef.current = null;
+    stagnationLastGpsTsRef.current = 0;
+    prevRemainingLengthMetersRef.current = null;
+    lastStagnationUiAtRef.current = 0;
+    passengerStagnationWallTsRef.current = 0;
+    setStagnationDelaySec(0);
+  }, [destination, rideContext?.mode]);
 
-  const autoStartedLiveNavRef = useRef<boolean>(false);
   useEffect(() => {
     if (autoStartedLiveNavRef.current) return;
     if (sessionPhase !== "active") return;
     if (!rideContext) return;
     autoStartedLiveNavRef.current = true;
-    if (isPassengerPickup) {
-      startPassengerPickupTracking();
+    if (isPassengerRideFollower) {
+      startPassengerRideFollowerTracking();
     } else {
       startLiveNavigation();
     }
   }, [
     sessionPhase,
     rideContext,
-    isPassengerPickup,
+    isPassengerRideFollower,
     startLiveNavigation,
-    startPassengerPickupTracking,
+    startPassengerRideFollowerTracking,
   ]);
 
-  // Passenger-pickup: poll driver's live location every few seconds and re-use the existing
-  // routing pipeline (setUserLocation + trim + reroute + camera) to animate the view.
+  // Passenger (pickup or trip): poll `driver_live_lat/lon` and reuse trim/reroute/camera. Trip
+  // arrival at the final stop uses the same radius as the driver, based on the car position.
   useEffect(() => {
-    if (!isPassengerPickup) return;
+    if (!isPassengerRideFollower) return;
     if (!destination) return;
     let cancelled = false;
 
@@ -797,6 +1141,22 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         ) {
           return;
         }
+
+        if (
+          rideContext?.mode === "pickup" &&
+          normalizeRideRequestStatus(latest.status) === "arrived" &&
+          !passengerPickupArrivedFromServerRef.current
+        ) {
+          passengerPickupArrivedFromServerRef.current = true;
+          hasArrivedRef.current = true;
+          isNavigatingRef.current = false;
+          isFollowingRef.current = false;
+          setSessionPhase("preview");
+          setIsFollowingUser(false);
+          setRidePickupArrivedModal(true);
+          return;
+        }
+
         const lat = latest.driver_live_lat;
         const lon = latest.driver_live_lon;
         if (
@@ -828,8 +1188,17 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           const ratio =
             legD > 50 ? Math.min(1, Math.max(0, remainingLengthMeters / legD)) : 0;
           setRemainingSeconds(Math.round(legT * ratio));
+          setRemainingRouteMeters(remainingLengthMeters);
 
-          // Reroute if the driver strays substantially from the current polyline.
+          const prevRem = prevRemainingLengthMetersRef.current;
+          if (prevRem != null && prevRem - remainingLengthMeters > 30) {
+            stagnationAccRef.current = 0;
+            publishedStagnationRef.current = 0;
+            setStagnationDelaySec(0);
+            stagnationAnchorRef.current = { lat, lon };
+          }
+          prevRemainingLengthMetersRef.current = remainingLengthMeters;
+
           const distToRoute = minDistanceToPolylineMeters(lat, lon, coords);
           if (distToRoute > OFF_ROUTE_THRESHOLD_M) {
             if (offRouteSinceRef.current === null) {
@@ -840,6 +1209,55 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             }
           } else if (distToRoute < ON_ROUTE_THRESHOLD_M) {
             offRouteSinceRef.current = null;
+          }
+        }
+
+        {
+          const pWall = Date.now();
+          if (passengerStagnationWallTsRef.current === 0) {
+            passengerStagnationWallTsRef.current = pWall;
+            if (stagnationAnchorRef.current == null) {
+              stagnationAnchorRef.current = { lat, lon };
+            }
+          } else {
+            const pLastW = passengerStagnationWallTsRef.current;
+            const pDtS = Math.max(0, (pWall - pLastW) / 1000);
+            passengerStagnationWallTsRef.current = pWall;
+            if (pDtS >= 0.2) {
+              const anc0 = stagnationAnchorRef.current;
+              if (anc0 == null) {
+                stagnationAnchorRef.current = { lat, lon };
+              } else {
+                const movedA = haversineMeters(anc0.lat, anc0.lon, lat, lon);
+                const implied = pDtS > 0.05 ? movedA / pDtS : 0;
+                if (movedA >= STAGNATION_CLEAR_MOVE_M || implied > STAGNATION_MAX_SPEED_MPS) {
+                  stagnationAccRef.current = 0;
+                  publishedStagnationRef.current = 0;
+                  setStagnationDelaySec(0);
+                  stagnationAnchorRef.current = { lat, lon };
+                } else {
+                  stagnationAccRef.current = Math.min(
+                    STAGNATION_MAX_DELAY_SEC,
+                    stagnationAccRef.current + pDtS
+                  );
+                  const target = Math.min(
+                    STAGNATION_MAX_DELAY_SEC,
+                    Math.round(stagnationAccRef.current)
+                  );
+                  if (target !== publishedStagnationRef.current) {
+                    const tUi = Date.now();
+                    if (
+                      tUi - lastStagnationUiAtRef.current >= 1800 ||
+                      Math.abs(target - publishedStagnationRef.current) >= 3
+                    ) {
+                      lastStagnationUiAtRef.current = tUi;
+                      publishedStagnationRef.current = target;
+                      setStagnationDelaySec(target);
+                    }
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -854,6 +1272,24 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             });
           }
         }
+
+        if (
+          rideContext?.mode !== "pickup" &&
+          destinationRef.current &&
+          !tripDestArrivalPromptedRef.current
+        ) {
+          const dest = destinationRef.current;
+          const dDest = haversineMeters(lat, lon, dest.lat, dest.lon);
+          if (dDest <= ARRIVAL_RADIUS_M) {
+            tripDestArrivalPromptedRef.current = true;
+            hasArrivedRef.current = true;
+            setTripArrivalKind("passenger");
+            setRideTripArrivedModal(true);
+            setSessionPhase("preview");
+            isNavigatingRef.current = false;
+            setIsFollowingUser(false);
+          }
+        }
       } catch {
         /* transient polling error – will retry on next interval */
       }
@@ -865,7 +1301,127 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       cancelled = true;
       clearInterval(id);
     };
-  }, [isPassengerPickup, destination, rideContext?.rideRequestId, maybeReroute]);
+  }, [isPassengerRideFollower, destination, rideContext?.rideRequestId, rideContext?.mode, maybeReroute]);
+
+  // Passenger follower has no GPS watch — periodic full OSRM refresh from driver's last known point.
+  useEffect(() => {
+    if (!isPassengerRideFollower) return;
+    if (sessionPhase !== "active") return;
+    if (!destination) return;
+    const id = setInterval(() => {
+      const ul = userLocationRef.current;
+      if (!ul) return;
+      void refreshLiveRouteFromServer(ul.lat, ul.lon);
+    }, PROACTIVE_ROUTE_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [isPassengerRideFollower, sessionPhase, destination, refreshLiveRouteFromServer]);
+
+  /** Persist trimmed route locally while navigating (crash / recovery); gated to active phase only. */
+  useEffect(() => {
+    if (sessionPhase !== "active") return;
+    const persist = () => {
+      const dest = destinationRef.current;
+      if (!dest) return;
+      const coords = activeRouteCoordsRef.current;
+      if (coords.length < 2) return;
+      saveNavigationRouteSnapshot({
+        version: 1,
+        routeLine: coords.map((p) => [p[0], p[1]] as [number, number]),
+        destination: { lat: dest.lat, lon: dest.lon, name: dest.name },
+        legDistanceMeters: legDistanceRef.current,
+        legDurationSeconds: legDurationRef.current,
+        updatedAt: Date.now(),
+      });
+    };
+    persist();
+    const id = setInterval(persist, 15000);
+    return () => clearInterval(id);
+  }, [sessionPhase]);
+
+  // Trip to destination (driver): when the passenger completes the ride, return to requests.
+  const isDriverOnTripNav =
+    rideContext?.role === "DRIVER" && rideContext?.mode !== "pickup";
+  useEffect(() => {
+    if (!isDriverOnTripNav || !rideContext) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const stored = await AsyncStorage.getItem("userId");
+        const uid = parseStoredUserId(stored);
+        if (uid == null) return;
+        const list = await getDriverRideRequests(uid);
+        if (cancelled) return;
+        const row = list.find((r) => r.id === rideContext.rideRequestId);
+        if (row && normalizeRideRequestStatus(row.status) === "completed") {
+          navigateToUserRideRequestsTab(navigation as any, "DRIVER");
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isDriverOnTripNav, rideContext, navigation]);
+
+  /**
+   * Cancellation watchdog (both roles, all ride modes): if the ride request
+   * we are currently navigating for becomes `cancelled` (or disappears entirely)
+   * on the backend — regardless of which side cancelled — eject the user out
+   * of the live nav screen back to their ride requests tab. The global
+   * listeners surface the "ride was cancelled" alert; this effect is purely
+   * about *not* leaving the user stuck on a stale live navigation map.
+   */
+  useEffect(() => {
+    if (!rideContext) return;
+    let stopped = false;
+    const targetId = rideContext.rideRequestId;
+    const role = rideContext.role;
+
+    const tick = async () => {
+      try {
+        const stored = await AsyncStorage.getItem("userId");
+        const uid = parseStoredUserId(stored);
+        if (uid == null) return;
+
+        let cancelledOrGone = false;
+        if (role === "DRIVER") {
+          const list = await getDriverRideRequests(uid);
+          if (stopped) return;
+          const row = list.find((r) => r.id === targetId);
+          if (!row) {
+            cancelledOrGone = true;
+          } else if (normalizeRideRequestStatus(row.status) === "cancelled") {
+            cancelledOrGone = true;
+          }
+        } else {
+          const latest = await getRegularLatestRideRequest(uid);
+          if (stopped) return;
+          if (!latest || latest.id !== targetId) {
+            cancelledOrGone = true;
+          } else if (normalizeRideRequestStatus(latest.status) === "cancelled") {
+            cancelledOrGone = true;
+          }
+        }
+        if (cancelledOrGone && !stopped) {
+          stopped = true;
+          navigateToUserRideRequestsTab(navigation as any, role);
+        }
+      } catch {
+        /* network blip — try again next tick */
+      }
+    };
+
+    void tick();
+    const id = setInterval(() => void tick(), 3500);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [rideContext, navigation]);
 
   // Pickup arrival: fire-and-forget markRideArrived + 5s auto-close + return to driver requests.
   useEffect(() => {
@@ -903,6 +1459,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const onRideTripArrivedConfirm = useCallback(async () => {
     if (!rideContext || completingRideTrip) return;
+    if (rideContext.role !== "REGULAR") {
+      return;
+    }
     setCompletingRideTrip(true);
     try {
       const stored = await AsyncStorage.getItem("userId");
@@ -911,15 +1470,12 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         try {
           await completeRideTrip({
             ride_request_id: rideContext.rideRequestId,
-            ...(rideContext.role === "DRIVER"
-              ? { driver_user_id: uid }
-              : { regular_user_id: uid }),
+            regular_user_id: uid,
           });
         } catch (err) {
-          // Already completed by the other party → accept silently; otherwise warn and keep user on screen.
           const msg = err instanceof Error ? err.message : String(err);
           if (!/already completed/i.test(msg)) {
-            Alert.alert(t("error"), t("ride_trip_complete_failed"), [
+            appAlert(t("error"), t("ride_trip_complete_failed"), [
               { text: t("ok") || "OK" },
             ]);
             setCompletingRideTrip(false);
@@ -928,11 +1484,17 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         }
       }
       setRideTripArrivedModal(false);
+      setTripArrivalKind(null);
       navigateToUserRideRequestsTab(navigation as any, rideContext.role);
     } finally {
       setCompletingRideTrip(false);
     }
   }, [rideContext, completingRideTrip, navigation, t]);
+
+  const onDriverTripArrivedAck = useCallback(() => {
+    setRideTripArrivedModal(false);
+    setTripArrivalKind(null);
+  }, []);
 
   const showFullRouteOverview = () => {
     const coords = activeRouteCoordsRef.current;
@@ -946,7 +1508,51 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const isPreview = sessionPhase === "preview";
   const isActive = sessionPhase === "active";
 
-  const etaDate = new Date(Date.now() + remainingSeconds * 1000);
+  /** Model-time remaining (trim × OSRM) + wall-clock when GPS shows almost no travel (traffic, waiting). */
+  const effectiveRemainingSec = useMemo(() => {
+    return Math.min(
+      24 * 3600,
+      Math.max(0, Math.round(remainingSeconds) + Math.round(stagnationDelaySec))
+    );
+  }, [remainingSeconds, stagnationDelaySec]);
+
+  const routeProgress01 = useMemo(() => {
+    if (!isActive || !routeInfo.duration || routeInfo.duration <= 0) return 0;
+    return Math.max(0, Math.min(1, 1 - effectiveRemainingSec / routeInfo.duration));
+  }, [isActive, routeInfo.duration, effectiveRemainingSec]);
+
+  const navigationMetaLine = useMemo(
+    () =>
+      isActive
+        ? `${formatDuration(effectiveRemainingSec)} · ${formatDistance(remainingRouteMeters)}`
+        : `${formatDuration(routeInfo.duration)} · ${formatDistance(routeInfo.distance)}`,
+    [isActive, routeInfo.duration, routeInfo.distance, effectiveRemainingSec, remainingRouteMeters]
+  );
+
+  const navPanelStats = useMemo((): [NavInfoStat, NavInfoStat, NavInfoStat] => {
+    const arrivalD = new Date(Date.now() + effectiveRemainingSec * 1000);
+    const arrivalStr = formatEtaClock(arrivalD);
+    return [
+      {
+        label: t("remaining_time") || "Remaining time",
+        value: t("minutes_remaining_short", {
+          minutes: Math.max(1, Math.round(effectiveRemainingSec / 60)),
+        }),
+        icon: "time-outline",
+        highlight: true,
+      },
+      {
+        label: t("remaining_distance") || "Remaining distance",
+        value: formatDistance(remainingRouteMeters),
+        icon: "navigate-outline",
+      },
+      {
+        label: t("eta_arrival") || "ETA",
+        value: arrivalStr,
+        icon: "location-outline",
+      },
+    ];
+  }, [t, effectiveRemainingSec, remainingRouteMeters, i18n.language, etaTick]);
 
   const onRegionWillChange = (feature: any) => {
     try {
@@ -967,8 +1573,46 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const markerBearing = (displayHeading ?? currentHeading ?? 0) - (mapBearing || 0);
 
+  /**
+   * First coordinate of the displayed route as `[lon, lat]`.
+   * Used both as the start endpoint marker and as the target of the dotted
+   * "off-road" connector when the live position is not exactly on the road.
+   */
+  const firstRouteCoord = useMemo<[number, number] | null>(() => {
+    const coords = displayRouteFC?.features?.[0]?.geometry?.coordinates;
+    if (!coords || coords.length === 0) return null;
+    const [lon, lat] = coords[0] as [number, number];
+    if (typeof lon !== "number" || typeof lat !== "number") return null;
+    return [lon, lat];
+  }, [displayRouteFC]);
+
+  /** Localized remaining ETA for the on-route chip (active navigation only). */
+  const mapEtaBubbleLabel = useMemo(() => {
+    if (!isActive) return null;
+    const sec = effectiveRemainingSec;
+    if (sec <= 0) return null;
+    const totalMin = Math.max(1, Math.round(sec / 60));
+    if (totalMin < 60) {
+      return t("nav_on_route_eta_minutes", { minutes: totalMin });
+    }
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (m === 0) {
+      return t("nav_on_route_eta_hours_only", { hours: h });
+    }
+    return t("nav_on_route_eta_hours_mins", { hours: h, minutes: m });
+  }, [isActive, effectiveRemainingSec, t]);
+
+  /** ~mid-remaining path — readable ahead of the vehicle without covering the destination. */
+  const routeEtaBubbleCoord = useMemo<[number, number] | null>(() => {
+    if (!mapEtaBubbleLabel) return null;
+    const coords = displayRouteFC?.features?.[0]?.geometry?.coordinates as RouteLineStringCoords | undefined;
+    if (!coords || coords.length < 2) return null;
+    return pointAtFractionAlongPolyline(coords, 0.36);
+  }, [mapEtaBubbleLabel, displayRouteFC]);
+
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right", "bottom"]}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       <View style={styles.header}>
@@ -1008,43 +1652,6 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             animationMode="flyTo"
           />
 
-          {userLocation && isPreview && (
-            <PointAnnotation id="start_location" coordinate={[userLocation.lon, userLocation.lat]}>
-              <View style={styles.startMarkerContainer}>
-                <View style={styles.startMarkerPin}>
-                  <View style={styles.startMarkerCircle}>
-                    <Ionicons name="play" size={16} color="#FFFFFF" />
-                  </View>
-                  <View style={styles.startMarkerShadow} />
-                </View>
-                <View style={styles.startMarkerLabel}>
-                  <Text style={styles.startMarkerLabelText}>{t("start") || "Start"}</Text>
-                </View>
-              </View>
-            </PointAnnotation>
-          )}
-
-          {userLocation && isActive && (
-            <NavigationMarker
-              id="user_location"
-              coordinate={[smoothedUserLocation.lon, smoothedUserLocation.lat]}
-              bearingDeg={markerBearing}
-            />
-          )}
-
-          {destination && (
-            <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-              <View style={styles.endMarkerContainer}>
-                <View style={styles.endMarkerPin}>
-                  <View style={styles.endMarkerCircle}>
-                    <Ionicons name="flag" size={18} color="#FFFFFF" />
-                  </View>
-                  <View style={styles.endMarkerShadow} />
-                </View>
-              </View>
-            </PointAnnotation>
-          )}
-
           {displayRouteFC && (
             <ShapeSource id="route" shape={displayRouteFC}>
               {isActive && (
@@ -1071,10 +1678,66 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
               />
             </ShapeSource>
           )}
+
+          {/* Dotted connector from the live "you" position to the first point of
+              the actual road route — only renders when the user is visibly off
+              the road (haversine threshold inside the component). */}
+          {isActive && firstRouteCoord && (
+            <OffRoutePathConnector
+              id="route_connector_active"
+              from={{ lat: smoothedUserLocation.lat, lon: smoothedUserLocation.lon }}
+              to={firstRouteCoord}
+              color={NAV_BLUE}
+              width={3.5}
+            />
+          )}
+
+          {/* Start of the road route — small circle at the actual road origin. */}
+          {firstRouteCoord && (
+            <PointAnnotation id="route_start" coordinate={firstRouteCoord}>
+              <RouteEndpointMarker
+                variant="start"
+                color={isActive ? NAV_BLUE : DARK_TEAL}
+              />
+            </PointAnnotation>
+          )}
+
+          {routeEtaBubbleCoord && mapEtaBubbleLabel ? (
+            <PointAnnotation
+              id="route_eta_on_path"
+              coordinate={routeEtaBubbleCoord}
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <RouteEtaOnMapLabel label={mapEtaBubbleLabel} accentColor={NAV_BLUE} />
+            </PointAnnotation>
+          ) : null}
+
+          {/* Active "you" car marker driven by smoothed GPS + bearing. */}
+          {userLocation && isActive && (
+            <NavigationMarker
+              id="user_location"
+              coordinate={[smoothedUserLocation.lon, smoothedUserLocation.lat]}
+              bearingDeg={markerBearing}
+              variant="minimal"
+            />
+          )}
+
+          {/* Destination drop point — clear flag inside a brand-teal disc. */}
+          {destination && (
+            <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
+              <RouteEndpointMarker variant="end" />
+            </PointAnnotation>
+          )}
         </MapView>
 
         {rideContext ? (
           <View style={styles.rideOverlay}>
+            {isPassengerTripFollower ? (
+              <Text style={styles.rideSharedTripHint}>{t("ride_trip_following_driver_banner")}</Text>
+            ) : null}
+            {isDriverOnTripNav ? (
+              <Text style={styles.rideSharedTripHint}>{t("ride_trip_driver_leads_banner")}</Text>
+            ) : null}
             <Text style={styles.rideOverlayTitle}>{t("ride_trip_participants_title")}</Text>
             <Text style={styles.rideOverlayLine}>
               {t("ride_trip_label_driver")}: {rideContext.driverName}
@@ -1182,80 +1845,55 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           </TouchableOpacity>
         </View>
 
-        {rerouting && isActive && (
-          <View style={styles.reroutingPill}>
-            <Text style={styles.reroutingText}>{t("rerouting") || "Updating route…"}</Text>
-          </View>
-        )}
       </View>
 
       <View style={[styles.routeInfoCard, isPreview && styles.routeInfoCardPreview]}>
-        <View style={styles.routeTypeIndicator}>
-          <Ionicons name="car" size={20} color={DARK_TEAL} />
-          <Text style={styles.routeTypeText}>{t("driving_route") || "Driving Route"}</Text>
-        </View>
-
-        <View style={styles.etaRow}>
-          <View style={styles.etaBlock}>
-            <Text style={styles.etaLabel}>{t("remaining_time") || "Remaining time"}</Text>
-            <Text style={styles.etaValue}>
-              {t("minutes_remaining_short", {
-                minutes: Math.max(1, Math.round(remainingSeconds / 60)),
-              })}
-            </Text>
+        {isActive && !isOnline ? (
+          <View style={styles.offlineNavBanner} accessibilityRole="text">
+            <Ionicons name="cloud-offline-outline" size={16} color="#92400E" style={{ marginRight: 8 }} />
+            <Text style={styles.offlineNavBannerText}>{t("offline_nav_banner")}</Text>
           </View>
-          <View style={styles.etaDivider} />
-          <View style={styles.etaBlock}>
-            <Text style={styles.etaLabel}>{t("eta_arrival") || "ETA"}</Text>
-            <Text style={styles.etaValue}>{formatEtaClock(etaDate)}</Text>
-          </View>
-        </View>
-
-        <View style={styles.routeSummary}>
-          <View style={styles.routeSummaryItem}>
-            <Ionicons name="time-outline" size={18} color={DARK_TEAL} />
-            <View style={styles.routeSummaryTextContainer}>
-              <Text style={styles.routeSummaryLabel}>{t("time") || "Time"}</Text>
-              <Text style={styles.routeSummaryValue}>{formatDuration(routeInfo.duration)}</Text>
+        ) : null}
+        <NavigationInfoPanel
+          accentColor={DARK_TEAL}
+          isLive={isActive}
+          showLiveDot={isActive}
+          liveLabel={t("driving_route") || "Driving Route"}
+          rerouting={Boolean(rerouting && isActive)}
+          stats={navPanelStats}
+          metaLine={navigationMetaLine}
+          progress={routeProgress01}
+          showProgress={isActive && routeInfo.duration > 0}
+          contentPaddingBottom={Platform.OS === "ios" ? 18 : 10}
+        >
+          {isPreview ? (
+            <View style={styles.previewActions}>
+              <TouchableOpacity style={styles.startNavigationButton} onPress={startLiveNavigation}>
+                <Ionicons name="navigate" size={20} color="#FFFFFF" />
+                <Text style={styles.startNavigationButtonText}>
+                  {t("start_navigation") || "Start Navigation"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.backToPlaceButton}
+                onPress={() => navigation.goBack()}
+              >
+                <Ionicons name="map-outline" size={20} color={DARK_TEAL} />
+                <Text style={styles.backToPlaceButtonText}>{t("return_to_map")}</Text>
+              </TouchableOpacity>
             </View>
-          </View>
-          <View style={styles.routeSummaryDivider} />
-          <View style={styles.routeSummaryItem}>
-            <Ionicons name="navigate-outline" size={18} color={DARK_TEAL} />
-            <View style={styles.routeSummaryTextContainer}>
-              <Text style={styles.routeSummaryLabel}>{t("distance") || "Distance"}</Text>
-              <Text style={styles.routeSummaryValue}>{formatDistance(routeInfo.distance)}</Text>
-            </View>
-          </View>
-        </View>
+          ) : null}
 
-        {isPreview && (
-          <View style={styles.previewActions}>
-            <TouchableOpacity style={styles.startNavigationButton} onPress={startLiveNavigation}>
-              <Ionicons name="navigate" size={20} color="#FFFFFF" />
-              <Text style={styles.startNavigationButtonText}>
-                {t("start_navigation") || "Start Navigation"}
-              </Text>
-            </TouchableOpacity>
+          {isActive && !rideContext ? (
             <TouchableOpacity
-              style={styles.backToPlaceButton}
-              onPress={() => navigation.goBack()}
+              style={styles.stopNavigationButton}
+              onPress={stopLiveNavigationAndReturnHome}
             >
-              <Ionicons name="map-outline" size={20} color={DARK_TEAL} />
-              <Text style={styles.backToPlaceButtonText}>{t("return_to_map")}</Text>
+              <Ionicons name="stop-circle" size={20} color="#FFFFFF" />
+              <Text style={styles.stopNavigationButtonText}>{t("stop_navigation")}</Text>
             </TouchableOpacity>
-          </View>
-        )}
-
-        {isActive && !rideContext && (
-          <TouchableOpacity
-            style={styles.stopNavigationButton}
-            onPress={stopLiveNavigationAndReturnHome}
-          >
-            <Ionicons name="stop-circle" size={20} color="#FFFFFF" />
-            <Text style={styles.stopNavigationButtonText}>{t("stop_navigation")}</Text>
-          </TouchableOpacity>
-        )}
+          ) : null}
+        </NavigationInfoPanel>
       </View>
 
       <Modal
@@ -1295,7 +1933,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         transparent
         animationType="fade"
         onRequestClose={() => {
-          /* block dismiss – user must tap the confirm button to end the ride */
+          if (tripArrivalKind === "driver") {
+            onDriverTripArrivedAck();
+          }
         }}
       >
         <View style={styles.modalOverlay}>
@@ -1305,16 +1945,37 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                 <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
               </View>
               <Text style={styles.arrivalModalTitle}>
-                {t("ride_trip_arrived_title")}
+                {tripArrivalKind === "driver"
+                  ? t("ride_trip_driver_arrived_title")
+                  : t("ride_trip_arrived_title")}
               </Text>
+              {tripArrivalKind === "driver" ? (
+                <Text style={styles.arrivalModalMessage}>
+                  {t("ride_trip_driver_arrived_body")}
+                </Text>
+              ) : (
+                <Text style={styles.arrivalModalMessage}>
+                  {t("ride_trip_passenger_end_body")}
+                </Text>
+              )}
               <TouchableOpacity
                 style={styles.arrivalModalButton}
-                onPress={() => void onRideTripArrivedConfirm()}
+                onPress={() => {
+                  if (tripArrivalKind === "driver") {
+                    onDriverTripArrivedAck();
+                  } else {
+                    void onRideTripArrivedConfirm();
+                  }
+                }}
                 disabled={completingRideTrip}
                 activeOpacity={0.8}
               >
                 <Text style={styles.arrivalModalButtonText}>
-                  {completingRideTrip ? "…" : t("ride_trip_arrived_confirm")}
+                  {completingRideTrip
+                    ? "…"
+                    : tripArrivalKind === "driver"
+                      ? t("ride_trip_driver_arrived_ok")
+                      : t("ride_trip_passenger_end_confirm")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1337,10 +1998,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                 <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
               </View>
               <Text style={styles.arrivalModalTitle}>
-                {t("ride_pickup_arrived_title")}
+                {rideContext?.role === "DRIVER"
+                  ? t("ride_pickup_arrived_title")
+                  : t("ride_passenger_driver_arrived_title")}
               </Text>
               <Text style={styles.arrivalModalMessage}>
-                {t("ride_pickup_arrived_body")}
+                {rideContext?.role === "DRIVER"
+                  ? t("ride_pickup_arrived_body")
+                  : t("ride_passenger_driver_arrived_message")}
               </Text>
             </View>
           </View>
@@ -1356,7 +2021,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           destinationLon={rideContext.destinationLon}
         />
       ) : null}
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -1369,7 +2034,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === "ios" ? 50 : StatusBar.currentHeight ? StatusBar.currentHeight + 4 : 12,
+    paddingTop: 12,
     paddingBottom: 14,
     backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
@@ -1389,20 +2054,6 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
-  reroutingPill: {
-    position: "absolute",
-    top: 16,
-    alignSelf: "center",
-    backgroundColor: "rgba(15,91,99,0.92)",
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  reroutingText: {
-    color: "#fff",
-    fontWeight: "600",
-    fontSize: 13,
-  },
   rideOverlay: {
     position: "absolute",
     top: 12,
@@ -1413,6 +2064,13 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(0,0,0,0.12)",
+  },
+  rideSharedTripHint: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#1565c0",
+    marginBottom: 8,
+    lineHeight: 17,
   },
   rideOverlayTitle: { fontSize: 13, fontWeight: "800", color: DARK_TEAL, marginBottom: 6 },
   rideOverlayLine: { fontSize: 13, color: "#222", marginBottom: 2 },
@@ -1600,112 +2258,27 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: Platform.OS === "ios" ? 32 : 22,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 12,
-    borderTopWidth: 1,
-    borderColor: "#E8EDF0",
+  },
+  offlineNavBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FEF3C7",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#FCD34D",
+  },
+  offlineNavBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#92400E",
+    lineHeight: 18,
   },
   routeInfoCardPreview: {
     maxHeight: "42%",
   },
-  routeTypeIndicator: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#F0F9FF",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#E0F2FE",
-  },
-  routeTypeText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: DARK_TEAL,
-    marginLeft: 6,
-    letterSpacing: 0.3,
-  },
-  etaRow: {
-    flexDirection: "row",
-    alignItems: "stretch",
-    backgroundColor: "#F8FAFC",
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#EEF2F6",
-  },
-  etaBlock: {
-    flex: 1,
-    alignItems: "center",
-  },
-  etaDivider: {
-    width: 1,
-    backgroundColor: "#E5E7EB",
-    marginVertical: 4,
-  },
-  etaLabel: {
-    fontSize: 11,
-    color: "#64748B",
-    fontWeight: "600",
-    marginBottom: 4,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-  },
-  etaValue: {
-    fontSize: 17,
-    fontWeight: "800",
-    color: "#0f172a",
-    letterSpacing: -0.3,
-  },
-  routeSummary: {
-    flexDirection: "row",
-    backgroundColor: "#F8F9FA",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-  },
-  routeSummaryItem: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  routeSummaryTextContainer: {
-    marginLeft: 8,
-  },
-  routeSummaryLabel: {
-    fontSize: 10,
-    color: "#6B7280",
-    fontWeight: "600",
-    marginBottom: 2,
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
-  },
-  routeSummaryValue: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: DARK_TEAL,
-    letterSpacing: -0.2,
-  },
-  routeSummaryDivider: {
-    width: 1,
-    height: 35,
-    backgroundColor: "#E5E7EB",
-    marginHorizontal: 12,
-  },
   previewActions: {
+    marginTop: 4,
     gap: 10,
   },
   startNavigationButton: {
@@ -1744,6 +2317,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#F44336",
+    marginTop: 12,
     paddingVertical: 14,
     borderRadius: 14,
     gap: 8,

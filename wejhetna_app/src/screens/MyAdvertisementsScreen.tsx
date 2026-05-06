@@ -5,20 +5,8 @@
  * take down a published poster early (before its 7-day window ends).
  */
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  ActivityIndicator,
-  Image,
-  RefreshControl,
-  Alert,
-  Modal,
-  Platform,
-  StatusBar,
-} from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Image, RefreshControl, Modal, Platform, StatusBar } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { useFocusEffect } from "@react-navigation/native";
@@ -163,7 +151,7 @@ export default function MyAdvertisementsScreen({ route, navigation }: Props) {
       setPendingDelete(null);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(t("error"), t("advertisements.delete.failed", { message: msg }));
+      appAlert(t("error"), t("advertisements.delete.failed", { message: msg }));
     } finally {
       setDeleteBusy(false);
     }
@@ -275,7 +263,7 @@ export default function MyAdvertisementsScreen({ route, navigation }: Props) {
 
   if (loading && items.length === 0) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
+      <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
         <StatusBar barStyle="dark-content" backgroundColor={BG} />
         <View style={[styles.topBar, isRTL && styles.topBarRTL]}>
           <TouchableOpacity
@@ -303,7 +291,7 @@ export default function MyAdvertisementsScreen({ route, navigation }: Props) {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <SafeAreaView style={styles.safe} edges={["top", "left", "right", "bottom"]}>
       <StatusBar barStyle="dark-content" backgroundColor={BG} />
       <View style={[styles.topBar, isRTL && styles.topBarRTL]}>
         <TouchableOpacity

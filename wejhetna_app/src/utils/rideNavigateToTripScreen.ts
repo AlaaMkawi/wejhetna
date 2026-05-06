@@ -22,7 +22,10 @@ export function navigateToRidePickupNavigation(
   navigation.navigate("RidePickupNavigation", { rideRequestId });
 }
 
-/** Root stack: open the correct ride-requests tab (driver vs passenger). Pops over full-screen ride flows when needed. */
+/**
+ * Root stack: open the correct ride tab (driver requests vs passenger transport).
+ * `REGULAR` means the passenger/transport tab — same for regular users and business owners.
+ */
 export function navigateToUserRideRequestsTab(
   navigation: NativeStackNavigationProp<RootStackParamList>,
   role: "DRIVER" | "REGULAR"

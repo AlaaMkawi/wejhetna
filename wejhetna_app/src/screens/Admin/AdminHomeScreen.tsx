@@ -1,23 +1,8 @@
 // src/screens/AdminHomeScreen.tsx
 
 import React, { useEffect, useState, useRef } from "react";
-import {
-  View,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  Platform,
-  StatusBar,
-  Alert,
-  Dimensions,
-  ScrollView,
-  Image,
-  PanResponder,
-  Modal,
-  ActivityIndicator,
-  Linking,
-  DeviceEventEmitter,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar, Dimensions, ScrollView, Image, PanResponder, Modal, ActivityIndicator, Linking, DeviceEventEmitter } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -34,6 +19,7 @@ import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityI
 import i18n from "../../i18n";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../../config";
+import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { useInitialMapGeolocation } from "../../hooks/useInitialMapGeolocation";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
@@ -53,6 +39,8 @@ const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-round
 const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
 const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי (75% מהמסך)
 const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
+const MAP_PICK_DEST_FAB_BOTTOM = 124;
+const MAP_PICK_DEST_BANNER_BOTTOM = MAP_PICK_DEST_FAB_BOTTOM + 56 + 12;
 
 // Zoom thresholds for displaying different types of places
 // At zoom < 13: Only roads and city outlines (handled by MapTiler style)
@@ -197,6 +185,8 @@ const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boole
 
 export default function AdminHomeScreen() {
   const { t } = useTranslation();
+  const mapPickFabBottom = useOverlayBottomOffset(MAP_PICK_DEST_FAB_BOTTOM);
+  const mapPickBannerBottom = useOverlayBottomOffset(MAP_PICK_DEST_BANNER_BOTTOM);
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const cameraRef = useRef<any>(null);
@@ -409,7 +399,7 @@ export default function AdminHomeScreen() {
         }
       } catch (error: any) {
         console.error("Translation error:", error);
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error?.message || t("translation_failed") || "נכשל בתרגום. אנא ודא שהשרת רץ ונסה שוב."
         );
@@ -440,7 +430,7 @@ export default function AdminHomeScreen() {
         }
       } catch (error: any) {
         console.error("Translation error:", error);
-        Alert.alert(
+        appAlert(
           t("error") || "שגיאה",
           error?.message || t("translation_failed") || "נכשל בתרגום. אנא ודא שהשרת רץ ונסה שוב."
         );
@@ -464,20 +454,20 @@ export default function AdminHomeScreen() {
       if (isPlaceSaved) {
         await unsavePlace(userId, selectedPlace.id);
         setIsPlaceSaved(false);
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_removed_from_saved") || "המקום הוסר מהשמורים"
         );
       } else {
         await savePlace(userId, selectedPlace.id);
         setIsPlaceSaved(true);
-        Alert.alert(
+        appAlert(
           t("success") || "הצלחה",
           t("place_saved_successfully") || "המקום נשמר בהצלחה"
         );
       }
     } catch (error: any) {
-      Alert.alert(
+      appAlert(
         t("error") || "שגיאה",
         error.message || t("failed_to_save_place") || "נכשל בשמירת המקום"
       );
@@ -797,7 +787,7 @@ export default function AdminHomeScreen() {
   const handleDeletePlace = async () => {
     if (!selectedPlace) return;
 
-    Alert.alert(
+    appAlert(
       "מחיקת מקום",
       `האם אתה בטוח שברצונך למחוק את המקום "${selectedPlace.name}"?`,
       [
@@ -832,9 +822,9 @@ export default function AdminHomeScreen() {
               selectedPlaceIdRef.current = null;
               setSelectedPlace(null);
               setDestination((d) => destinationAfterClosingPlaceDetails(d, placeClosed));
-              Alert.alert("הצלחה", "המקום נמחק בהצלחה");
+              appAlert("הצלחה", "המקום נמחק בהצלחה");
             } catch (error: any) {
-              Alert.alert("שגיאה", error.message || "Failed to delete place");
+              appAlert("שגיאה", error.message || "Failed to delete place");
             }
           },
         },
@@ -1117,7 +1107,11 @@ export default function AdminHomeScreen() {
       </View>
 
       <TouchableOpacity
-        style={[styles.pickDestinationFab, isPickingMapDestination && styles.pickDestinationFabActive]}
+        style={[
+          styles.pickDestinationFab,
+          { bottom: mapPickFabBottom },
+          isPickingMapDestination && styles.pickDestinationFabActive,
+        ]}
         onPress={() => {
           setIsPickingMapDestination((v) => {
             const next = !v;
@@ -1141,7 +1135,10 @@ export default function AdminHomeScreen() {
       </TouchableOpacity>
 
       {isPickingMapDestination && (
-        <View style={styles.pickDestinationBanner} pointerEvents="box-none">
+        <View
+          style={[styles.pickDestinationBanner, { bottom: mapPickBannerBottom }]}
+          pointerEvents="box-none"
+        >
           <View style={styles.pickDestinationBannerInner}>
             <View style={styles.pickDestinationBannerTextCol}>
               <Text style={styles.pickDestinationBannerTitle}>{t("map_pick_destination_banner_title")}</Text>
@@ -1307,33 +1304,33 @@ export default function AdminHomeScreen() {
               )}
             </View>
 
-            {/* Action Buttons Row */}
-            <View style={styles.actionButtonsRow}>
-              <TouchableOpacity style={styles.actionButtonSecondary}>
-                <Ionicons name="share-outline" size={20} color="#0f5b63" />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {t("share") || "שיתוף"}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.actionButtonSecondary}
-                onPress={handleToggleSave}
-                disabled={savingPlace || !userId}
-              >
-                <Ionicons 
-                  name={isPlaceSaved ? "bookmark" : "bookmark-outline"} 
-                  size={20} 
-                  color={isPlaceSaved ? "#0f5b63" : "#0f5b63"} 
-                />
-                <Text style={styles.actionButtonSecondaryText}>
-                  {isPlaceSaved ? (t("saved") || "שמור") : (t("save") || "שמירה")}
-                </Text>
-              </TouchableOpacity>
-              
-              {/* Get Directions Button - Navigates directly to RouteDetailsScreen */}
+            {/* Action buttons: share/save row, then full-width primary CTA */}
+            <View style={styles.actionButtonsBlock}>
+              <View style={styles.actionButtonsRowTop}>
+                <TouchableOpacity style={styles.actionButtonSecondary}>
+                  <Ionicons name="share-outline" size={20} color="#0f5b63" />
+                  <Text style={styles.actionButtonSecondaryText}>
+                    {t("share") || "שיתוף"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionButtonSecondary}
+                  onPress={handleToggleSave}
+                  disabled={savingPlace || !userId}
+                >
+                  <Ionicons
+                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"}
+                    size={20}
+                    color={isPlaceSaved ? "#0f5b63" : "#0f5b63"}
+                  />
+                  <Text style={styles.actionButtonSecondaryText}>
+                    {isPlaceSaved ? t("saved") || "שמור" : t("save") || "שמירה"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
               {destination && (
                 <TouchableOpacity
-                  style={styles.actionButtonPrimary}
+                  style={styles.actionButtonPrimaryFull}
                   onPress={getRoute}
                   disabled={routeLoading}
                 >
@@ -1352,7 +1349,7 @@ export default function AdminHomeScreen() {
 
               {!destination && (
                 <TouchableOpacity
-                  style={styles.actionButtonPrimary}
+                  style={styles.actionButtonPrimaryFull}
                   onPress={() => {
                     if (selectedPlace && selectedPlace.location) {
                       handlePlaceTap(selectedPlace);
@@ -1613,7 +1610,7 @@ export default function AdminHomeScreen() {
                       ? selectedPlace.social_links! 
                       : `https://${selectedPlace.social_links}`;
                     Linking.openURL(url).catch(_err => {
-                      Alert.alert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
+                      appAlert(t("error") || "Error", t("could_not_open_link") || "Could not open link");
                     });
                   }}
                   activeOpacity={0.7}
@@ -1959,7 +1956,6 @@ const styles = StyleSheet.create({
   pickDestinationFab: {
     position: "absolute",
     left: 20,
-    bottom: 100,
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -1983,7 +1979,6 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 16,
     right: 16,
-    bottom: 168,
     zIndex: 1099,
   },
   pickDestinationBannerInner: {
@@ -2148,10 +2143,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
   },
-  actionButtonsRow: {
-    flexDirection: "row",
+  actionButtonsBlock: {
     paddingHorizontal: 16,
     paddingBottom: 16,
+    gap: 10,
+  },
+  actionButtonsRowTop: {
+    flexDirection: "row",
     gap: 8,
   },
   actionButtonSecondary: {
@@ -2161,30 +2159,35 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#F2F2F7",
     borderRadius: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 8,
+    minHeight: 48,
   },
   actionButtonSecondaryText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
     color: "#0f5b63",
+    textAlign: "center",
+    flexShrink: 1,
   },
-  actionButtonPrimary: {
-    flex: 1.5,
+  actionButtonPrimaryFull: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#0f5b63",
     borderRadius: 24,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 8,
+    width: "100%",
   },
   actionButtonPrimaryText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "600",
     color: "#FFFFFF",
+    textAlign: "center",
+    flexShrink: 1,
   },
   imageGalleryContainer: {
     paddingHorizontal: 16,

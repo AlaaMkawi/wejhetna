@@ -1,20 +1,8 @@
 // src/screens/Admin/AdminBusinessOwnerRequestDetailsScreen.tsx
 
 import React, { useState, useRef, useEffect } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  Modal,
-  TextInput,
-  ActivityIndicator,
-  Image,
-  StatusBar,
-  Platform,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, ActivityIndicator, Image, StatusBar, Platform } from "react-native";
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -202,7 +190,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
     : null;
 
   const handleApprove = async () => {
-    Alert.alert(
+    appAlert(
       t("accept"),
       t("approve_request_message") || "Are you sure you want to approve this business owner request?",
       [
@@ -256,7 +244,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
 
   const handleRejectConfirm = async () => {
     if (!rejectReason.trim()) {
-      Alert.alert(t("missing_reason"), t("please_type_reason"));
+      appAlert(t("missing_reason"), t("please_type_reason"));
       return;
     }
 

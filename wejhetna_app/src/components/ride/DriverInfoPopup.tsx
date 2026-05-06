@@ -4,7 +4,6 @@ import {
   Animated,
   Easing,
   Modal,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -14,14 +13,14 @@ import {
 import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import type { NearbyDriver } from "../../api/rides";
+import { Colors, Radius, Shadow, Spacing, Typography } from "../../theme";
+import { formatDistance } from "../../utils/formatDistance";
 
-const TEAL = "#0f5b63";
-const TEAL_SOFT = "#e6f2f3";
-const MUTED = "#6b7280";
-const GOLD = "#f5a623";
-const DANGER = "#c5322a";
-const BORDER = "#e5e7eb";
-const CARD = "#ffffff";
+// Keeping a local alias for the teal so existing visual hierarchy is preserved
+// while all new surfaces/borders/text follow the central theme tokens.
+const BRAND = Colors.primary;
+const BRAND_SOFT = Colors.primarySoft;
+const ACCENT = Colors.accent;
 
 export type DriverInfoPopupProps = {
   visible: boolean;
@@ -93,14 +92,15 @@ export function DriverInfoPopup({
 
   const plate = driver?.plate_number ?? null;
 
-  const distanceLabel = useMemo(() => {
+  // Clean "2.4 km" / "850 m" style formatting (no misleading "0 km" for short
+  // distances). Unit translation is handled inside the formatter.
+  const distanceDisplay = useMemo(() => {
     const value =
       distanceKm != null && Number.isFinite(distanceKm)
         ? distanceKm
         : driver?.distance_km;
-    if (value == null || !Number.isFinite(Number(value))) return null;
-    return Number(value).toFixed(value < 1 ? 2 : 1);
-  }, [distanceKm, driver]);
+    return formatDistance(value, { t });
+  }, [distanceKm, driver, t]);
 
   if (!driver) {
     return null;
@@ -129,12 +129,12 @@ export function DriverInfoPopup({
               accessibilityRole="button"
               accessibilityLabel={t("close") || "Close"}
             >
-              <Ionicons name="close" size={20} color="#374151" />
+              <Ionicons name="close" size={20} color={Colors.textSecondary} />
             </TouchableOpacity>
 
             <View style={styles.headerRow}>
               <View style={styles.avatar}>
-                <Ionicons name="person" size={26} color={TEAL} />
+                <Ionicons name="person" size={26} color={BRAND} />
               </View>
               <View style={styles.headerText}>
                 <Text style={styles.name} numberOfLines={1}>
@@ -150,7 +150,7 @@ export function DriverInfoPopup({
               <Ionicons
                 name={hasRating ? "star" : "star-outline"}
                 size={16}
-                color={hasRating ? GOLD : MUTED}
+                color={hasRating ? ACCENT : Colors.textMuted}
               />
               <Text style={styles.ratingValue}>
                 {hasRating ? ratingAvg.toFixed(1) : t("ride_rating_none") || "—"}
@@ -164,7 +164,7 @@ export function DriverInfoPopup({
 
             {(carSubtitle || plate) && (
               <View style={styles.infoRow}>
-                <Ionicons name="car-sport" size={16} color={TEAL} />
+                <Ionicons name="car-sport" size={16} color={BRAND} />
                 <Text style={styles.infoText} numberOfLines={1}>
                   {carSubtitle || t("ride_vehicle") || "Vehicle"}
                   {plate ? `  ·  ${plate}` : ""}
@@ -172,18 +172,18 @@ export function DriverInfoPopup({
               </View>
             )}
 
-            {distanceLabel && (
+            {distanceDisplay ? (
               <View style={styles.infoRow}>
-                <Ionicons name="navigate" size={16} color={TEAL} />
+                <Ionicons name="navigate" size={16} color={BRAND} />
                 <Text style={styles.infoText}>
-                  {distanceLabel} {t("ride_km") || "km"} {t("ride_away") || "away"}
+                  {distanceDisplay.text} {t("ride_away") || "away"}
                 </Text>
               </View>
-            )}
+            ) : null}
 
             {destinationText ? (
               <View style={styles.infoRow}>
-                <Ionicons name="flag" size={16} color={TEAL} />
+                <Ionicons name="flag" size={16} color={BRAND} />
                 <Text style={styles.infoText} numberOfLines={2}>
                   {destinationText}
                 </Text>
@@ -200,7 +200,11 @@ export function DriverInfoPopup({
                   onPress={() => setPassengers((p) => Math.max(1, p - 1))}
                   disabled={passengers <= 1}
                 >
-                  <Ionicons name="remove" size={18} color={passengers <= 1 ? "#9ca3af" : TEAL} />
+                  <Ionicons
+                    name="remove"
+                    size={18}
+                    color={passengers <= 1 ? Colors.textMuted : BRAND}
+                  />
                 </TouchableOpacity>
                 <Text style={styles.passengerCount}>{passengers}</Text>
                 <TouchableOpacity
@@ -214,7 +218,7 @@ export function DriverInfoPopup({
                   <Ionicons
                     name="add"
                     size={18}
-                    color={passengers >= maxPassengers ? "#9ca3af" : TEAL}
+                    color={passengers >= maxPassengers ? Colors.textMuted : BRAND}
                   />
                 </TouchableOpacity>
               </View>
@@ -253,53 +257,46 @@ export function DriverInfoPopup({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(17, 24, 39, 0.45)",
+    backgroundColor: Colors.overlay,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: Spacing.xxl,
   },
   cardWrap: {
     width: "100%",
     maxWidth: 380,
   },
   card: {
-    backgroundColor: CARD,
-    borderRadius: 20,
-    padding: 18,
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.18,
-        shadowRadius: 18,
-      },
-      android: { elevation: 10 },
-      default: {},
-    }),
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xxl,
+    padding: Spacing.xl,
+    ...Shadow.float,
   },
   closeBtn: {
     position: "absolute",
-    top: 10,
-    right: 10,
+    top: Spacing.sm + 2,
+    right: Spacing.sm + 2,
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: Radius.pill,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f3f4f6",
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
     zIndex: 2,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: Spacing.md,
     paddingRight: 36,
   },
   avatar: {
     width: 52,
     height: 52,
-    borderRadius: 26,
-    backgroundColor: TEAL_SOFT,
+    borderRadius: Radius.pill,
+    backgroundColor: BRAND_SOFT,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -308,102 +305,103 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   name: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#111827",
+    fontSize: Typography.sizeLg,
+    fontWeight: Typography.weightBold,
+    color: Colors.text,
   },
   username: {
     marginTop: 2,
-    fontSize: 13,
-    color: MUTED,
+    fontSize: Typography.sizeSm + 1,
+    color: Colors.textSecondary,
   },
   ratingRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    marginTop: 14,
+    marginTop: Spacing.lg - 2,
   },
   ratingValue: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#111827",
+    fontSize: Typography.sizeMd,
+    fontWeight: Typography.weightBold,
+    color: Colors.text,
   },
   ratingCount: {
-    fontSize: 13,
-    color: MUTED,
+    fontSize: Typography.sizeSm + 1,
+    color: Colors.textSecondary,
   },
   infoRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    marginTop: 10,
+    gap: Spacing.sm,
+    marginTop: Spacing.sm + 2,
   },
   infoText: {
     flex: 1,
-    fontSize: 14,
-    color: "#374151",
+    fontSize: Typography.sizeBase,
+    color: Colors.textSecondary,
   },
   passengerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 16,
-    paddingTop: 14,
+    marginTop: Spacing.lg,
+    paddingTop: Spacing.md + 2,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: BORDER,
+    borderTopColor: Colors.divider,
   },
   passengerLabel: {
-    fontSize: 14,
-    color: "#374151",
-    fontWeight: "600",
+    fontSize: Typography.sizeBase,
+    color: Colors.text,
+    fontWeight: Typography.weightSemibold,
   },
   passengerControls: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: Spacing.sm + 2,
   },
   passengerBtn: {
     width: 34,
     height: 34,
-    borderRadius: 17,
+    borderRadius: Radius.pill,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
+    backgroundColor: Colors.surface,
   },
   passengerBtnDisabled: {
-    backgroundColor: "#f9fafb",
+    backgroundColor: Colors.surfaceMuted,
   },
   passengerCount: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
+    fontSize: Typography.sizeMd + 1,
+    fontWeight: Typography.weightBold,
+    color: Colors.text,
     minWidth: 20,
     textAlign: "center",
   },
   errorText: {
-    marginTop: 10,
-    fontSize: 12,
-    color: DANGER,
+    marginTop: Spacing.sm + 2,
+    fontSize: Typography.sizeSm,
+    color: Colors.danger,
   },
   sendBtn: {
-    marginTop: 16,
+    marginTop: Spacing.lg,
     height: 48,
-    borderRadius: 12,
-    backgroundColor: TEAL,
+    borderRadius: Radius.lg,
+    backgroundColor: BRAND,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
+    gap: Spacing.sm,
+    ...Shadow.soft,
   },
   sendBtnDisabled: {
     opacity: 0.7,
   },
   sendBtnText: {
-    color: "#fff",
-    fontSize: 15,
-    fontWeight: "700",
+    color: Colors.textInverse,
+    fontSize: Typography.sizeMd,
+    fontWeight: Typography.weightBold,
   },
 });
 

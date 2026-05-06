@@ -1,26 +1,17 @@
 // src/screens/ProfileScreen.tsx
 
 import React, { useEffect, useState, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-  Image,
-  TextInput,
-} from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, TextInput } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { useNavigation, useRoute, CommonActions } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import Accordion from "../components/Accordion";
 import SimpleLanguageSwitcher from "../components/SimpleLanguageSwitcher";
 import { RootStackParamList } from "../navigation/types";
-import { notifyUserLoggedOut } from "../utils/locationSession";
+import { clearUserSession } from "../utils/sessionLogout";
 import {
   getUserProfile,
   getDriverProfile,
@@ -29,15 +20,43 @@ import {
   DriverProfileInfo,
   BusinessOwnerProfileInfo,
 } from "../api/profileApi";
+import { loadProfileCache, saveProfileCache } from "../db/offlineProfileCache";
 import { API_BASE_URL } from "../../config";
+import { Colors, Radius, Shadow, Spacing, Typography } from "../theme";
+import { useListBottomPad } from "../theme/safeArea";
+import {
+  ProfileHeaderCard,
+  ProfileSection,
+  ProfileDetailRow,
+  ProfileShortcutCard,
+  ProfileStatTile,
+  LogoutConfirmModal,
+} from "../components/profile";
+import type { StatusTone } from "../components/ui/StatusDot";
 
-const DARK_TEAL = "#0f5b63";
-const MINT = "#9bd3d8";
+// Translated, role-aware label map for the header badge.
+const ROLE_LABEL_KEY: Record<UserProfile["role"], string> = {
+  REGULAR: "regular_user",
+  DRIVER: "driver",
+  BUSINESS_OWNER: "business_owner",
+  ADMIN: "admin",
+};
+
+// Distinct accent per role keeps the family identity readable while breaking
+// up the "all blue" feeling on shared profile chrome.
+const ROLE_TONE: Record<UserProfile["role"], StatusTone> = {
+  REGULAR: "primary",
+  DRIVER: "accent",
+  BUSINESS_OWNER: "info",
+  ADMIN: "warning",
+};
 
 type NavType = NativeStackNavigationProp<RootStackParamList>;
 
 export default function ProfileScreen() {
   const { t, i18n } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const scrollBottomPad = useListBottomPad(140);
   const isRTL = i18n.dir() === "rtl";
   const navigation = useNavigation<NavType>();
   const route = useRoute();
@@ -47,6 +66,8 @@ export default function ProfileScreen() {
   const [businessInfo, setBusinessInfo] =
     useState<BusinessOwnerProfileInfo | null>(null);
   const [userId, setUserId] = useState<number | null>(null);
+  /** Last successful server profile is mirrored to SQLite; this flag drives the offline/cached banner. */
+  const [showingCachedProfile, setShowingCachedProfile] = useState(false);
   
   // Password change state
   const [showPasswordChange, setShowPasswordChange] = useState(false);
@@ -75,59 +96,84 @@ export default function ProfileScreen() {
   const [businessPhoneError, setBusinessPhoneError] = useState<string | undefined>(undefined);
   const [changingBusinessPhone, setChangingBusinessPhone] = useState(false);
 
+  // Logout confirmation modal (replaces the old plain appAlert dialog).
+  const [logoutVisible, setLogoutVisible] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
   const loadProfile = useCallback(async () => {
+    const params = route.params as { userId?: number };
+    let resolvedUserId: number | null = null;
     try {
       setLoading(true);
-      
-      // Try to get userId from route params or AsyncStorage
-      let currentUserId: number | null = null;
-      
-      // Check route params first
-      const params = route.params as any;
+      setShowingCachedProfile(false);
+
       if (params?.userId) {
-        currentUserId = params.userId;
+        resolvedUserId = params.userId;
       } else {
-        // Try to get from AsyncStorage (if stored during login)
         const storedUserId = await AsyncStorage.getItem("userId");
         if (storedUserId) {
-          currentUserId = parseInt(storedUserId, 10);
+          resolvedUserId = parseInt(storedUserId, 10);
         }
       }
 
-      if (!currentUserId) {
-        Alert.alert(
+      if (!resolvedUserId) {
+        appAlert(
           t("error") || "Error",
           t("error_loading_profile") || "Could not load profile"
         );
-        setLoading(false);
         return;
       }
 
-      setUserId(currentUserId);
+      setUserId(resolvedUserId);
 
-      // Load basic user profile
-      const profile = await getUserProfile(currentUserId);
+      const profile = await getUserProfile(resolvedUserId);
       setUserProfile(profile);
 
-      // Load role-specific data
+      let driverForCache: DriverProfileInfo | null = null;
+      let businessForCache: BusinessOwnerProfileInfo | null = null;
+
       if (profile.role === "DRIVER") {
         try {
-          const driverData = await getDriverProfile(currentUserId);
+          const driverData = await getDriverProfile(resolvedUserId);
           setDriverInfo(driverData);
+          driverForCache = driverData;
         } catch (err) {
           console.log("Could not load driver info:", err);
+          setDriverInfo(null);
         }
       } else if (profile.role === "BUSINESS_OWNER") {
         try {
-          const businessData = await getBusinessOwnerProfile(currentUserId);
+          const businessData = await getBusinessOwnerProfile(resolvedUserId);
           setBusinessInfo(businessData);
+          businessForCache = businessData;
         } catch (err) {
           console.log("Could not load business info:", err);
+          setBusinessInfo(null);
+        }
+      } else {
+        setDriverInfo(null);
+        setBusinessInfo(null);
+      }
+
+      saveProfileCache(resolvedUserId, {
+        user: profile,
+        driver: profile.role === "DRIVER" ? driverForCache : null,
+        business: profile.role === "BUSINESS_OWNER" ? businessForCache : null,
+      });
+    } catch (error: unknown) {
+      console.error("Error loading profile:", error);
+      if (resolvedUserId != null) {
+        const cached = loadProfileCache(resolvedUserId);
+        if (cached) {
+          setUserId(cached.user.id);
+          setUserProfile(cached.user);
+          setDriverInfo(cached.driver ?? null);
+          setBusinessInfo(cached.business ?? null);
+          setShowingCachedProfile(true);
+          return;
         }
       }
-    } catch (error: any) {
-      console.error("Error loading profile:", error);
-      Alert.alert(
+      appAlert(
         t("error") || "Error",
         t("error_loading_profile") || "Failed to load profile"
       );
@@ -140,50 +186,31 @@ export default function ProfileScreen() {
     loadProfile();
   }, [loadProfile]);
   
+  // Open the polished confirmation modal — the actual sign-out side effects
+  // (storage clear, navigation reset) run from `confirmLogout` below.
   const handleLogout = () => {
-    Alert.alert(
-      t("logout") || "Logout",
-      t("logout_confirmation") || "Are you sure you want to logout?",
-      [
-        {
-          text: t("no") || "No",
-          style: "cancel",
-        },
-        {
-          text: t("yes") || "Yes",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              notifyUserLoggedOut();
-              // Clear ALL stored data
-              await AsyncStorage.clear();
-              
-              // Get root navigator to reset entire navigation stack
-              const rootNavigation = navigation.getParent()?.getParent() || navigation.getParent() || navigation;
-              
-              // Reset navigation stack completely - prevents going back
-              rootNavigation.dispatch(
-                CommonActions.reset({
-                  index: 0,
-                  routes: [{ name: "Home" as never }],
-                })
-              );
-            } catch (error) {
-              console.error("Logout error:", error);
-              notifyUserLoggedOut();
-              // Even if there's an error, try to navigate to home
-              const rootNavigation = navigation.getParent()?.getParent() || navigation.getParent() || navigation;
-              rootNavigation.dispatch(
-                CommonActions.reset({
-                  index: 0,
-                  routes: [{ name: "Home" as never }],
-                })
-              );
-            }
-          },
-        },
-      ]
-    );
+    setLogoutVisible(true);
+  };
+
+  const confirmLogout = async () => {
+    if (loggingOut) return;
+    try {
+      setLoggingOut(true);
+      await clearUserSession();
+    } finally {
+      const rootNavigation =
+        navigation.getParent()?.getParent() ||
+        navigation.getParent() ||
+        navigation;
+      rootNavigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [{ name: "Home" as never }],
+        })
+      );
+      setLoggingOut(false);
+      setLogoutVisible(false);
+    }
   };
 
   // Password validation helpers
@@ -329,7 +356,7 @@ export default function ProfileScreen() {
       setNewBusinessPhone("");
       setBusinessPhoneError(undefined);
       
-      Alert.alert(
+      appAlert(
         t("success") || "Success",
         t("business_phone_updated_successfully") || "Business phone number has been updated successfully",
         [{ text: t("ok") || "OK" }]
@@ -383,7 +410,7 @@ export default function ProfileScreen() {
     }
 
     if (!userId) {
-      Alert.alert(t("error") || "Error", t("error_loading_profile") || "User ID not found");
+      appAlert(t("error") || "Error", t("error_loading_profile") || "User ID not found");
       return;
     }
 
@@ -434,7 +461,7 @@ export default function ProfileScreen() {
       setNewPhone("");
       setPhoneError(undefined);
       
-      Alert.alert(
+      appAlert(
         t("success") || "Success",
         t("phone_updated_successfully") || "Phone number has been updated successfully",
         [{ text: t("ok") || "OK" }]
@@ -470,7 +497,7 @@ export default function ProfileScreen() {
     }
 
     if (!userId) {
-      Alert.alert(t("error") || "Error", t("error_loading_profile") || "User ID not found");
+      appAlert(t("error") || "Error", t("error_loading_profile") || "User ID not found");
       return;
     }
 
@@ -509,12 +536,12 @@ export default function ProfileScreen() {
           errorMsg = t("new_password_same_as_current") || "New password must be different from current password";
         }
         
-        Alert.alert(t("error") || "Error", errorMsg);
+        appAlert(t("error") || "Error", errorMsg);
         return;
       }
 
       // Success
-      Alert.alert(
+      appAlert(
         t("success") || "Success",
         t("password_changed_successfully") || "Password has been changed successfully",
         [
@@ -532,7 +559,7 @@ export default function ProfileScreen() {
         ]
       );
     } catch (error: any) {
-      Alert.alert(
+      appAlert(
         t("error") || "Error",
         t("network_error") || error?.message || "Network error occurred"
       );
@@ -544,7 +571,7 @@ export default function ProfileScreen() {
   if (loading) {
     return (
       <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={DARK_TEAL} />
+        <ActivityIndicator size="large" color={Colors.primary} />
         <Text style={styles.loadingText}>
           {t("loading_profile") || "Loading profile..."}
         </Text>
@@ -562,1192 +589,1095 @@ export default function ProfileScreen() {
     );
   }
 
-  // Check if we're in a tab navigator (no back button needed)
-  const isInTabNavigator = navigation.getParent()?.getState()?.type === 'tab';
+  // Hide the back button when this screen is rendered as a tab.
+  const isInTabNavigator = navigation.getParent()?.getState()?.type === "tab";
+
+  // ----- View-model derived from the existing profile data -----
+  const role = userProfile.role;
+  const roleLabel = t(ROLE_LABEL_KEY[role]) || role;
+  const roleTone = ROLE_TONE[role];
+
+  const formatJoinedDate = (iso?: string): string | null => {
+    if (!iso) return null;
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toLocaleDateString(i18n.language || undefined, {
+        month: "long",
+        year: "numeric",
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const memberSinceText = formatJoinedDate(userProfile.created_at);
+  const memberSinceLine = memberSinceText
+    ? `${t("member_since") || "Member since"} ${memberSinceText}`
+    : undefined;
+
+  const supportingLine: string | undefined = (() => {
+    if (role === "DRIVER" && driverInfo?.vehicle?.car_type) {
+      return [driverInfo.vehicle.car_type, driverInfo.vehicle.plate_number]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    if (role === "BUSINESS_OWNER" && businessInfo?.place?.name) {
+      return businessInfo.place.name;
+    }
+    return userProfile.email;
+  })();
+
+  const titleCase = (raw?: string | null) =>
+    raw && raw.length > 0
+      ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
+      : "—";
+
+  const accountStatusLabel = titleCase(userProfile.status);
+
+  const currentLanguageLabel =
+    i18n.language === "ar"
+      ? "العربية"
+      : i18n.language === "he"
+        ? "עברית"
+        : (i18n.language || "—");
 
   return (
-    <View style={styles.container}>
-      {/* Simple Header */}
-      <View style={styles.header}>
-        {!isInTabNavigator && (
+    <SafeAreaView style={styles.container} edges={["left", "right"]}>
+      {/* Top toolbar — paddingTop follows notch/status; avoid hardcoded 50 */}
+      <View style={[styles.toolbar, { paddingTop: Math.max(insets.top, 12) }]}>
+        {!isInTabNavigator ? (
           <TouchableOpacity
             style={styles.backButton}
             onPress={() => navigation.goBack()}
-            activeOpacity={0.7}
+            activeOpacity={0.85}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="arrow-back" size={24} color="#333" />
+            <Ionicons
+              name={isRTL ? "chevron-forward" : "chevron-back"}
+              size={22}
+              color={Colors.text}
+            />
           </TouchableOpacity>
+        ) : (
+          <View style={styles.toolbarSlot} />
         )}
-        <Text style={styles.headerTitle}>{t("profile") || "Profile"}</Text>
-        {!isInTabNavigator && <View style={styles.headerSpacer} />}
+        <Text style={styles.toolbarTitle}>{t("profile") || "Profile"}</Text>
+        <View style={styles.toolbarSlot} />
       </View>
 
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPad }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Simple Profile Header - Horizontal Layout */}
-        <View style={styles.profileHeader}>
-          <View style={styles.avatar}>
-            <Ionicons name="person" size={50} color={DARK_TEAL} />
-          </View>
-          <View style={styles.profileInfo}>
-            <Text style={styles.userName}>{userProfile.full_name}</Text>
-            <Text style={styles.userEmail}>{userProfile.email}</Text>
-          </View>
-        </View>
-        
-        {/* Accordion Sections Container */}
-        <View style={styles.sectionsContainer}>
+        <View style={styles.contentInner}>
+          {showingCachedProfile ? (
+            <View style={styles.cachedProfileBanner}>
+              <Ionicons name="archive-outline" size={18} color={Colors.warning} style={{ marginRight: 10 }} />
+              <Text style={styles.cachedProfileBannerText}>{t("profile_cached_banner")}</Text>
+            </View>
+          ) : null}
+          {/* Profile header card (shared across all 4 roles) */}
+          <ProfileHeaderCard
+            name={userProfile.full_name}
+            handle={`@${userProfile.username}`}
+            roleLabel={roleLabel}
+            roleTone={roleTone}
+            eyebrow={t("account_overview") || "Account · Profile"}
+            supportingLine={supportingLine}
+            secondaryLine={memberSinceLine}
+          />
 
-            {/* Personal Information */}
-            <Accordion
-              title={t("personal_information") || "Personal Information"}
+          {/* Quick info / stats row */}
+          <View style={styles.statRow}>
+            <ProfileStatTile
+              label={t("status") || "Status"}
+              value={accountStatusLabel}
+              tone="success"
+              icon="checkmark-circle-outline"
+            />
+            <ProfileStatTile
+              label={t("language") || "Language"}
+              value={currentLanguageLabel}
+              tone="primary"
+              icon="globe-outline"
+            />
+            {role === "DRIVER" && driverInfo?.driver_status ? (
+              <ProfileStatTile
+                label={t("driver") || "Driver"}
+                value={titleCase(driverInfo.driver_status)}
+                tone="accent"
+                icon="car-sport-outline"
+              />
+            ) : null}
+            {role === "BUSINESS_OWNER" &&
+            (businessInfo?.request_status || businessInfo?.place?.city_name) ? (
+              <ProfileStatTile
+                label={
+                  businessInfo?.request_status
+                    ? t("status") || "Status"
+                    : t("city") || "City"
+                }
+                value={
+                  businessInfo?.request_status
+                    ? titleCase(businessInfo.request_status)
+                    : businessInfo?.place?.city_name || "—"
+                }
+                tone="info"
+                icon="business-outline"
+              />
+            ) : null}
+          </View>
+
+          {/* Personal information section */}
+          <ProfileSection
+            title={t("personal_information") || "Personal Information"}
+            icon="person-outline"
+            defaultOpen
+          >
+            <ProfileDetailRow
+              label={t("full_name") || "Full Name"}
+              value={userProfile.full_name}
               icon="person-outline"
-              defaultOpen={true}
-            >
-              <View style={styles.infoItem}>
-                <View style={styles.infoItemHeader}>
-                  <Ionicons name="person" size={20} color="#666" />
-                  <Text style={styles.infoLabel}>{t("full_name") || "Full Name"}</Text>
-                </View>
-                <Text style={styles.infoValue}>{userProfile.full_name}</Text>
-              </View>
-              
-              <View style={styles.infoItem}>
-                <View style={styles.infoItemHeader}>
-                  <Ionicons name="at" size={20} color="#666" />
-                  <Text style={styles.infoLabel}>{t("username") || "Username"}</Text>
-                </View>
-                <Text style={styles.infoValue}>{userProfile.username}</Text>
-              </View>
-              
-              <View style={styles.infoItem}>
-                <View style={styles.infoItemHeader}>
-                  <Ionicons name="mail" size={20} color="#666" />
-                  <Text style={styles.infoLabel}>{t("email") || "Email"}</Text>
-                </View>
-                <Text style={styles.infoValue}>{userProfile.email}</Text>
-              </View>
-              
-              <View style={styles.infoItem}>
-                <View style={styles.infoItemHeader}>
-                  <Ionicons name="call" size={20} color="#666" />
-                  <Text style={styles.infoLabel}>{t("phone") || "Phone"}</Text>
-                </View>
-                
-                {/* Phone editing - for regular users, drivers, and business owners */}
-                {(userProfile.role === "REGULAR" || userProfile.role === "DRIVER" || userProfile.role === "BUSINESS_OWNER") ? (
+            />
+            <ProfileDetailRow
+              label={t("username") || "Username"}
+              value={userProfile.username}
+              icon="at-outline"
+            />
+            <ProfileDetailRow
+              label={t("email") || "Email"}
+              value={userProfile.email}
+              icon="mail-outline"
+              multiline
+            />
+
+            {role === "REGULAR" || role === "DRIVER" || role === "BUSINESS_OWNER" ? (
+              <ProfileDetailRow
+                label={t("phone") || "Phone"}
+                value={!showPhoneChange ? userProfile.phone : undefined}
+                icon="call-outline"
+                trailing={
                   !showPhoneChange ? (
-                    <View style={styles.phoneDisplayContainer}>
-                      <Text style={styles.infoValue}>{userProfile.phone}</Text>
+                    <TouchableOpacity
+                      style={styles.editPill}
+                      onPress={() => {
+                        setShowPhoneChange(true);
+                        setNewPhone(userProfile.phone);
+                        setPhoneError(undefined);
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="create-outline" size={14} color={Colors.primary} />
+                      <Text style={styles.editPillText}>
+                        {t("edit") || "Edit"}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null
+                }
+              >
+                {showPhoneChange ? (
+                  <View style={styles.inlineForm}>
+                    <View style={[styles.input, phoneError && styles.inputError]}>
+                      <TextInput
+                        style={styles.inputField}
+                        value={newPhone}
+                        onChangeText={(text) => {
+                          setNewPhone(text);
+                          if (phoneError) setPhoneError(undefined);
+                        }}
+                        placeholder={t("enter_new_phone") || "Enter new phone number"}
+                        keyboardType="phone-pad"
+                        placeholderTextColor={Colors.textMuted}
+                      />
+                    </View>
+                    {phoneError ? (
+                      <Text style={styles.errorText}>{phoneError}</Text>
+                    ) : null}
+                    <View style={styles.formActions}>
                       <TouchableOpacity
-                        style={styles.editPhoneButton}
+                        style={styles.secondaryBtn}
                         onPress={() => {
-                          setShowPhoneChange(true);
-                          setNewPhone(userProfile.phone);
+                          setShowPhoneChange(false);
+                          setNewPhone("");
                           setPhoneError(undefined);
                         }}
-                        activeOpacity={0.7}
+                        activeOpacity={0.85}
                       >
-                        <Ionicons name="create-outline" size={18} color="#666" />
-                        <Text style={styles.editPhoneButtonText}>
-                          {t("edit") || "Edit"}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <View style={styles.phoneChangeForm}>
-                      <View style={styles.passwordInputWrapper}>
-                        <TextInput
-                          style={[styles.passwordInput, phoneError && styles.inputError]}
-                          value={newPhone}
-                          onChangeText={(text) => {
-                            setNewPhone(text);
-                            if (phoneError) {
-                              setPhoneError(undefined);
-                            }
-                          }}
-                          placeholder={t("enter_new_phone") || "Enter new phone number"}
-                          keyboardType="phone-pad"
-                          placeholderTextColor="#999"
-                        />
-                      </View>
-                      {phoneError && (
-                        <Text style={styles.errorText}>{phoneError}</Text>
-                      )}
-                      
-                      <View style={styles.passwordChangeActions}>
-                        <TouchableOpacity
-                          style={styles.cancelPasswordButton}
-                          onPress={() => {
-                            setShowPhoneChange(false);
-                            setNewPhone("");
-                            setPhoneError(undefined);
-                          }}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.cancelPasswordButtonText}>
-                            {t("cancel") || "Cancel"}
-                          </Text>
-                        </TouchableOpacity>
-                        
-                        <TouchableOpacity
-                          style={[styles.savePasswordButton, changingPhone && styles.buttonDisabled]}
-                          onPress={handleChangePhone}
-                          activeOpacity={0.7}
-                          disabled={changingPhone}
-                        >
-                          {changingPhone ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <Text style={styles.savePasswordButtonText}>
-                              {t("save") || "Save"}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  )
-                ) : (
-                  <Text style={styles.infoValue}>{userProfile.phone}</Text>
-                )}
-              </View>
-            </Accordion>
-
-            {/* Driver Vehicle Information */}
-            {userProfile.role === "DRIVER" && (
-              <Accordion
-                title={t("vehicle_information") || "Vehicle Information"}
-                icon="car-outline"
-              >
-                {driverInfo?.vehicle ? (
-                  <>
-                    <View style={styles.infoItem}>
-                      <View style={styles.infoItemHeader}>
-                        <Ionicons name="car" size={20} color="#666" />
-                        <Text style={styles.infoLabel}>{t("car_type") || "Car Type"}</Text>
-                      </View>
-                      <Text style={styles.infoValue}>{driverInfo.vehicle.car_type}</Text>
-                    </View>
-                    
-                    <View style={styles.infoItem}>
-                      <View style={styles.infoItemHeader}>
-                        <Ionicons name="document-text" size={20} color="#666" />
-                        <Text style={styles.infoLabel}>{t("plate_number") || "Plate Number"}</Text>
-                      </View>
-                      <Text style={styles.infoValue}>{driverInfo.vehicle.plate_number}</Text>
-                    </View>
-                    
-                    <View style={styles.infoItem}>
-                      <View style={styles.infoItemHeader}>
-                        <Ionicons name="calendar" size={20} color="#666" />
-                        <Text style={styles.infoLabel}>{t("production_year") || "Production Year"}</Text>
-                      </View>
-                      <Text style={styles.infoValue}>{driverInfo.vehicle.production_year}</Text>
-                    </View>
-                    
-                    {driverInfo.vehicle.car_license_image_url && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="document" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("car_license") || "Car License"}</Text>
-                        </View>
-                        <Image
-                          source={{ uri: driverInfo.vehicle.car_license_image_url }}
-                          style={styles.documentImage}
-                          resizeMode="cover"
-                        />
-                      </View>
-                    )}
-                    
-                    {driverInfo.vehicle.car_insurance_image_url && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="shield-checkmark" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("car_insurance") || "Car Insurance"}</Text>
-                        </View>
-                        <Image
-                          source={{ uri: driverInfo.vehicle.car_insurance_image_url }}
-                          style={styles.documentImage}
-                          resizeMode="cover"
-                        />
-                      </View>
-                    )}
-                    
-                    {driverInfo.vehicle.car_photos_urls &&
-                      driverInfo.vehicle.car_photos_urls.length > 0 && (
-                        <View style={styles.infoItem}>
-                          <View style={styles.infoItemHeader}>
-                            <Ionicons name="images" size={20} color="#666" />
-                            <Text style={styles.infoLabel}>{t("car_photos") || "Car Photos"}</Text>
-                          </View>
-                          <View style={styles.photosContainer}>
-                            {driverInfo.vehicle.car_photos_urls.map((url, idx) => (
-                              <Image
-                                key={idx}
-                                source={{ uri: url }}
-                                style={styles.photo}
-                                resizeMode="cover"
-                              />
-                            ))}
-                          </View>
-                        </View>
-                      )}
-                  </>
-                ) : (
-                  <View style={styles.emptyState}>
-                    <Ionicons name="car-outline" size={48} color="#ccc" />
-                    <Text style={styles.emptyStateText}>
-                      {t("no_vehicle_info") || "No vehicle information available"}
-                    </Text>
-                  </View>
-                )}
-              </Accordion>
-            )}
-
-            {/* Business Owner Information */}
-            {userProfile.role === "BUSINESS_OWNER" && (
-              <Accordion
-                title={t("business_information") || "Business Information"}
-                icon="business-outline"
-              >
-                {businessInfo?.place ? (
-                  <>
-                    <View style={styles.infoItem}>
-                      <View style={styles.infoItemHeader}>
-                        <Ionicons name="business" size={20} color="#666" />
-                        <Text style={styles.infoLabel}>{t("business_name") || "Business Name"}</Text>
-                      </View>
-                      <Text style={styles.infoValue}>{businessInfo.place.name}</Text>
-                    </View>
-                    
-                    {businessInfo.place.city_name && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="location" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("city") || "City"}</Text>
-                        </View>
-                        <Text style={styles.infoValue}>{businessInfo.place.city_name}</Text>
-                      </View>
-                    )}
-                    
-                    {businessInfo.place.category_name && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="grid" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("category") || "Category"}</Text>
-                        </View>
-                        <Text style={styles.infoValue}>{businessInfo.place.category_name}</Text>
-                      </View>
-                    )}
-                    
-                    {businessInfo.place.description && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="document-text" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("description") || "Description"}</Text>
-                        </View>
-                        <Text style={styles.infoValue}>{businessInfo.place.description}</Text>
-                      </View>
-                    )}
-                    
-                    {businessInfo.place.phone !== undefined && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="call" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("phone") || "Phone"}</Text>
-                        </View>
-                        
-                        {!showBusinessPhoneChange ? (
-                          <View style={styles.phoneDisplayContainer}>
-                            <Text style={styles.infoValue}>{businessInfo.place.phone || t("no_phone") || "No phone"}</Text>
-                            <TouchableOpacity
-                              style={styles.editPhoneButton}
-                              onPress={() => {
-                                setShowBusinessPhoneChange(true);
-                                setNewBusinessPhone(businessInfo.place?.phone || "");
-                                setBusinessPhoneError(undefined);
-                              }}
-                              activeOpacity={0.7}
-                            >
-                              <Ionicons name="create-outline" size={18} color="#666" />
-                              <Text style={styles.editPhoneButtonText}>
-                                {t("edit") || "Edit"}
-                              </Text>
-                            </TouchableOpacity>
-                          </View>
-                        ) : (
-                          <View style={styles.phoneChangeForm}>
-                            <View style={styles.passwordInputWrapper}>
-                              <TextInput
-                                style={[styles.passwordInput, businessPhoneError && styles.inputError]}
-                                value={newBusinessPhone}
-                                onChangeText={(text) => {
-                                  setNewBusinessPhone(text);
-                                  if (businessPhoneError) {
-                                    setBusinessPhoneError(undefined);
-                                  }
-                                }}
-                                placeholder={t("enter_new_phone") || "Enter new phone number"}
-                                keyboardType="phone-pad"
-                                placeholderTextColor="#999"
-                              />
-                            </View>
-                            {businessPhoneError && (
-                              <Text style={styles.errorText}>{businessPhoneError}</Text>
-                            )}
-                            
-                            <View style={styles.passwordChangeActions}>
-                              <TouchableOpacity
-                                style={styles.cancelPasswordButton}
-                                onPress={() => {
-                                  setShowBusinessPhoneChange(false);
-                                  setNewBusinessPhone("");
-                                  setBusinessPhoneError(undefined);
-                                }}
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.cancelPasswordButtonText}>
-                                  {t("cancel") || "Cancel"}
-                                </Text>
-                              </TouchableOpacity>
-                              
-                              <TouchableOpacity
-                                style={[styles.savePasswordButton, changingBusinessPhone && styles.buttonDisabled]}
-                                onPress={handleChangeBusinessPhone}
-                                activeOpacity={0.7}
-                                disabled={changingBusinessPhone}
-                              >
-                                {changingBusinessPhone ? (
-                                  <ActivityIndicator size="small" color="#fff" />
-                                ) : (
-                                  <Text style={styles.savePasswordButtonText}>
-                                    {t("save") || "Save"}
-                                  </Text>
-                                )}
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        )}
-                      </View>
-                    )}
-                    
-                    {businessInfo.place.opening_hours && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="time" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("opening_hours") || "Opening Hours"}</Text>
-                        </View>
-                        <Text style={styles.infoValue}>{businessInfo.place.opening_hours}</Text>
-                      </View>
-                    )}
-                    
-                    {businessInfo.place.lat && businessInfo.place.lon && (
-                      <View style={styles.infoItem}>
-                        <View style={styles.infoItemHeader}>
-                          <Ionicons name="map" size={20} color="#666" />
-                          <Text style={styles.infoLabel}>{t("location") || "Location"}</Text>
-                        </View>
-                        <Text style={styles.infoValue}>
-                          {businessInfo.place.lat.toFixed(6)}, {businessInfo.place.lon.toFixed(6)}
-                        </Text>
-                      </View>
-                    )}
-                  </>
-                ) : (
-                  <View style={styles.emptyState}>
-                    <Ionicons name="business-outline" size={48} color="#ccc" />
-                    <Text style={styles.emptyStateText}>
-                      {t("no_business_info") || "No business information available"}
-                    </Text>
-                  </View>
-                )}
-              </Accordion>
-            )}
-
-            {/* Admin Actions - Only for ADMIN role */}
-            {userProfile.role === "ADMIN" && userId && (
-              <Accordion
-                title={t("admin_actions") || "Admin Actions"}
-                icon="build-outline"
-              >
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() =>
-                    navigation.navigate("AdminPlaceMapPicker", {
-                      initialLat: 31.24,
-                      initialLon: 34.83,
-                      adminUserId: userId,
-                      role: "ADMIN",
-                    })
-                  }
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionButtonContent}>
-                    <Ionicons name="location" size={20} color={DARK_TEAL} />
-                    <Text style={styles.actionButtonText}>{t("add_place") || "Add Place"}</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() =>
-                    navigation.navigate("AdminCategories", {
-                      adminUserId: userId,
-                      role: "ADMIN",
-                    })
-                  }
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionButtonContent}>
-                    <Ionicons name="grid" size={20} color={DARK_TEAL} />
-                    <Text style={styles.actionButtonText}>{t("add_category") || "Add Category"}</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() =>
-                    navigation.navigate("AdminCities", {
-                      adminUserId: userId,
-                      role: "ADMIN",
-                    })
-                  }
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.actionButtonContent}>
-                    <Ionicons name="business" size={20} color={DARK_TEAL} />
-                    <Text style={styles.actionButtonText}>{t("add_city") || "Add City"}</Text>
-                  </View>
-                </TouchableOpacity>
-              </Accordion>
-            )}
-
-            {/* Advertisement request — regular, driver, business owner (shared Profile tab) */}
-            {userId &&
-            userProfile &&
-            (userProfile.role === "REGULAR" ||
-              userProfile.role === "DRIVER" ||
-              userProfile.role === "BUSINESS_OWNER") ? (
-              <View style={styles.adSection}>
-                <Text style={[styles.adSectionTitle, isRTL && styles.rtlText]}>
-                  {t("advertisements.profileSection")}
-                </Text>
-                <TouchableOpacity
-                  style={[styles.adRequestCard, isRTL && styles.adRequestCardRTL]}
-                  onPress={() => navigation.navigate("CreateAdvertisement")}
-                  activeOpacity={0.88}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("advertisements.requestAdvertisement")}
-                >
-                  <View style={styles.adRequestIconWrap}>
-                    <Ionicons name="megaphone-outline" size={26} color="#fff" />
-                  </View>
-                  <View style={[styles.adRequestTextBlock, isRTL && styles.adRequestTextBlockRTL]}>
-                    <Text style={[styles.adRequestTitle, isRTL && styles.rtlText]}>
-                      {t("advertisements.requestAdvertisement")}
-                    </Text>
-                    <Text style={[styles.adRequestSubtitle, isRTL && styles.rtlText]}>
-                      {t("advertisements.requestAdvertisementSubtitle")}
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name={isRTL ? "chevron-back" : "chevron-forward"}
-                    size={22}
-                    color="#94a3b8"
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.adRequestCard,
-                    styles.myAdsCard,
-                    isRTL && styles.adRequestCardRTL,
-                  ]}
-                  onPress={() =>
-                    navigation.navigate("MyAdvertisements", { userId })
-                  }
-                  activeOpacity={0.88}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("advertisements.myAds.title")}
-                >
-                  <View style={[styles.adRequestIconWrap, styles.myAdsIconWrap]}>
-                    <Ionicons name="albums-outline" size={24} color={DARK_TEAL} />
-                  </View>
-                  <View style={[styles.adRequestTextBlock, isRTL && styles.adRequestTextBlockRTL]}>
-                    <Text style={[styles.adRequestTitle, isRTL && styles.rtlText]}>
-                      {t("advertisements.myAds.title")}
-                    </Text>
-                    <Text style={[styles.adRequestSubtitle, isRTL && styles.rtlText]}>
-                      {t("advertisements.myAds.subtitle")}
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name={isRTL ? "chevron-back" : "chevron-forward"}
-                    size={22}
-                    color="#94a3b8"
-                  />
-                </TouchableOpacity>
-              </View>
-            ) : null}
-
-            {/* Saved Places */}
-            <Accordion
-              title={t("saved_places") || "מקומות שמורים"}
-              icon="bookmark-outline"
-            >
-              <TouchableOpacity
-                style={styles.actionButton}
-                onPress={() => {
-                  if (userId) {
-                    navigation.navigate("SavedPlaces");
-                  } else {
-                    Alert.alert(
-                      t("error") || "שגיאה",
-                      t("error_loading_profile") || "Could not load profile"
-                    );
-                  }
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={styles.actionButtonContent}>
-                  <Ionicons name="bookmark" size={20} color={DARK_TEAL} />
-                  <Text style={styles.actionButtonText}>
-                    {t("view_saved_places") || "צפה במקומות שמורים"}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            </Accordion>
-
-            {/* Account Settings */}
-            <Accordion
-              title={t("account_settings") || "Account Settings"}
-              icon="settings-outline"
-            >
-              <View style={styles.infoItem}>
-                <View style={styles.infoItemHeader}>
-                  <Ionicons name="language" size={20} color="#666" />
-                  <Text style={styles.infoLabel}>
-                    {t("change_language") || "Change Language"}
-                  </Text>
-                </View>
-                <View style={styles.languageSwitcherWrapper}>
-                  <SimpleLanguageSwitcher />
-                </View>
-              </View>
-
-              {/* Change Password Section */}
-              <View style={styles.infoItem}>
-                <View style={styles.infoItemHeader}>
-                  <Ionicons name="lock-closed" size={20} color="#666" />
-                  <Text style={styles.infoLabel}>
-                    {t("change_password") || "Change Password"}
-                  </Text>
-                </View>
-                
-                {!showPasswordChange ? (
-                  <TouchableOpacity
-                    style={styles.actionButton}
-                    onPress={() => setShowPasswordChange(true)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.actionButtonContent}>
-                      <Ionicons name="lock-closed" size={20} color={DARK_TEAL} />
-                      <Text style={styles.actionButtonText}>
-                        {t("change_password") || "Change Password"}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                ) : (
-                  <View style={styles.passwordChangeForm}>
-                    {/* Current Password */}
-                    <View style={styles.passwordInputContainer}>
-                      <Text style={styles.passwordLabel}>
-                        {t("current_password") || "Current Password"}
-                      </Text>
-                      <View style={styles.passwordInputWrapper}>
-                        <TextInput
-                          style={[styles.passwordInput, passwordErrors.current && styles.inputError]}
-                          value={currentPassword}
-                          onChangeText={(text) => {
-                            setCurrentPassword(text);
-                            if (passwordErrors.current) {
-                              setPasswordErrors({ ...passwordErrors, current: undefined });
-                            }
-                          }}
-                          placeholder={t("enter_current_password") || "Enter current password"}
-                          secureTextEntry={!showCurrentPassword}
-                          placeholderTextColor="#999"
-                        />
-                        <TouchableOpacity
-                          style={styles.eyeIcon}
-                          onPress={() => setShowCurrentPassword(!showCurrentPassword)}
-                        >
-                          <Ionicons
-                            name={showCurrentPassword ? "eye-off" : "eye"}
-                            size={20}
-                            color="#666"
-                          />
-                        </TouchableOpacity>
-                      </View>
-                      {passwordErrors.current && (
-                        <Text style={styles.errorText}>{passwordErrors.current}</Text>
-                      )}
-                    </View>
-
-                    {/* New Password */}
-                    <View style={styles.passwordInputContainer}>
-                      <Text style={styles.passwordLabel}>
-                        {t("new_password") || "New Password"}
-                      </Text>
-                      <View style={styles.passwordInputWrapper}>
-                        <TextInput
-                          style={[styles.passwordInput, passwordErrors.new && styles.inputError]}
-                          value={newPassword}
-                          onChangeText={(text) => {
-                            setNewPassword(text);
-                            if (passwordErrors.new) {
-                              setPasswordErrors({ ...passwordErrors, new: undefined });
-                            }
-                            // Clear confirm error if passwords match
-                            if (text === confirmPassword && passwordErrors.confirm) {
-                              setPasswordErrors({ ...passwordErrors, confirm: undefined });
-                            }
-                          }}
-                          placeholder={t("enter_new_password") || "Enter new password"}
-                          secureTextEntry={!showNewPassword}
-                          placeholderTextColor="#999"
-                        />
-                        <TouchableOpacity
-                          style={styles.eyeIcon}
-                          onPress={() => setShowNewPassword(!showNewPassword)}
-                        >
-                          <Ionicons
-                            name={showNewPassword ? "eye-off" : "eye"}
-                            size={20}
-                            color="#666"
-                          />
-                        </TouchableOpacity>
-                      </View>
-                      
-                      {/* Password Requirements Checklist */}
-                      {newPassword.length > 0 && (
-                        <View style={styles.passwordRequirements}>
-                          {!passwordMeetsLength(newPassword) && (
-                            <View style={styles.requirementItem}>
-                              <Ionicons name="close-circle" size={16} color="#d7263d" />
-                              <Text style={styles.requirementText}>
-                                {t("password_req_length") || "At least 8 characters"}
-                              </Text>
-                            </View>
-                          )}
-                          {!passwordMeetsUppercase(newPassword) && (
-                            <View style={styles.requirementItem}>
-                              <Ionicons name="close-circle" size={16} color="#d7263d" />
-                              <Text style={styles.requirementText}>
-                                {t("password_req_uppercase") || "Uppercase letter"}
-                              </Text>
-                            </View>
-                          )}
-                          {!passwordMeetsLowercase(newPassword) && (
-                            <View style={styles.requirementItem}>
-                              <Ionicons name="close-circle" size={16} color="#d7263d" />
-                              <Text style={styles.requirementText}>
-                                {t("password_req_lowercase") || "Lowercase letter"}
-                              </Text>
-                            </View>
-                          )}
-                          {!passwordMeetsNumber(newPassword) && (
-                            <View style={styles.requirementItem}>
-                              <Ionicons name="close-circle" size={16} color="#d7263d" />
-                              <Text style={styles.requirementText}>
-                                {t("password_req_number") || "Number"}
-                              </Text>
-                            </View>
-                          )}
-                          {!passwordMeetsSymbol(newPassword) && (
-                            <View style={styles.requirementItem}>
-                              <Ionicons name="close-circle" size={16} color="#d7263d" />
-                              <Text style={styles.requirementText}>
-                                {t("password_req_symbol") || "Symbol"}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                      )}
-                      
-                      {passwordErrors.new && (
-                        <Text style={styles.passwordErrorText}>{passwordErrors.new}</Text>
-                      )}
-                    </View>
-
-                    {/* Confirm Password */}
-                    <View style={styles.passwordInputContainer}>
-                      <Text style={styles.passwordLabel}>
-                        {t("confirm_password") || "Confirm Password"}
-                      </Text>
-                      <View style={styles.passwordInputWrapper}>
-                        <TextInput
-                          style={[styles.passwordInput, passwordErrors.confirm && styles.inputError]}
-                          value={confirmPassword}
-                          onChangeText={(text) => {
-                            setConfirmPassword(text);
-                            if (text !== newPassword) {
-                              setPasswordErrors({
-                                ...passwordErrors,
-                                confirm: t("passwords_do_not_match") || "Passwords do not match",
-                              });
-                            } else {
-                              setPasswordErrors({ ...passwordErrors, confirm: undefined });
-                            }
-                          }}
-                          placeholder={t("confirm_new_password") || "Confirm new password"}
-                          secureTextEntry={!showConfirmPassword}
-                          placeholderTextColor="#999"
-                        />
-                        <TouchableOpacity
-                          style={styles.eyeIcon}
-                          onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                        >
-                          <Ionicons
-                            name={showConfirmPassword ? "eye-off" : "eye"}
-                            size={20}
-                            color="#666"
-                          />
-                        </TouchableOpacity>
-                      </View>
-                      {passwordErrors.confirm && (
-                        <Text style={styles.errorText}>{passwordErrors.confirm}</Text>
-                      )}
-                    </View>
-
-                    {/* Action Buttons */}
-                    <View style={styles.passwordChangeActions}>
-                      <TouchableOpacity
-                        style={styles.cancelPasswordButton}
-                        onPress={() => {
-                          setShowPasswordChange(false);
-                          setCurrentPassword("");
-                          setNewPassword("");
-                          setConfirmPassword("");
-                          setPasswordErrors({});
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.cancelPasswordButtonText}>
+                        <Text style={styles.secondaryBtnText}>
                           {t("cancel") || "Cancel"}
                         </Text>
                       </TouchableOpacity>
-                      
                       <TouchableOpacity
-                        style={[styles.savePasswordButton, changingPassword && styles.buttonDisabled]}
-                        onPress={handleChangePassword}
-                        activeOpacity={0.7}
-                        disabled={changingPassword}
+                        style={[styles.primaryBtn, changingPhone && styles.btnDisabled]}
+                        onPress={handleChangePhone}
+                        activeOpacity={0.85}
+                        disabled={changingPhone}
                       >
-                        {changingPassword ? (
-                          <ActivityIndicator size="small" color="#fff" />
+                        {changingPhone ? (
+                          <ActivityIndicator size="small" color={Colors.textInverse} />
                         ) : (
-                          <Text style={styles.savePasswordButtonText}>
+                          <Text style={styles.primaryBtnText}>
                             {t("save") || "Save"}
                           </Text>
                         )}
                       </TouchableOpacity>
                     </View>
                   </View>
-                )}
-              </View>
-            </Accordion>
+                ) : null}
+              </ProfileDetailRow>
+            ) : (
+              <ProfileDetailRow
+                label={t("phone") || "Phone"}
+                value={userProfile.phone}
+                icon="call-outline"
+              />
+            )}
+          </ProfileSection>
 
-            {/* Logout Button */}
-            <TouchableOpacity
-              style={styles.logoutButton}
-              onPress={handleLogout}
-              activeOpacity={0.7}
+          {role === "DRIVER" ? (
+            <ProfileSection
+              title={t("vehicle_information") || "Vehicle Information"}
+              icon="car-sport-outline"
             >
-              <Ionicons name="log-out-outline" size={22} color="#dc3545" />
-              <Text style={styles.logoutButtonText}>
-                {t("logout") || "Logout"}
+              {driverInfo?.vehicle ? (
+                <>
+                  <ProfileDetailRow
+                    label={t("car_type") || "Car Type"}
+                    value={driverInfo.vehicle.car_type}
+                    icon="car-outline"
+                  />
+                  <ProfileDetailRow
+                    label={t("plate_number") || "Plate Number"}
+                    value={driverInfo.vehicle.plate_number}
+                    icon="document-text-outline"
+                  />
+                  <ProfileDetailRow
+                    label={t("production_year") || "Production Year"}
+                    value={String(driverInfo.vehicle.production_year)}
+                    icon="calendar-outline"
+                  />
+                  {driverInfo.vehicle.car_license_image_url ? (
+                    <ProfileDetailRow
+                      label={t("car_license") || "Car License"}
+                      icon="document-outline"
+                    >
+                      <Image
+                        source={{ uri: driverInfo.vehicle.car_license_image_url }}
+                        style={styles.documentImage}
+                        resizeMode="cover"
+                      />
+                    </ProfileDetailRow>
+                  ) : null}
+                  {driverInfo.vehicle.car_insurance_image_url ? (
+                    <ProfileDetailRow
+                      label={t("car_insurance") || "Car Insurance"}
+                      icon="shield-checkmark-outline"
+                    >
+                      <Image
+                        source={{ uri: driverInfo.vehicle.car_insurance_image_url }}
+                        style={styles.documentImage}
+                        resizeMode="cover"
+                      />
+                    </ProfileDetailRow>
+                  ) : null}
+                  {driverInfo.vehicle.car_photos_urls &&
+                  driverInfo.vehicle.car_photos_urls.length > 0 ? (
+                    <ProfileDetailRow
+                      label={t("car_photos") || "Car Photos"}
+                      icon="images-outline"
+                    >
+                      <View style={styles.photosContainer}>
+                        {driverInfo.vehicle.car_photos_urls.map((url, idx) => (
+                          <Image
+                            key={idx}
+                            source={{ uri: url }}
+                            style={styles.photo}
+                            resizeMode="cover"
+                          />
+                        ))}
+                      </View>
+                    </ProfileDetailRow>
+                  ) : null}
+                </>
+              ) : (
+                <View style={styles.emptyState}>
+                  <Ionicons name="car-outline" size={36} color={Colors.textMuted} />
+                  <Text style={styles.emptyStateText}>
+                    {t("no_vehicle_info") || "No vehicle information available"}
+                  </Text>
+                </View>
+              )}
+            </ProfileSection>
+          ) : null}
+
+          {role === "BUSINESS_OWNER" ? (
+            <ProfileSection
+              title={t("business_information") || "Business Information"}
+              icon="business-outline"
+            >
+              {businessInfo?.place ? (
+                <>
+                  <ProfileDetailRow
+                    label={t("business_name") || "Business Name"}
+                    value={businessInfo.place.name}
+                    icon="business-outline"
+                  />
+                  {businessInfo.place.city_name ? (
+                    <ProfileDetailRow
+                      label={t("city") || "City"}
+                      value={businessInfo.place.city_name}
+                      icon="location-outline"
+                    />
+                  ) : null}
+                  {businessInfo.place.category_name ? (
+                    <ProfileDetailRow
+                      label={t("category") || "Category"}
+                      value={businessInfo.place.category_name}
+                      icon="grid-outline"
+                    />
+                  ) : null}
+                  {businessInfo.place.description ? (
+                    <ProfileDetailRow
+                      label={t("description") || "Description"}
+                      value={businessInfo.place.description}
+                      icon="document-text-outline"
+                      multiline
+                    />
+                  ) : null}
+                  {businessInfo.place.phone !== undefined ? (
+                    <ProfileDetailRow
+                      label={t("phone") || "Phone"}
+                      value={
+                        !showBusinessPhoneChange
+                          ? businessInfo.place.phone || (t("no_phone") || "No phone")
+                          : undefined
+                      }
+                      icon="call-outline"
+                      trailing={
+                        !showBusinessPhoneChange ? (
+                          <TouchableOpacity
+                            style={styles.editPill}
+                            onPress={() => {
+                              setShowBusinessPhoneChange(true);
+                              setNewBusinessPhone(businessInfo.place?.phone || "");
+                              setBusinessPhoneError(undefined);
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="create-outline" size={14} color={Colors.primary} />
+                            <Text style={styles.editPillText}>
+                              {t("edit") || "Edit"}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null
+                      }
+                    >
+                      {showBusinessPhoneChange ? (
+                        <View style={styles.inlineForm}>
+                          <View style={[styles.input, businessPhoneError && styles.inputError]}>
+                            <TextInput
+                              style={styles.inputField}
+                              value={newBusinessPhone}
+                              onChangeText={(text) => {
+                                setNewBusinessPhone(text);
+                                if (businessPhoneError) setBusinessPhoneError(undefined);
+                              }}
+                              placeholder={t("enter_new_phone") || "Enter new phone number"}
+                              keyboardType="phone-pad"
+                              placeholderTextColor={Colors.textMuted}
+                            />
+                          </View>
+                          {businessPhoneError ? (
+                            <Text style={styles.errorText}>{businessPhoneError}</Text>
+                          ) : null}
+                          <View style={styles.formActions}>
+                            <TouchableOpacity
+                              style={styles.secondaryBtn}
+                              onPress={() => {
+                                setShowBusinessPhoneChange(false);
+                                setNewBusinessPhone("");
+                                setBusinessPhoneError(undefined);
+                              }}
+                              activeOpacity={0.85}
+                            >
+                              <Text style={styles.secondaryBtnText}>
+                                {t("cancel") || "Cancel"}
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.primaryBtn, changingBusinessPhone && styles.btnDisabled]}
+                              onPress={handleChangeBusinessPhone}
+                              activeOpacity={0.85}
+                              disabled={changingBusinessPhone}
+                            >
+                              {changingBusinessPhone ? (
+                                <ActivityIndicator size="small" color={Colors.textInverse} />
+                              ) : (
+                                <Text style={styles.primaryBtnText}>
+                                  {t("save") || "Save"}
+                                </Text>
+                              )}
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ) : null}
+                    </ProfileDetailRow>
+                  ) : null}
+                  {businessInfo.place.opening_hours ? (
+                    <ProfileDetailRow
+                      label={t("opening_hours") || "Opening Hours"}
+                      value={businessInfo.place.opening_hours}
+                      icon="time-outline"
+                      multiline
+                    />
+                  ) : null}
+                  {businessInfo.place.lat && businessInfo.place.lon ? (
+                    <ProfileDetailRow
+                      label={t("location") || "Location"}
+                      value={`${businessInfo.place.lat.toFixed(6)}, ${businessInfo.place.lon.toFixed(6)}`}
+                      icon="map-outline"
+                    />
+                  ) : null}
+                </>
+              ) : (
+                <View style={styles.emptyState}>
+                  <Ionicons name="business-outline" size={36} color={Colors.textMuted} />
+                  <Text style={styles.emptyStateText}>
+                    {t("no_business_info") || "No business information available"}
+                  </Text>
+                </View>
+              )}
+            </ProfileSection>
+          ) : null}
+
+          {role === "ADMIN" && userId ? (
+            <ProfileSection
+              title={t("admin_actions") || "Admin Actions"}
+              icon="construct-outline"
+              defaultOpen
+            >
+              <ProfileShortcutCard
+                icon="location-outline"
+                tone="warning"
+                title={t("add_place") || "Add Place"}
+                isRTL={isRTL}
+                onPress={() =>
+                  navigation.navigate("AdminPlaceMapPicker", {
+                    initialLat: 31.24,
+                    initialLon: 34.83,
+                    adminUserId: userId,
+                    role: "ADMIN",
+                  })
+                }
+              />
+              <ProfileShortcutCard
+                icon="grid-outline"
+                tone="info"
+                title={t("add_category") || "Add Category"}
+                isRTL={isRTL}
+                onPress={() =>
+                  navigation.navigate("AdminCategories", {
+                    adminUserId: userId,
+                    role: "ADMIN",
+                  })
+                }
+              />
+              <ProfileShortcutCard
+                icon="business-outline"
+                tone="primary"
+                title={t("add_city") || "Add City"}
+                isRTL={isRTL}
+                onPress={() =>
+                  navigation.navigate("AdminCities", {
+                    adminUserId: userId,
+                    role: "ADMIN",
+                  })
+                }
+              />
+            </ProfileSection>
+          ) : null}
+
+          {userId &&
+          (role === "REGULAR" ||
+            role === "DRIVER" ||
+            role === "BUSINESS_OWNER") ? (
+            <View style={styles.shortcutGroup}>
+              <Text style={[styles.groupHeading, isRTL && styles.rtlText]}>
+                {t("advertisements.profileSection")}
               </Text>
-            </TouchableOpacity>
-          </View>
-          </ScrollView>
-    </View>
+              <ProfileShortcutCard
+                icon="megaphone-outline"
+                tone="accent"
+                variant="prominent"
+                title={t("advertisements.requestAdvertisement")}
+                subtitle={t("advertisements.requestAdvertisementSubtitle")}
+                isRTL={isRTL}
+                onPress={() => navigation.navigate("CreateAdvertisement")}
+              />
+              <ProfileShortcutCard
+                icon="albums-outline"
+                tone="primary"
+                title={t("advertisements.myAds.title")}
+                subtitle={t("advertisements.myAds.subtitle")}
+                isRTL={isRTL}
+                onPress={() =>
+                  navigation.navigate("MyAdvertisements", { userId })
+                }
+              />
+            </View>
+          ) : null}
+
+          <ProfileSection
+            title={t("saved_places") || "Saved places"}
+            icon="bookmark-outline"
+          >
+            <ProfileShortcutCard
+              icon="bookmark-outline"
+              tone="primary"
+              title={t("view_saved_places") || "View saved places"}
+              isRTL={isRTL}
+              onPress={() => {
+                if (userId) {
+                  navigation.navigate("SavedPlaces");
+                } else {
+                  appAlert(
+                    t("error") || "Error",
+                    t("error_loading_profile") || "Could not load profile"
+                  );
+                }
+              }}
+            />
+          </ProfileSection>
+
+          <ProfileSection
+            title={t("account_settings") || "Account Settings"}
+            icon="settings-outline"
+          >
+            <View style={styles.settingsBlock}>
+              <Text style={styles.settingsLabel}>
+                {t("change_language") || "Change language"}
+              </Text>
+              <View style={styles.languageSwitcherWrap}>
+                <SimpleLanguageSwitcher />
+              </View>
+            </View>
+
+            <View style={styles.settingsBlock}>
+              <Text style={styles.settingsLabel}>
+                {t("change_password") || "Change password"}
+              </Text>
+
+              {!showPasswordChange ? (
+                <ProfileShortcutCard
+                  icon="lock-closed-outline"
+                  tone="primary"
+                  title={t("change_password") || "Change password"}
+                  isRTL={isRTL}
+                  onPress={() => setShowPasswordChange(true)}
+                />
+              ) : (
+                <View style={styles.inlineForm}>
+                  <Text style={styles.fieldLabel}>
+                    {t("current_password") || "Current Password"}
+                  </Text>
+                  <View style={[styles.input, passwordErrors.current && styles.inputError]}>
+                    <TextInput
+                      style={styles.inputField}
+                      value={currentPassword}
+                      onChangeText={(text) => {
+                        setCurrentPassword(text);
+                        if (passwordErrors.current) {
+                          setPasswordErrors({ ...passwordErrors, current: undefined });
+                        }
+                      }}
+                      placeholder={t("enter_current_password") || "Enter current password"}
+                      secureTextEntry={!showCurrentPassword}
+                      placeholderTextColor={Colors.textMuted}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeBtn}
+                      onPress={() => setShowCurrentPassword(!showCurrentPassword)}
+                    >
+                      <Ionicons
+                        name={showCurrentPassword ? "eye-off" : "eye"}
+                        size={18}
+                        color={Colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                  {passwordErrors.current ? (
+                    <Text style={styles.errorText}>{passwordErrors.current}</Text>
+                  ) : null}
+
+                  <Text style={[styles.fieldLabel, styles.fieldLabelGap]}>
+                    {t("new_password") || "New Password"}
+                  </Text>
+                  <View style={[styles.input, passwordErrors.new && styles.inputError]}>
+                    <TextInput
+                      style={styles.inputField}
+                      value={newPassword}
+                      onChangeText={(text) => {
+                        setNewPassword(text);
+                        if (passwordErrors.new) {
+                          setPasswordErrors({ ...passwordErrors, new: undefined });
+                        }
+                        if (text === confirmPassword && passwordErrors.confirm) {
+                          setPasswordErrors({ ...passwordErrors, confirm: undefined });
+                        }
+                      }}
+                      placeholder={t("enter_new_password") || "Enter new password"}
+                      secureTextEntry={!showNewPassword}
+                      placeholderTextColor={Colors.textMuted}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeBtn}
+                      onPress={() => setShowNewPassword(!showNewPassword)}
+                    >
+                      <Ionicons
+                        name={showNewPassword ? "eye-off" : "eye"}
+                        size={18}
+                        color={Colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  {newPassword.length > 0 ? (
+                    <View style={styles.requirements}>
+                      {!passwordMeetsLength(newPassword) && (
+                        <View style={styles.requirementItem}>
+                          <Ionicons name="close-circle" size={14} color={Colors.danger} />
+                          <Text style={styles.requirementText}>
+                            {t("password_req_length") || "At least 8 characters"}
+                          </Text>
+                        </View>
+                      )}
+                      {!passwordMeetsUppercase(newPassword) && (
+                        <View style={styles.requirementItem}>
+                          <Ionicons name="close-circle" size={14} color={Colors.danger} />
+                          <Text style={styles.requirementText}>
+                            {t("password_req_uppercase") || "Uppercase letter"}
+                          </Text>
+                        </View>
+                      )}
+                      {!passwordMeetsLowercase(newPassword) && (
+                        <View style={styles.requirementItem}>
+                          <Ionicons name="close-circle" size={14} color={Colors.danger} />
+                          <Text style={styles.requirementText}>
+                            {t("password_req_lowercase") || "Lowercase letter"}
+                          </Text>
+                        </View>
+                      )}
+                      {!passwordMeetsNumber(newPassword) && (
+                        <View style={styles.requirementItem}>
+                          <Ionicons name="close-circle" size={14} color={Colors.danger} />
+                          <Text style={styles.requirementText}>
+                            {t("password_req_number") || "Number"}
+                          </Text>
+                        </View>
+                      )}
+                      {!passwordMeetsSymbol(newPassword) && (
+                        <View style={styles.requirementItem}>
+                          <Ionicons name="close-circle" size={14} color={Colors.danger} />
+                          <Text style={styles.requirementText}>
+                            {t("password_req_symbol") || "Symbol"}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  ) : null}
+
+                  {passwordErrors.new ? (
+                    <Text style={styles.errorText}>{passwordErrors.new}</Text>
+                  ) : null}
+
+                  <Text style={[styles.fieldLabel, styles.fieldLabelGap]}>
+                    {t("confirm_password") || "Confirm Password"}
+                  </Text>
+                  <View style={[styles.input, passwordErrors.confirm && styles.inputError]}>
+                    <TextInput
+                      style={styles.inputField}
+                      value={confirmPassword}
+                      onChangeText={(text) => {
+                        setConfirmPassword(text);
+                        if (text !== newPassword) {
+                          setPasswordErrors({
+                            ...passwordErrors,
+                            confirm: t("passwords_do_not_match") || "Passwords do not match",
+                          });
+                        } else {
+                          setPasswordErrors({ ...passwordErrors, confirm: undefined });
+                        }
+                      }}
+                      placeholder={t("confirm_new_password") || "Confirm new password"}
+                      secureTextEntry={!showConfirmPassword}
+                      placeholderTextColor={Colors.textMuted}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeBtn}
+                      onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                    >
+                      <Ionicons
+                        name={showConfirmPassword ? "eye-off" : "eye"}
+                        size={18}
+                        color={Colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                  {passwordErrors.confirm ? (
+                    <Text style={styles.errorText}>{passwordErrors.confirm}</Text>
+                  ) : null}
+
+                  <View style={styles.formActions}>
+                    <TouchableOpacity
+                      style={styles.secondaryBtn}
+                      onPress={() => {
+                        setShowPasswordChange(false);
+                        setCurrentPassword("");
+                        setNewPassword("");
+                        setConfirmPassword("");
+                        setPasswordErrors({});
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.secondaryBtnText}>
+                        {t("cancel") || "Cancel"}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, changingPassword && styles.btnDisabled]}
+                      onPress={handleChangePassword}
+                      activeOpacity={0.85}
+                      disabled={changingPassword}
+                    >
+                      {changingPassword ? (
+                        <ActivityIndicator size="small" color={Colors.textInverse} />
+                      ) : (
+                        <Text style={styles.primaryBtnText}>
+                          {t("save") || "Save"}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </View>
+          </ProfileSection>
+
+          <TouchableOpacity
+            style={styles.logoutCard}
+            onPress={handleLogout}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={t("logout") || "Logout"}
+          >
+            <View style={styles.logoutIconWrap}>
+              <Ionicons
+                name="log-out-outline"
+                size={20}
+                color={Colors.danger}
+              />
+            </View>
+            <Text style={[styles.logoutText, isRTL && styles.rtlText]}>
+              {t("logout") || "Logout"}
+            </Text>
+            <Ionicons
+              name={isRTL ? "chevron-back" : "chevron-forward"}
+              size={20}
+              color={Colors.textMuted}
+            />
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+
+      <LogoutConfirmModal
+        visible={logoutVisible}
+        loading={loggingOut}
+        onCancel={() => {
+          if (!loggingOut) setLogoutVisible(false);
+        }}
+        onConfirm={confirmLogout}
+      />
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#ffffff",
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 16,
-    backgroundColor: "#ffffff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e0e0e0",
-  },
-  backButton: {
-    padding: 8,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#333",
-    flex: 1,
-    textAlign: "center",
-  },
-  headerSpacer: {
-    width: 40,
-  },
-  scrollView: {
-    flex: 1,
-    backgroundColor: "#ffffff",
-  },
-  scrollContent: {
-    paddingBottom: 120, // Space for bottom tab bar and logout button
-    backgroundColor: "#ffffff",
-  },
-  profileHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    backgroundColor: "#ffffff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#f0f0f0",
-  },
-  profileInfo: {
-    flex: 1,
-    marginLeft: 16,
-  },
-  sectionsContainer: {
-    backgroundColor: "#ffffff",
-  },
-  actionButton: {
-    backgroundColor: "#F2F2F7",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
-  },
-  actionButtonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  actionButtonText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: "600",
-    color: DARK_TEAL,
+    backgroundColor: Colors.bg,
   },
   centerContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#ffffff",
+    backgroundColor: Colors.bg,
+    paddingHorizontal: Spacing.xl,
   },
   loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: DARK_TEAL,
-    fontWeight: "600",
+    marginTop: Spacing.md,
+    fontSize: Typography.sizeBase,
+    color: Colors.textSecondary,
+    fontWeight: Typography.weightSemibold,
   },
-  errorText: {
-    fontSize: 14,
-    color: "#dc3545",
-    marginTop: 4,
-    fontWeight: "500",
-  },
-  passwordErrorText: {
-    fontSize: 12,
-    color: "#dc3545",
-    marginTop: 4,
-    fontWeight: "500",
-  },
-  passwordRequirements: {
-    marginTop: 8,
-    marginBottom: 8,
-    paddingLeft: 4,
-  },
-  requirementItem: {
+
+  // Top toolbar -------------------------------------------------------------
+  toolbar: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 4,
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.md,
+    paddingBottom: Spacing.sm,
+    backgroundColor: Colors.bg,
   },
-  requirementText: {
-    fontSize: 12,
-    color: "#d7263d",
-    marginLeft: 6,
-  },
-  avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: MINT,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 16,
-  },
-  userName: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 4,
-    flex: 1,
-  },
-  userEmail: {
-    fontSize: 14,
-    color: "#666",
-    flex: 1,
-  },
-  infoItem: {
-    marginBottom: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f5f5f5",
-  },
-  infoItemHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  infoLabel: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#666",
-    marginLeft: 8,
-  },
-  infoValue: {
-    fontSize: 16,
-    color: "#333",
-    fontWeight: "500",
-    marginTop: 4,
-  },
-  documentImage: {
-    width: "100%",
-    height: 200,
-    borderRadius: 12,
-    marginTop: 8,
-    backgroundColor: "#f0f0f0",
-  },
-  photosContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    marginTop: 8,
-    gap: 8,
-  },
-  photo: {
-    width: 100,
-    height: 100,
-    borderRadius: 12,
-    backgroundColor: "#f0f0f0",
-  },
-  emptyState: {
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surface,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 40,
-  },
-  emptyStateText: {
-    fontSize: 14,
-    color: "#999",
-    marginTop: 12,
-    fontStyle: "italic",
-  },
-  adSection: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 8,
-    marginBottom: 8,
-  },
-  adSectionTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#64748b",
-    letterSpacing: 0.2,
-    marginBottom: 12,
-  },
-  adRequestCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#ffffff",
-    borderRadius: 18,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
-    shadowColor: DARK_TEAL,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
-    gap: 4,
+    borderColor: Colors.border,
+    ...Shadow.soft,
   },
-  adRequestCardRTL: {
-    flexDirection: "row-reverse",
+  toolbarSlot: {
+    width: 40,
   },
-  adRequestIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: DARK_TEAL,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: DARK_TEAL,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  adRequestTextBlock: {
+  toolbarTitle: {
     flex: 1,
-    marginHorizontal: 14,
-    justifyContent: "center",
-  },
-  adRequestTextBlockRTL: {
-    marginHorizontal: 14,
-  },
-  adRequestTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: "#0f172a",
+    fontSize: Typography.sizeXl,
+    fontWeight: Typography.weightHeavy,
+    color: Colors.text,
+    textAlign: "center",
     letterSpacing: -0.2,
   },
-  adRequestSubtitle: {
-    fontSize: 13,
-    color: "#64748b",
-    marginTop: 4,
-    lineHeight: 19,
-    fontWeight: "500",
+
+  // Scroll body ------------------------------------------------------------
+  scrollView: {
+    flex: 1,
   },
-  myAdsCard: {
-    marginTop: 10,
-    shadowOpacity: 0.05,
-    elevation: 2,
+  scrollContent: {},
+  contentInner: {
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    gap: Spacing.lg,
   },
-  myAdsIconWrap: {
-    backgroundColor: "#e8f4f5",
-    shadowOpacity: 0,
-    elevation: 0,
+  cachedProfileBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.warningSoft,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.accentSoft,
+  },
+  cachedProfileBannerText: {
+    flex: 1,
+    fontSize: Typography.sizeSm,
+    color: Colors.warning,
+    lineHeight: 20,
+    fontWeight: Typography.weightSemibold,
+  },
+
+  // Stats / shortcut groups -----------------------------------------------
+  statRow: {
+    flexDirection: "row",
+    gap: Spacing.md,
+  },
+  shortcutGroup: {
+    gap: Spacing.md,
+  },
+  groupHeading: {
+    fontSize: 11,
+    letterSpacing: 1.6,
+    textTransform: "uppercase",
+    color: Colors.textMuted,
+    fontWeight: Typography.weightBold,
+    paddingHorizontal: Spacing.xs,
   },
   rtlText: {
     textAlign: "right",
     writingDirection: "rtl",
   },
-  languageSwitcherWrapper: {
-    marginTop: 12,
-    width: "100%",
+
+  // Inline forms (phone change, password change) --------------------------
+  inlineForm: {
+    gap: Spacing.sm,
   },
-  logoutButton: {
+  fieldLabel: {
+    fontSize: Typography.sizeSm,
+    fontWeight: Typography.weightSemibold,
+    color: Colors.textSecondary,
+  },
+  fieldLabelGap: {
+    marginTop: Spacing.md,
+  },
+  input: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    backgroundColor: "#ffffff",
-    marginTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: "#f0f0f0",
-  },
-  logoutButtonText: {
-    color: "#dc3545",
-    fontSize: 16,
-    fontWeight: "500",
-    marginLeft: 16,
-  },
-  passwordChangeForm: {
-    marginTop: 12,
-  },
-  passwordInputContainer: {
-    marginBottom: 16,
-  },
-  passwordLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: DARK_TEAL,
-    marginBottom: 8,
-  },
-  passwordInputWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f8f9fa",
-    borderRadius: 12,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: "#e9ecef",
-    paddingHorizontal: 12,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md,
   },
-  passwordInput: {
+  inputField: {
     flex: 1,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: "#333",
+    paddingVertical: Spacing.md - 2,
+    fontSize: Typography.sizeBase + 1,
+    color: Colors.text,
   },
   inputError: {
-    borderColor: "#dc3545",
+    borderColor: Colors.danger,
   },
-  eyeIcon: {
-    padding: 8,
+  eyeBtn: {
+    padding: Spacing.xs + 2,
   },
-  passwordChangeActions: {
+  formActions: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 8,
-    gap: 12,
+    gap: Spacing.md,
+    marginTop: Spacing.sm,
   },
-  cancelPasswordButton: {
+  primaryBtn: {
     flex: 1,
-    backgroundColor: "#f0f0f0",
-    paddingVertical: 12,
-    borderRadius: 12,
+    height: 44,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.primary,
     alignItems: "center",
+    justifyContent: "center",
+    ...Shadow.soft,
   },
-  cancelPasswordButtonText: {
-    color: "#666",
-    fontSize: 16,
-    fontWeight: "600",
+  primaryBtnText: {
+    color: Colors.textInverse,
+    fontSize: Typography.sizeBase,
+    fontWeight: Typography.weightBold,
   },
-  savePasswordButton: {
+  secondaryBtn: {
     flex: 1,
-    backgroundColor: DARK_TEAL,
-    paddingVertical: 12,
-    borderRadius: 12,
+    height: 44,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
     alignItems: "center",
+    justifyContent: "center",
   },
-  buttonDisabled: {
+  secondaryBtnText: {
+    color: Colors.text,
+    fontSize: Typography.sizeBase,
+    fontWeight: Typography.weightBold,
+  },
+  btnDisabled: {
     opacity: 0.6,
   },
-  savePasswordButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+  errorText: {
+    fontSize: Typography.sizeSm,
+    color: Colors.danger,
+    fontWeight: Typography.weightMedium,
   },
-  phoneDisplayContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  requirements: {
     marginTop: 4,
+    paddingLeft: 2,
+    gap: 4,
   },
-  editPhoneButton: {
+  requirementItem: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: "#f0f0f0",
+    gap: 6,
   },
-  editPhoneButtonText: {
-    color: "#666",
-    fontSize: 14,
-    fontWeight: "600",
-    marginLeft: 4,
+  requirementText: {
+    fontSize: Typography.sizeSm,
+    color: Colors.danger,
   },
-  phoneChangeForm: {
-    marginTop: 8,
+  editPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.sm + 2,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primarySoft,
+  },
+  editPillText: {
+    color: Colors.primary,
+    fontSize: Typography.sizeSm,
+    fontWeight: Typography.weightBold,
+  },
+
+  // Settings block --------------------------------------------------------
+  settingsBlock: {
+    gap: Spacing.sm,
+    paddingTop: Spacing.xs,
+  },
+  settingsLabel: {
+    fontSize: 11,
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
+    color: Colors.textMuted,
+    fontWeight: Typography.weightBold,
+  },
+  languageSwitcherWrap: {
+    width: "100%",
+  },
+
+  // Vehicle / business assets ---------------------------------------------
+  documentImage: {
+    width: "100%",
+    height: 200,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surfaceMuted,
+  },
+  photosContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: Spacing.sm,
+  },
+  photo: {
+    width: 100,
+    height: 100,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.surfaceMuted,
+  },
+  emptyState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: Spacing.xxl,
+    gap: Spacing.sm,
+  },
+  emptyStateText: {
+    fontSize: Typography.sizeSm,
+    color: Colors.textMuted,
+    fontStyle: "italic",
+  },
+
+  // Logout card -----------------------------------------------------------
+  logoutCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.md,
+    backgroundColor: Colors.surface,
+    paddingVertical: Spacing.md + 2,
+    paddingHorizontal: Spacing.md + 2,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadow.soft,
+  },
+  logoutIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.dangerSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  logoutText: {
+    flex: 1,
+    color: Colors.danger,
+    fontSize: Typography.sizeMd,
+    fontWeight: Typography.weightBold,
   },
 });

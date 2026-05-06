@@ -1,18 +1,8 @@
 // src/screens/AdminCategoriesScreen.tsx
 
 import React, { useEffect, useState, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  Modal,
-  TextInput,
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ActivityIndicator, ScrollView } from "react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
 import { useTranslation } from "react-i18next";
@@ -107,7 +97,7 @@ export default function AdminCategoriesScreen() {
       setCategories(data);
       setFilteredCategories(data);
     } catch {
-      Alert.alert(t("error") || "Error", t("failed_to_load_categories") || "Failed to load categories");
+      appAlert(t("error") || "Error", t("failed_to_load_categories") || "Failed to load categories");
     } finally {
       setLoading(false);
     }
@@ -167,17 +157,17 @@ export default function AdminCategoriesScreen() {
     const trimmedEn = nameEn.trim();
 
     if (!trimmedAr) {
-      Alert.alert(t("validation") || "Validation", t("arabic_name_required") || "Arabic name is required.");
+      appAlert(t("validation") || "Validation", t("arabic_name_required") || "Arabic name is required.");
       return;
     }
 
     if (!trimmedEn) {
-      Alert.alert(t("validation") || "Validation", t("english_name_required") || "English name is required.");
+      appAlert(t("validation") || "Validation", t("english_name_required") || "English name is required.");
       return;
     }
 
     if (!trimmedHe) {
-      Alert.alert(t("validation") || "Validation", t("hebrew_name_required") || "Hebrew name is required.");
+      appAlert(t("validation") || "Validation", t("hebrew_name_required") || "Hebrew name is required.");
       return;
     }
 
@@ -222,7 +212,7 @@ export default function AdminCategoriesScreen() {
       // הסנכרון מתבצע אוטומטית ב-backend כששומרים קטגוריה
       // לא צריך לקרוא ל-updateTranslationFiles כאן
     } catch {
-      Alert.alert(t("error") || "Error", t("failed_to_save_category") || "Failed to save category");
+      appAlert(t("error") || "Error", t("failed_to_save_category") || "Failed to save category");
     }
   };
 
@@ -233,7 +223,7 @@ export default function AdminCategoriesScreen() {
   const handleDeleteCategory = async () => {
     if (!editingCategory) return;
 
-    Alert.alert(
+    appAlert(
       "מחיקת קטגוריה",
       `האם אתה בטוח שברצונך למחוק את הקטגוריה "${editingCategory.name_ar}"?`,
       [
@@ -268,9 +258,9 @@ export default function AdminCategoriesScreen() {
               setNameEn("");
 
               await loadCategories();
-              Alert.alert("הצלחה", "הקטגוריה נמחקה בהצלחה");
+              appAlert("הצלחה", "הקטגוריה נמחקה בהצלחה");
             } catch (error: any) {
-              Alert.alert("שגיאה", error.message || "Failed to delete category");
+              appAlert("שגיאה", error.message || "Failed to delete category");
             }
           },
         },
@@ -279,7 +269,7 @@ export default function AdminCategoriesScreen() {
   };
 
   const handleDeleteCategoryFromList = async (category: Category) => {
-    Alert.alert(
+    appAlert(
       t("delete_category") || "Delete Category",
       t("delete_category_confirmation", { name: category.name_ar }) || `Are you sure you want to delete the category "${category.name_ar}"?`,
       [
@@ -308,9 +298,9 @@ export default function AdminCategoriesScreen() {
               }
 
               await loadCategories();
-              Alert.alert("הצלחה", "הקטגוריה נמחקה בהצלחה");
+              appAlert("הצלחה", "הקטגוריה נמחקה בהצלחה");
             } catch (error: any) {
-              Alert.alert("שגיאה", error.message || "Failed to delete category");
+              appAlert("שגיאה", error.message || "Failed to delete category");
             }
           },
         },

@@ -72,7 +72,7 @@ const CustomUserTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
   const { t } = useTranslation();
 
   return (
-    <View style={[tabBarLayout.outer, { paddingBottom: Math.max(insets.bottom, 6) }]}>
+    <View style={[tabBarLayout.outer, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={tabBarLayout.row}>
         {state.routes.map((route, tabIndex) => {
           const { name } = route;
@@ -222,7 +222,10 @@ export default function UserTabNavigator() {
           initialParams={{ selectedPlaceId: selectedPlaceIdFromParams }}
         />
         {isBusinessOwner ? (
-          <Tab.Screen name="ManageBusiness" component={ManageMyBusinessScreen} />
+          <>
+            <Tab.Screen name="RideTracking" component={RegularRideStatusScreen} />
+            <Tab.Screen name="ManageBusiness" component={ManageMyBusinessScreen} />
+          </>
         ) : isDriver ? (
           <Tab.Screen name="DriverRequests" component={DriverRideScreen} />
         ) : (

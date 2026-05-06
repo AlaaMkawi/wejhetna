@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   StatusBar,
   Platform,
-  Alert,
+  Pressable,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
@@ -29,8 +29,192 @@ const BG = "#f4fbfb";
 const MUTED = "#64748b";
 const CARD = "#ffffff";
 const BORDER = "#e2e8f0";
+const SUCCESS_ICON = "#059669";
+const SUCCESS_SOFT = "#ecfdf5";
+const SUCCESS_RING = "#a7f3d0";
+const WARN_ICON = "#c2410c";
+const WARN_SOFT = "#fff7ed";
+const WARN_RING = "#fed7aa";
+const ERR_ICON = "#dc2626";
+const ERR_SOFT = "#fef2f2";
+const ERR_RING = "#fecaca";
+
+type FeedbackState =
+  | { kind: "approved" }
+  | { kind: "rejected" }
+  | { kind: "error"; message: string };
+
+const feedbackStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 28,
+  },
+  card: {
+    width: "100%",
+    maxWidth: 400,
+    backgroundColor: CARD,
+    borderRadius: 24,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    borderWidth: 1,
+    borderColor: BORDER,
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 8,
+    alignItems: "center",
+  },
+  cardRTL: {
+    alignItems: "stretch",
+  },
+  iconWrap: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0f172a",
+    marginBottom: 10,
+    textAlign: "center",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  body: {
+    fontSize: 16,
+    lineHeight: 24,
+    color: "#475569",
+    textAlign: "center",
+    marginBottom: 28,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  btn: {
+    width: "100%",
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  btnSuccess: {
+    backgroundColor: DARK_TEAL,
+    shadowColor: DARK_TEAL,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  btnWarning: {
+    backgroundColor: "#ea580c",
+    shadowColor: "#c2410c",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  btnError: {
+    backgroundColor: "#dc2626",
+    shadowColor: "#b91c1c",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  btnText: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "700",
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+});
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdminAdvertisementDetails">;
+
+type AdminFeedbackModalProps = {
+  variant: "approved" | "rejected" | "error";
+  message: string;
+  isRTL: boolean;
+  onDismiss: () => void;
+  allowBackdropDismiss: boolean;
+};
+
+function AdminAdvertisementFeedbackModal({
+  variant,
+  message,
+  isRTL,
+  onDismiss,
+  allowBackdropDismiss,
+}: AdminFeedbackModalProps) {
+  const { t } = useTranslation();
+  const isApproved = variant === "approved";
+  const isRejected = variant === "rejected";
+  const isError = variant === "error";
+
+  const title = isApproved
+    ? t("advertisements.admin.feedbackApprovedTitle")
+    : isRejected
+      ? t("advertisements.admin.feedbackRejectedTitle")
+      : t("advertisements.admin.feedbackErrorTitle");
+
+  const iconName = isApproved ? "checkmark-circle" : isRejected ? "remove-circle" : "alert-circle";
+  const iconColor = isApproved ? SUCCESS_ICON : isRejected ? WARN_ICON : ERR_ICON;
+  const iconBg = isApproved ? SUCCESS_SOFT : isRejected ? WARN_SOFT : ERR_SOFT;
+  const iconRing = isApproved ? SUCCESS_RING : isRejected ? WARN_RING : ERR_RING;
+  const btnStyle = isError ? feedbackStyles.btnError : isRejected ? feedbackStyles.btnWarning : feedbackStyles.btnSuccess;
+
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      onRequestClose={onDismiss}
+      statusBarTranslucent
+    >
+      <View style={feedbackStyles.backdrop} accessibilityViewIsModal>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={allowBackdropDismiss ? onDismiss : undefined}
+          accessibilityRole="button"
+          accessibilityLabel={t("close")}
+        />
+        <View
+          style={[feedbackStyles.card, isRTL && feedbackStyles.cardRTL]}
+          onStartShouldSetResponder={() => true}
+        >
+          <View
+            style={[
+              feedbackStyles.iconWrap,
+              { backgroundColor: iconBg, borderColor: iconRing },
+            ]}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            <Ionicons name={iconName} size={40} color={iconColor} />
+          </View>
+          <Text style={[feedbackStyles.title, isRTL && styles.textRTL]}>{title}</Text>
+          <Text style={[feedbackStyles.body, isRTL && styles.textRTL]}>{message}</Text>
+          <TouchableOpacity
+            style={[feedbackStyles.btn, btnStyle]}
+            onPress={onDismiss}
+            activeOpacity={0.9}
+            accessibilityRole="button"
+          >
+            <Text style={feedbackStyles.btnText}>
+              {t("advertisements.admin.feedbackDismiss") || t("ok")}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 function labelCity(c: City, lang: string) {
   if (lang === "he" && c.name_he) return c.name_he;
@@ -69,6 +253,7 @@ export default function AdminAdvertisementDetailsScreen({ route, navigation }: P
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"approve" | "reject" | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -109,31 +294,35 @@ export default function AdminAdvertisementDetailsScreen({ route, navigation }: P
           adminUserId,
           advertisementId: advertisement.id,
         });
-        Alert.alert(
-          t("success"),
-          t("advertisements.admin.approvedSuccess"),
-          [{ text: t("ok"), onPress: () => navigation.goBack() }]
-        );
+        setFeedback({ kind: "approved" });
       } else {
         await rejectAdvertisementAdmin({
           adminUserId,
           advertisementId: advertisement.id,
         });
-        Alert.alert(
-          t("success"),
-          t("advertisements.admin.rejectedSuccess"),
-          [{ text: t("ok"), onPress: () => navigation.goBack() }]
-        );
+        setFeedback({ kind: "rejected" });
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(t("error"), t("advertisements.admin.actionFailed", { message: msg }));
+      setFeedback({
+        kind: "error",
+        message: t("advertisements.admin.actionFailed", { message: msg }),
+      });
     } finally {
       setActionLoading(false);
       setConfirmVisible(false);
       setConfirmAction(null);
     }
-  }, [confirmAction, adminUserId, advertisement.id, navigation, t]);
+  }, [confirmAction, adminUserId, advertisement.id, t]);
+
+  const dismissFeedback = useCallback(() => {
+    if (feedback == null) return;
+    const goBack = feedback.kind === "approved" || feedback.kind === "rejected";
+    setFeedback(null);
+    if (goBack) {
+      navigation.goBack();
+    }
+  }, [feedback, navigation]);
 
   const openConfirm = (action: "approve" | "reject") => {
     setConfirmAction(action);
@@ -284,6 +473,24 @@ export default function AdminAdvertisementDetailsScreen({ route, navigation }: P
           </View>
         </View>
       </Modal>
+
+      {feedback != null && (
+        <AdminAdvertisementFeedbackModal
+          variant={
+            feedback.kind === "error" ? "error" : feedback.kind === "approved" ? "approved" : "rejected"
+          }
+          message={
+            feedback.kind === "error"
+              ? feedback.message
+              : feedback.kind === "approved"
+                ? t("advertisements.admin.approvedSuccess")
+                : t("advertisements.admin.rejectedSuccess")
+          }
+          isRTL={isRTL}
+          onDismiss={dismissFeedback}
+          allowBackdropDismiss={feedback.kind === "error"}
+        />
+      )}
     </SafeAreaView>
   );
 }

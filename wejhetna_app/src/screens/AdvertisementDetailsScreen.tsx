@@ -5,20 +5,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  TouchableOpacity,
-  StatusBar,
-  Platform,
-  FlatList,
-  useWindowDimensions,
-  ActivityIndicator,
-  Alert,
-  Modal,
-} from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { View, Text, StyleSheet, Image, TouchableOpacity, StatusBar, Platform, FlatList, useWindowDimensions, ActivityIndicator, Modal } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -31,6 +19,7 @@ import {
   deleteAdvertisementAdmin,
 } from "../api/advertisements";
 import { formatApiImageUri } from "../utils/imageUrl";
+import { Colors, Radius, Shadow, Spacing, Typography } from "../theme";
 
 type Props = NativeStackScreenProps<RootStackParamList, "AdvertisementDetails">;
 
@@ -170,7 +159,7 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(t("error"), t("advertisements.delete.failed", { message: msg }));
+      appAlert(t("error"), t("advertisements.delete.failed", { message: msg }));
     } finally {
       setDeleteBusy(false);
     }
@@ -210,16 +199,25 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
                   <Ionicons name="image-outline" size={56} color="#94a3b8" />
                 </View>
               )}
-              <Text
+              <View
                 style={[
-                  styles.dateOverlay,
-                  isRTL && styles.dateOverlayRTL,
+                  styles.datePill,
                   { top: insets.top + 52 },
                 ]}
-                numberOfLines={1}
+                pointerEvents="none"
               >
-                {posted}
-              </Text>
+                <Ionicons
+                  name="time-outline"
+                  size={12}
+                  color="rgba(255,255,255,0.92)"
+                />
+                <Text
+                  style={[styles.datePillText, isRTL && styles.dateOverlayRTL]}
+                  numberOfLines={1}
+                >
+                  {posted}
+                </Text>
+              </View>
             </View>
           );
         }}
@@ -294,6 +292,13 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
+            <View style={styles.modalIconWrap}>
+              <Ionicons
+                name="trash-outline"
+                size={26}
+                color={Colors.danger}
+              />
+            </View>
             <Text style={[styles.modalTitle, isRTL && styles.modalTextRTL]}>
               {isOwner
                 ? t("advertisements.delete.confirmOwnerTitle")
@@ -304,21 +309,23 @@ export default function AdvertisementDetailsScreen({ route, navigation }: Props)
                 ? t("advertisements.delete.confirmOwnerMessage")
                 : t("advertisements.delete.confirmAdminMessage")}
             </Text>
-            <View style={styles.modalActions}>
+            <View style={[styles.modalActions, isRTL && styles.modalActionsRTL]}>
               <TouchableOpacity
                 style={styles.modalBtnGhost}
                 onPress={() => (!deleteBusy ? setConfirmOpen(false) : undefined)}
                 disabled={deleteBusy}
+                activeOpacity={0.85}
               >
                 <Text style={styles.modalBtnGhostText}>{t("cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.modalBtnDanger}
+                style={[styles.modalBtnDanger, deleteBusy && styles.modalBtnDangerBusy]}
                 onPress={performDelete}
                 disabled={deleteBusy}
+                activeOpacity={0.9}
               >
                 {deleteBusy ? (
-                  <ActivityIndicator color="#fff" />
+                  <ActivityIndicator color={Colors.textInverse} />
                 ) : (
                   <Text style={styles.modalBtnDangerText}>
                     {t("advertisements.delete.confirmCta")}
@@ -340,101 +347,131 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#0f172a",
   },
-  dateOverlay: {
+  /* Pill-shaped posted-at overlay (centered near the top of each page). */
+  datePill: {
     position: "absolute",
-    left: 16,
-    right: 16,
-    textAlign: "center",
-    fontSize: 12,
-    fontWeight: "500",
-    color: "rgba(255,255,255,0.78)",
-    textShadowColor: "rgba(0,0,0,0.55)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.xs + 2,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    backgroundColor: "rgba(15,23,42,0.45)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+    maxWidth: "80%",
+  },
+  datePillText: {
+    fontSize: Typography.sizeXs,
+    fontWeight: Typography.weightSemibold,
+    color: "rgba(255,255,255,0.94)",
+    letterSpacing: 0.2,
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   dateOverlayRTL: {
     writingDirection: "rtl",
   },
-  backFloating: {
-    position: "absolute",
-    zIndex: 20,
-  },
-  deleteFloating: {
-    position: "absolute",
-    zIndex: 20,
-  },
+  /* Floating action buttons (back / delete) layered over the image feed. */
+  backFloating: { position: "absolute", zIndex: 20 },
+  deleteFloating: { position: "absolute", zIndex: 20 },
   backInner: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "rgba(0,0,0,0.35)",
+    backgroundColor: "rgba(15,23,42,0.45)",
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
   },
   deleteInner: {
-    backgroundColor: "rgba(185, 28, 28, 0.75)",
+    backgroundColor: "rgba(185, 28, 28, 0.78)",
+    borderColor: "rgba(255,255,255,0.18)",
   },
+  /* Soft confirmation modal — matches the profile/posters design language. */
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    backgroundColor: Colors.overlay,
     justifyContent: "center",
-    paddingHorizontal: 24,
+    paddingHorizontal: Spacing.xl,
   },
   modalCard: {
-    backgroundColor: "#ffffff",
-    borderRadius: 20,
-    padding: 22,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.xxl,
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.lg,
+    alignItems: "center",
+    ...Shadow.float,
+  },
+  modalIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.dangerSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: Spacing.md,
   },
   modalTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#0f5b63",
-    marginBottom: 10,
+    fontSize: Typography.sizeLg,
+    fontWeight: Typography.weightHeavy,
+    color: Colors.text,
+    marginBottom: Spacing.sm,
+    textAlign: "center",
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   modalBody: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: "#475569",
-    marginBottom: 20,
+    fontSize: Typography.sizeBase,
+    lineHeight: Typography.lineBody + 2,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.xl,
+    textAlign: "center",
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
   modalTextRTL: {
-    textAlign: "right",
     writingDirection: "rtl",
   },
   modalActions: {
     flexDirection: "row",
-    gap: 10,
-    justifyContent: "flex-end",
+    alignSelf: "stretch",
+    gap: Spacing.sm,
   },
+  modalActionsRTL: { flexDirection: "row-reverse" },
   modalBtnGhost: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-  },
-  modalBtnGhostText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#64748b",
-    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
-  },
-  modalBtnDanger: {
-    minWidth: 120,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: 14,
-    backgroundColor: "#b91c1c",
+    flex: 1,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.surfaceMuted,
     alignItems: "center",
     justifyContent: "center",
   },
+  modalBtnGhostText: {
+    fontSize: Typography.sizeBase,
+    fontWeight: Typography.weightSemibold,
+    color: Colors.textSecondary,
+    fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  modalBtnDanger: {
+    flex: 1,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.danger,
+    alignItems: "center",
+    justifyContent: "center",
+    ...Shadow.soft,
+  },
+  modalBtnDangerBusy: {
+    opacity: 0.85,
+  },
   modalBtnDangerText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
+    color: Colors.textInverse,
+    fontSize: Typography.sizeBase,
+    fontWeight: Typography.weightBold,
+    letterSpacing: 0.2,
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
 });

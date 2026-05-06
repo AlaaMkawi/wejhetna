@@ -3,19 +3,8 @@
  * POST /advertisements (multipart). Requires logged-in user (user_id in form).
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-  TextInput,
-  ActivityIndicator,
-  Alert,
-  Platform,
-  KeyboardAvoidingView,
-} from "react-native";
+import { appAlert } from "../utils/appAlert";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, TextInput, ActivityIndicator, Platform, KeyboardAvoidingView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { useNavigation } from "@react-navigation/native";
@@ -120,6 +109,16 @@ export default function CreateAdvertisementScreen() {
     return hit?.id ?? null;
   }, [cities]);
 
+  /** Same ID is used by the first "Other" / "Online" pill — do not list that row again from the API list. */
+  const activeCategoriesForUi = useMemo(
+    () => activeCategories.filter((c) => OTHER_CATEGORY_ID == null || c.id !== OTHER_CATEGORY_ID),
+    [activeCategories, OTHER_CATEGORY_ID]
+  );
+  const citiesForUi = useMemo(
+    () => cities.filter((c) => ONLINE_CITY_ID == null || c.id !== ONLINE_CITY_ID),
+    [cities, ONLINE_CITY_ID]
+  );
+
   const resolvedCategoryId = categoryId === -1 ? OTHER_CATEGORY_ID : categoryId;
   const resolvedCityId = cityId === -1 ? ONLINE_CITY_ID : cityId;
 
@@ -145,7 +144,7 @@ export default function CreateAdvertisementScreen() {
       setCategories(categoriesRes);
     } catch (e) {
       console.error(e);
-      Alert.alert(t("error"), t("advertisements.loadFailedMeta"));
+      appAlert(t("error"), t("advertisements.loadFailedMeta"));
     } finally {
       setLoadingMeta(false);
     }
@@ -199,7 +198,7 @@ export default function CreateAdvertisementScreen() {
 
   async function onSubmit() {
     if (!userId) {
-      Alert.alert(t("error"), t("advertisements.mustLogin"));
+      appAlert(t("error"), t("advertisements.mustLogin"));
       return;
     }
     if (!asset?.uri) {
@@ -236,12 +235,12 @@ export default function CreateAdvertisementScreen() {
         imageType: asset.type,
         imageName: asset.fileName ?? undefined,
       });
-      Alert.alert(t("success"), t("advertisements.successMessage"), [
+      appAlert(t("success"), t("advertisements.successMessage"), [
         { text: t("ok"), onPress: () => resetForm() },
       ]);
     } catch (e: any) {
       const msg = e?.message || String(e);
-      Alert.alert(t("error"), msg);
+      appAlert(t("error"), msg);
     } finally {
       setSubmitting(false);
     }
@@ -365,23 +364,25 @@ export default function CreateAdvertisementScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.pillsRow}
             >
-              <TouchableOpacity
-                key="cat-other"
-                style={[styles.pill, categoryId === -1 && styles.pillSelected]}
-                onPress={() => {
-                  setCategoryId(-1 as any);
-                  setCategoryError(null);
-                }}
-                activeOpacity={0.85}
-              >
-                <Text
-                  style={[styles.pillText, categoryId === -1 && styles.pillTextSel]}
-                  numberOfLines={1}
+              {OTHER_CATEGORY_ID != null ? (
+                <TouchableOpacity
+                  key="cat-other"
+                  style={[styles.pill, categoryId === -1 && styles.pillSelected]}
+                  onPress={() => {
+                    setCategoryId(-1 as any);
+                    setCategoryError(null);
+                  }}
+                  activeOpacity={0.85}
                 >
-                  {t("advertisements.otherOption")}
-                </Text>
-              </TouchableOpacity>
-              {activeCategories.map((c) => {
+                  <Text
+                    style={[styles.pillText, categoryId === -1 && styles.pillTextSel]}
+                    numberOfLines={1}
+                  >
+                    {t("advertisements.otherOption")}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              {activeCategoriesForUi.map((c) => {
                 const selected = categoryId === c.id;
                 return (
                   <TouchableOpacity
@@ -418,23 +419,25 @@ export default function CreateAdvertisementScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.pillsRow}
             >
-              <TouchableOpacity
-                key="city-online"
-                style={[styles.pill, cityId === -1 && styles.pillSelected]}
-                onPress={() => {
-                  setCityId(-1 as any);
-                  setCityError(null);
-                }}
-                activeOpacity={0.85}
-              >
-                <Text
-                  style={[styles.pillText, cityId === -1 && styles.pillTextSel]}
-                  numberOfLines={1}
+              {ONLINE_CITY_ID != null ? (
+                <TouchableOpacity
+                  key="city-online"
+                  style={[styles.pill, cityId === -1 && styles.pillSelected]}
+                  onPress={() => {
+                    setCityId(-1 as any);
+                    setCityError(null);
+                  }}
+                  activeOpacity={0.85}
                 >
-                  {t("advertisements.onlineBusinessOption")}
-                </Text>
-              </TouchableOpacity>
-              {cities.map((c) => {
+                  <Text
+                    style={[styles.pillText, cityId === -1 && styles.pillTextSel]}
+                    numberOfLines={1}
+                  >
+                    {t("advertisements.onlineBusinessOption")}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              {citiesForUi.map((c) => {
                 const selected = cityId === c.id;
                 return (
                   <TouchableOpacity

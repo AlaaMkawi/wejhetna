@@ -1,18 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { appAlert } from "../../utils/appAlert";
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import {
@@ -106,12 +94,12 @@ export function PostRideFeedbackModal({
         stars,
         comment: ratingComment.trim() || undefined,
       });
-      Alert.alert(t("success") || "Thanks", t("ride_rating_thanks") || "Thanks for your feedback!");
+      appAlert(t("success") || "Thanks", t("ride_rating_thanks") || "Thanks for your feedback!");
       onRatingSubmitted?.();
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(t("error") || "Error", msg || t("ride_rating_failed") || "Rating failed");
+      appAlert(t("error") || "Error", msg || t("ride_rating_failed") || "Rating failed");
     } finally {
       setSubmitting(false);
     }
@@ -126,7 +114,7 @@ export function PostRideFeedbackModal({
         regular_user_id: target.regularUserId,
         message: reportMessage.trim(),
       });
-      Alert.alert(
+      appAlert(
         t("success") || "Received",
         t("ride_report_thanks") || "Your report has been sent to the admin team."
       );
@@ -134,7 +122,7 @@ export function PostRideFeedbackModal({
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert(t("error") || "Error", msg || t("ride_report_failed") || "Report failed");
+      appAlert(t("error") || "Error", msg || t("ride_report_failed") || "Report failed");
     } finally {
       setSubmitting(false);
     }
