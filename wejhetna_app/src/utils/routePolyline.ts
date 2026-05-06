@@ -229,6 +229,50 @@ export function polylineLengthMeters(coords: RouteLineStringCoords): number {
   return sum;
 }
 
+/**
+ * A point [lon, lat] located `fraction` (0–1) along the polyline by accumulated
+ * haversine segment length. Used for on-route ETA callouts during live navigation.
+ */
+export function pointAtFractionAlongPolyline(
+  coords: RouteLineStringCoords,
+  fraction: number
+): [number, number] | null {
+  if (coords.length === 0) return null;
+  if (coords.length === 1) {
+    return [coords[0][0], coords[0][1]];
+  }
+  const f = Math.max(0, Math.min(1, fraction));
+  let total = 0;
+  const segLens: number[] = [];
+  for (let i = 0; i < coords.length - 1; i++) {
+    const d = haversineMeters(
+      coords[i][1],
+      coords[i][0],
+      coords[i + 1][1],
+      coords[i + 1][0]
+    );
+    segLens.push(d);
+    total += d;
+  }
+  if (total < 0.5) {
+    const c = coords[0];
+    return [c[0], c[1]];
+  }
+  let target = f * total;
+  for (let i = 0; i < segLens.length; i++) {
+    const d = segLens[i];
+    if (target <= d) {
+      const t = d < 1e-8 ? 0 : target / d;
+      const [lon1, lat1] = coords[i];
+      const [lon2, lat2] = coords[i + 1];
+      return [lon1 + t * (lon2 - lon1), lat1 + t * (lat2 - lat1)];
+    }
+    target -= d;
+  }
+  const last = coords[coords.length - 1];
+  return [last[0], last[1]];
+}
+
 export function bearingDegrees(
   lat1: number,
   lon1: number,

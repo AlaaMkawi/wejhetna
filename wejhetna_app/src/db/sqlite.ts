@@ -1,7 +1,7 @@
 /**
- * Offline SQLite entry point (infrastructure only).
- * Uses react-native-nitro-sqlite (Nitro Modules). No schema, migrations, or caching yet.
- * Import `getOfflineSQLite` when implementing offline places, routes, or search cache.
+ * Offline SQLite entry point.
+ * Uses react-native-nitro-sqlite (Nitro Modules).
+ * Key-value rows live in `kv_store` (see `offlineKv.ts`).
  */
 import { open, type NitroSQLiteConnection } from "react-native-nitro-sqlite";
 
