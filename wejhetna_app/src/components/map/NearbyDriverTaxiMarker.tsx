@@ -35,6 +35,7 @@ export type NearbyDriverTaxiMarkerProps = {
   /** When true, renders the slightly enlarged variant used for the currently-selected driver. */
   selected?: boolean;
   size?: NearbyDriverTaxiMarkerSize;
+  accessibilityLabel?: string;
 };
 
 const SIZE_MAP: Record<
@@ -48,16 +49,16 @@ const SIZE_MAP: Record<
 export function NearbyDriverTaxiMarker({
   selected = false,
   size,
+  accessibilityLabel,
 }: NearbyDriverTaxiMarkerProps) {
   const resolvedSize: NearbyDriverTaxiMarkerSize =
     size ?? (selected ? "expanded" : "compact");
   const { pin, plate, icon } = SIZE_MAP[resolvedSize];
 
-  // Soft pulse ring on the selected marker — purely cosmetic, communicates
-  // "this is the active driver" without obscuring nearby markers.
+  const useStaticMarker = Platform.OS === "ios";
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!selected) {
+    if (useStaticMarker || !selected) {
       pulse.setValue(0);
       return;
     }
@@ -71,7 +72,7 @@ export function NearbyDriverTaxiMarker({
     );
     loop.start();
     return () => loop.stop();
-  }, [selected, pulse]);
+  }, [selected, pulse, useStaticMarker]);
 
   const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] });
   const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] });
@@ -86,27 +87,46 @@ export function NearbyDriverTaxiMarker({
     <View
       style={[
         styles.hit,
-        // Wrapper sized to the pin glyph; bottom edge ≈ tip of the pin so
-        // anchor (0.5, 1) lands the visual tip on the coordinate.
         { width: pin, height: pin },
       ]}
+      collapsable={false}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
     >
       {selected ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.pulseRing,
-            {
-              width: ringSize,
-              height: ringSize,
-              borderRadius: ringSize / 2,
-              top: bulbCenterY - ringSize / 2,
-              left: pin / 2 - ringSize / 2,
-              transform: [{ scale: ringScale }],
-              opacity: ringOpacity,
-            },
-          ]}
-        />
+        useStaticMarker ? (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.pulseRing,
+              {
+                width: ringSize,
+                height: ringSize,
+                borderRadius: ringSize / 2,
+                top: bulbCenterY - ringSize / 2,
+                left: pin / 2 - ringSize / 2,
+                opacity: 0.45,
+                transform: [{ scale: 1.6 }],
+              },
+            ]}
+          />
+        ) : (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.pulseRing,
+              {
+                width: ringSize,
+                height: ringSize,
+                borderRadius: ringSize / 2,
+                top: bulbCenterY - ringSize / 2,
+                left: pin / 2 - ringSize / 2,
+                transform: [{ scale: ringScale }],
+                opacity: ringOpacity,
+              },
+            ]}
+          />
+        )
       ) : null}
 
       <View style={styles.shadowPlate}>

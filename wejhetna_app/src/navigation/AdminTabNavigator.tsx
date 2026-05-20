@@ -150,6 +150,8 @@ export default function AdminTabNavigator({ route }: AdminTabsProps) {
       screenOptions={{
         headerShown: false,
         tabBarHideOnKeyboard: true,
+        lazy: true,
+        unmountOnBlur: true,
       }}
       initialRouteName="AdminHome"
     >

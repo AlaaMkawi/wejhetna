@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Image,
   Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +14,10 @@ import {
 import { useTranslation } from "react-i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { useIosAnnotationMount } from "../map/useIosAnnotationMount";
+import { suppressMapOverlays } from "../map/mapOverlayStore";
+import { setMapAnnotationsReady } from "../map/mapReadyStore";
+import { runAfterIosMapTeardown } from "../../utils/iosMapScreenTeardown";
 import type { Category, City, PlaceForMap } from "../../api/places";
 import { fetchAllPlaces } from "../../api/places";
 import { haversineMeters } from "../../utils/routePolyline";
@@ -54,6 +59,27 @@ export function RideDestinationDetailsModal({
   const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [place, setPlace] = useState<PlaceForMap | null>(null);
+  const [modalMapMounted, setModalMapMounted] = useState(false);
+  const showMapAnnotation = useIosAnnotationMount();
+
+  useEffect(() => {
+    if (visible) {
+      setModalMapMounted(true);
+      return;
+    }
+    setModalMapMounted(false);
+  }, [visible]);
+
+  const requestClose = useCallback(() => {
+    if (Platform.OS === "ios") {
+      suppressMapOverlays();
+      setModalMapMounted(false);
+      setMapAnnotationsReady(false);
+      runAfterIosMapTeardown(onClose, "navigate");
+      return;
+    }
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     if (!visible) {
@@ -121,12 +147,12 @@ export function RideDestinationDetailsModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={requestClose}>
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <View style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>{t("ride_trip_destination_details_title")}</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeX} hitSlop={12} accessibilityRole="button">
+            <TouchableOpacity onPress={requestClose} style={styles.closeX} hitSlop={12} accessibilityRole="button">
               <Ionicons name="close" size={28} color="#333" />
             </TouchableOpacity>
           </View>
@@ -141,7 +167,8 @@ export function RideDestinationDetailsModal({
              * that don't match a known place. Pinch-zoom is enabled so the map can be
              * inspected without leaving the modal. Hidden when no coordinates exist.
              */}
-            {destinationLat != null &&
+            {modalMapMounted &&
+            destinationLat != null &&
             destinationLon != null &&
             Number.isFinite(destinationLat) &&
             Number.isFinite(destinationLon) ? (
@@ -155,6 +182,8 @@ export function RideDestinationDetailsModal({
                   zoomEnabled
                   pitchEnabled={false}
                   rotateEnabled={false}
+                  onDidFinishLoadingMap={() => setMapAnnotationsReady(true)}
+                  onDidFinishRenderingMap={() => setMapAnnotationsReady(true)}
                 >
                   <Camera
                     defaultSettings={{
@@ -163,14 +192,16 @@ export function RideDestinationDetailsModal({
                     }}
                     animationMode="none"
                   />
-                  <PointAnnotation
-                    id="destination_preview"
-                    coordinate={[destinationLon, destinationLat]}
-                  >
-                    <View style={styles.destinationDotOuter}>
-                      <View style={styles.destinationDotInner} />
-                    </View>
-                  </PointAnnotation>
+                  {showMapAnnotation ? (
+                    <PointAnnotation
+                      id="destination_preview"
+                      coordinate={[destinationLon, destinationLat]}
+                    >
+                      <View style={styles.destinationDotOuter} collapsable={false}>
+                        <View style={styles.destinationDotInner} />
+                      </View>
+                    </PointAnnotation>
+                  ) : null}
                 </MapView>
               </View>
             ) : null}

@@ -3,7 +3,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import { appAlert } from "../../utils/appAlert";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, ActivityIndicator, Image, StatusBar, Platform } from "react-native";
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useIosAnnotationMount } from "../../components/map/useIosAnnotationMount";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -32,6 +34,7 @@ type UserInfo = {
   created_at: string;
 };
 export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigation }: Props) {
+  const showMapPin = useIosAnnotationMount();
   const { t } = useTranslation();
   const { adminUserId, request } = route.params;
   
@@ -485,7 +488,7 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
           
           {/* Interactive Map */}
           <View style={styles.mapContainer}>
-            <MapView
+            <FocusedMapView
               style={styles.map}
               mapStyle={MAP_STYLE_URL}
               scrollEnabled={true}
@@ -505,17 +508,19 @@ export default function AdminBusinessOwnerRequestDetailsScreen({ route, navigati
                 maxZoomLevel={18}
                 animationMode="flyTo"
               />
-              <PointAnnotation
-                id="request-location"
-                coordinate={[request.lon, request.lat]}
-              >
-                <View style={styles.markerContainer}>
-                  <View style={styles.markerPin}>
-                    <Ionicons name="location" size={24} color="#FF0000" />
+              {showMapPin ? (
+                <PointAnnotation
+                  id="request-location"
+                  coordinate={[request.lon, request.lat]}
+                >
+                  <View style={styles.markerContainer} collapsable={false}>
+                    <View style={styles.markerPin}>
+                      <Ionicons name="location" size={24} color="#FF0000" />
+                    </View>
                   </View>
-                </View>
-              </PointAnnotation>
-            </MapView>
+                </PointAnnotation>
+              ) : null}
+            </FocusedMapView>
           </View>
 
         </View>

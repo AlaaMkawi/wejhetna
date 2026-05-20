@@ -81,7 +81,7 @@ function MapPinInner({
   const finalScale = zoomScale * (selected ? 1.15 : 1);
 
   return (
-    <View style={styles.hit} pointerEvents="box-none">
+    <View style={styles.hit} pointerEvents="box-none" collapsable={false}>
       <View
         style={[
           styles.pinWrapper,

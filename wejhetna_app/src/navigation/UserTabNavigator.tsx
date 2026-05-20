@@ -1,7 +1,7 @@
 // src/navigation/UserTabNavigator.tsx
 
 import React from "react";
-import { View, TouchableOpacity, Text, Platform } from "react-native";
+import { View, TouchableOpacity, Text, Platform, ActivityIndicator } from "react-native";
 import { createBottomTabNavigator, BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { useRoute, RouteProp } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -164,8 +164,6 @@ export default function UserTabNavigator() {
   }, []);
 
   const HomeScreenComponent = React.useMemo(() => {
-    if (loading) return RegularHomeScreen;
-
     switch (userRole) {
       case "DRIVER":
         return DriverHomeScreen;
@@ -175,25 +173,15 @@ export default function UserTabNavigator() {
       default:
         return RegularHomeScreen;
     }
-  }, [userRole, loading]);
+  }, [userRole]);
 
+  // Do not mount MapView (Home tab) while role is loading. A placeholder Tab.Navigator here
+  // used to mount RegularHomeScreen twice (loading navigator → role navigator), which crashes
+  // iOS Fabric with "Attempt to mount already mounted component view" in MLNMapView.
   if (loading) {
     return (
-      <View style={{ flex: 1 }}>
-        <Tab.Navigator
-          id="UserTabs"
-          tabBar={(props) => <CustomUserTabBar {...props} />}
-          screenOptions={{
-            headerShown: false,
-            tabBarHideOnKeyboard: true,
-          }}
-          initialRouteName="Home"
-        >
-          <Tab.Screen name="Home" component={RegularHomeScreen} />
-          <Tab.Screen name="RideTracking" component={RegularRideStatusScreen} />
-          <Tab.Screen name="AdvertisementsTab" component={AdvertisementsScreen} />
-          <Tab.Screen name="Profile" component={ProfileScreen} />
-        </Tab.Navigator>
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color={TAB_ACTIVE} />
         <PassengerDriverCancelledListener />
         <PassengerDriverArrivedListener />
         <DriverRideCancellationListener />
@@ -213,6 +201,8 @@ export default function UserTabNavigator() {
         screenOptions={{
           headerShown: false,
           tabBarHideOnKeyboard: true,
+          lazy: true,
+          unmountOnBlur: true,
         }}
         initialRouteName="Home"
       >

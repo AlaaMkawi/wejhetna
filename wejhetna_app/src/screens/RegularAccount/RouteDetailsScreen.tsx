@@ -2,19 +2,42 @@
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { appAlert } from "../../utils/appAlert";
-import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Platform, Modal, Linking } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  StatusBar,
+  Platform,
+  Modal,
+  Linking,
+  InteractionManager,
+  Keyboard,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { emitLiveNavigationExit } from "../../navigation/navigationEvents";
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import {
-  MapView,
   Camera,
   PointAnnotation,
   ShapeSource,
   LineLayer,
 } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useMapScreenLifecycle } from "../../components/map/useMapScreenLifecycle";
+import { useFocusEffect } from "@react-navigation/native";
+import { suppressMapOverlays } from "../../components/map/mapOverlayStore";
+import { resetMapAnnotationsReadyForPlatform } from "../../components/map/mapReadyStore";
+import {
+  logRouteDetailsMapExit,
+  runIosRouteDetailsResetExit,
+} from "../../utils/routeDetailsMapExit";
+import {
+  dispatchIosResetToHomeMap,
+  resolveHomeRootRoute,
+} from "../../utils/iosResetToHomeMap";
 import { NativeGeolocation } from "../../utils/nativeGeolocation";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import i18n from "../../i18n";
@@ -142,6 +165,39 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
+  const {
+    showOverlays,
+    hideOverlays,
+    withOverlayPause,
+    screenActiveRef,
+  } = useMapScreenLifecycle();
+  /** When false, RouteDetails renders a plain View (no MLRNMapView) during iOS exit. */
+  const [screenMapActive, setScreenMapActive] = useState(true);
+  /** Gates Camera + MapLibre layers inside the MapView. */
+  const [mapLayersMounted, setMapLayersMounted] = useState(true);
+  const mapLayersMountedRef = useRef(true);
+  mapLayersMountedRef.current = mapLayersMounted;
+  const routeExitInProgressRef = useRef(false);
+  const mapCallbacksAllowed = useCallback(
+    () => !routeExitInProgressRef.current && screenActiveRef.current,
+    [screenActiveRef]
+  );
+  const [routeExitLocked, setRouteExitLocked] = useState(false);
+
+  const clearLocationWatch = useCallback(() => {
+    const w = watchIdRef.current;
+    if (w != null) {
+      NativeGeolocation.clearWatch(w);
+    }
+    watchIdRef.current = null;
+  }, []);
+
+  const stopNavigationRefs = useCallback(() => {
+    isNavigatingRef.current = false;
+    isFollowingRef.current = false;
+    offRouteSinceRef.current = null;
+    headingForSmoothRef.current = null;
+  }, []);
 
   const initialCoords: RouteLineStringCoords = useMemo(() => {
     const c = initialRouteCoordinates?.features?.[0]?.geometry?.coordinates;
@@ -364,10 +420,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   useEffect(() => {
     if (sessionPhase !== "active") return;
     const id = setInterval(() => {
+      if (!screenActiveRef.current) return;
       setEtaTick((n) => n + 1);
     }, ETA_CLOCK_TICK_MS);
     return () => clearInterval(id);
-  }, [sessionPhase]);
+  }, [sessionPhase, screenActiveRef]);
 
   /**
    * Live-navigation heartbeat / GPS watchdog.
@@ -386,6 +443,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   useEffect(() => {
     if (sessionPhase !== "active") return;
     const id = setInterval(() => {
+      if (!screenActiveRef.current) return;
       const now = Date.now();
       const lastFix = lastGoodFixWallTsRef.current;
       const fixAge = lastFix > 0 ? now - lastFix : -1;
@@ -425,7 +483,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       }
     }, NAV_HEARTBEAT_MS);
     return () => clearInterval(id);
-  }, [sessionPhase]);
+  }, [sessionPhase, screenActiveRef]);
 
   useEffect(() => {
     isFollowingRef.current = isFollowingUser;
@@ -435,6 +493,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const fitCameraToRoute = useCallback(
     (coords: RouteLineStringCoords, padUser: boolean) => {
+      if (routeExitInProgressRef.current || !screenActiveRef.current) return;
       if (coords.length < 1 || !cameraRef.current) return;
       let minLon = coords[0][0];
       let maxLon = coords[0][0];
@@ -477,11 +536,20 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   );
 
   useEffect(() => {
-    if (sessionPhase === "preview" && initialCoords.length > 0) {
-      const tmr = setTimeout(() => fitCameraToRoute(initialCoords, true), 400);
+    if (sessionPhase === "preview" && initialCoords.length > 0 && mapLayersMounted && screenMapActive) {
+      const tmr = setTimeout(() => {
+        if (
+          mapLayersMountedRef.current &&
+          screenActiveRef.current &&
+          !routeExitInProgressRef.current &&
+          screenMapActive
+        ) {
+          fitCameraToRoute(initialCoords, true);
+        }
+      }, 400);
       return () => clearTimeout(tmr);
     }
-  }, [sessionPhase, initialCoords, fitCameraToRoute]);
+  }, [sessionPhase, initialCoords, fitCameraToRoute, mapLayersMounted, screenMapActive, screenActiveRef]);
 
   const formatDistance = (meters: number): string => {
     if (meters < 1000) {
@@ -514,6 +582,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const applyNewRoute = useCallback(
     (coords: RouteLineStringCoords, distanceM: number, durationS: number) => {
+      if (!screenActiveRef.current) return;
       activeRouteCoordsRef.current = [...coords];
       legDistanceRef.current = distanceM;
       legDurationRef.current = durationS;
@@ -535,11 +604,12 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       passengerStagnationWallTsRef.current = 0;
       setStagnationDelaySec(0);
     },
-    []
+    [screenActiveRef]
   );
 
   const maybeReroute = useCallback(
     async (lat: number, lon: number) => {
+      if (!screenActiveRef.current) return;
       if (!isOnlineRef.current) return;
       const dest = destinationRef.current;
       if (!dest) return;
@@ -555,15 +625,18 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       } catch (e) {
         console.warn("Reroute failed", e);
       } finally {
-        setRerouting(false);
+        if (screenActiveRef.current) {
+          setRerouting(false);
+        }
       }
     },
-    [applyNewRoute]
+    [applyNewRoute, screenActiveRef]
   );
 
   /** Full OSRM refresh from current position (throttled) — same engine as off-route, keeps ETA/distance in sync with the road network. */
   const refreshLiveRouteFromServer = useCallback(
     async (lat: number, lon: number) => {
+      if (!screenActiveRef.current) return;
       if (!isOnlineRef.current) return;
       const dest = destinationRef.current;
       if (!dest) return;
@@ -579,33 +652,116 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       } catch (e) {
         console.warn("Live route refresh failed", e);
       } finally {
-        setRerouting(false);
+        if (screenActiveRef.current) {
+          setRerouting(false);
+        }
       }
     },
-    [applyNewRoute]
+    [applyNewRoute, screenActiveRef]
+  );
+
+  const leaveScreenToHome = useCallback(async () => {
+    if (Platform.OS === "ios") {
+      const homeRoute = await resolveHomeRootRoute();
+      dispatchIosResetToHomeMap(navigation, homeRoute);
+      return;
+    }
+    navigation.goBack();
+  }, [navigation]);
+
+  /**
+   * iOS: no manual MapLibre unmount — wait, then reset to Home (no goBack).
+   * Android: hide layers + goBack (unchanged).
+   */
+  const beginExitRouteDetails = useCallback(
+    (logKey: string, leaveAction: () => void) => {
+      if (routeExitInProgressRef.current) {
+        logRouteDetailsMapExit("exit:ignoredDuplicate");
+        return;
+      }
+      routeExitInProgressRef.current = true;
+      setRouteExitLocked(true);
+      screenActiveRef.current = false;
+
+      Keyboard.dismiss();
+      setRideDestModalOpen(false);
+      clearLocationWatch();
+      stopNavigationRefs();
+      setRerouting(false);
+
+      if (Platform.OS !== "ios") {
+        hideOverlays();
+        setMapLayersMounted(false);
+        setScreenMapActive(false);
+        resetMapAnnotationsReadyForPlatform();
+        setSessionPhase("preview");
+        suppressMapOverlays();
+        leaveAction();
+        return;
+      }
+
+      runIosRouteDetailsResetExit({
+        logKey,
+        resetToHome: leaveAction,
+      });
+    },
+    [clearLocationWatch, hideOverlays, screenActiveRef, stopNavigationRefs]
+  );
+
+  const leaveRideNavScreen = useCallback(
+    (action: () => void) => {
+      beginExitRouteDetails("rideExit", action);
+    },
+    [beginExitRouteDetails]
+  );
+
+  const returnToMapFromPreview = useCallback(() => {
+    logRouteDetailsMapExit("backToMap:pressed");
+    beginExitRouteDetails("backToMap", () => {
+      void leaveScreenToHome();
+    });
+  }, [beginExitRouteDetails, leaveScreenToHome]);
+
+  useFocusEffect(
+    useCallback(() => {
+      routeExitInProgressRef.current = false;
+      setRouteExitLocked(false);
+      screenActiveRef.current = true;
+      setScreenMapActive(true);
+      setMapLayersMounted(true);
+      return () => {
+        screenActiveRef.current = false;
+        clearLocationWatch();
+      };
+    }, [clearLocationWatch])
   );
 
   const stopLiveNavigationAndReturnHome = useCallback(() => {
-    const w = watchIdRef.current;
-    if (w != null) {
-      NativeGeolocation.clearWatch(w);
-    }
-    watchIdRef.current = null;
-    isNavigatingRef.current = false;
-    isFollowingRef.current = false;
-    offRouteSinceRef.current = null;
-    headingForSmoothRef.current = null;
+    logRouteDetailsMapExit("stopNavigation:pressed");
     setDisplayHeading(null);
     setCurrentHeading(null);
     hasArrivedRef.current = false;
     setShowArrivalModal(false);
     clearNavigationRouteSnapshot();
-    emitLiveNavigationExit();
-    navigation.goBack();
-  }, [navigation]);
+
+    beginExitRouteDetails("stopNavigation", () => {
+      if (Platform.OS === "ios") {
+        void (async () => {
+          await leaveScreenToHome();
+          InteractionManager.runAfterInteractions(() => {
+            logRouteDetailsMapExit("stopNavigation:emitHomeCleanup");
+            emitLiveNavigationExit();
+          });
+        })();
+        return;
+      }
+      emitLiveNavigationExit();
+      navigation.goBack();
+    });
+  }, [beginExitRouteDetails, leaveScreenToHome, navigation]);
 
   const startLiveNavigation = useCallback(() => {
-    if (!destination) return;
+    if (!destination || routeExitInProgressRef.current) return;
 
     const wPrev = watchIdRef.current;
     if (wPrev != null) {
@@ -631,6 +787,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         fresh = await getFreshPositionForNavigationStart();
       } catch {
         /* keep fallback above */
+      }
+
+      if (!screenActiveRef.current || routeExitInProgressRef.current) {
+        logRouteDetailsMapExit("startNavigation:abortedAfterGps");
+        return;
       }
 
       userLocationRef.current = fresh;
@@ -712,6 +873,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       lastProactiveRouteAtRef.current = Date.now();
 
       setTimeout(() => {
+        if (routeExitInProgressRef.current || !screenActiveRef.current) return;
         if (cameraRef.current) {
           cameraRef.current.setCamera({
             centerCoordinate: [fresh.lon, fresh.lat],
@@ -723,6 +885,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
       const id = NativeGeolocation.watchPosition(
         (position) => {
+          if (routeExitInProgressRef.current || !screenActiveRef.current) {
+            return;
+          }
           const { latitude, longitude, heading, accuracy, speed } = position.coords;
           const course = (position.coords as { course?: number }).course;
           const ts = typeof position.timestamp === "number" ? position.timestamp : Date.now();
@@ -1002,7 +1167,13 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           // Camera follow (short animation; throttled; based on accepted fixes only)
           const nav = isNavigatingRef.current;
           const follow = isFollowingRef.current;
-          if (cameraRef.current && nav && follow) {
+          if (
+            cameraRef.current &&
+            nav &&
+            follow &&
+            !routeExitInProgressRef.current &&
+            screenActiveRef.current
+          ) {
             const camNow = Date.now();
             if (camNow - lastCameraMoveAtRef.current >= 220) {
               lastCameraMoveAtRef.current = camNow;
@@ -1261,7 +1432,12 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           }
         }
 
-        if (cameraRef.current && isFollowingRef.current) {
+        if (
+          cameraRef.current &&
+          isFollowingRef.current &&
+          !routeExitInProgressRef.current &&
+          screenActiveRef.current
+        ) {
           const now = Date.now();
           if (now - lastCameraMoveAtRef.current >= 500) {
             lastCameraMoveAtRef.current = now;
@@ -1353,7 +1529,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         if (cancelled) return;
         const row = list.find((r) => r.id === rideContext.rideRequestId);
         if (row && normalizeRideRequestStatus(row.status) === "completed") {
-          navigateToUserRideRequestsTab(navigation as any, "DRIVER");
+          if (!screenActiveRef.current) return;
+          leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, "DRIVER"));
         }
       } catch {
         /* ignore */
@@ -1365,7 +1542,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       cancelled = true;
       clearInterval(id);
     };
-  }, [isDriverOnTripNav, rideContext, navigation]);
+  }, [isDriverOnTripNav, rideContext, navigation, leaveRideNavScreen]);
 
   /**
    * Cancellation watchdog (both roles, all ride modes): if the ride request
@@ -1408,7 +1585,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         }
         if (cancelledOrGone && !stopped) {
           stopped = true;
-          navigateToUserRideRequestsTab(navigation as any, role);
+          if (!screenActiveRef.current) return;
+          leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, role));
         }
       } catch {
         /* network blip — try again next tick */
@@ -1421,7 +1599,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       stopped = true;
       clearInterval(id);
     };
-  }, [rideContext, navigation]);
+  }, [rideContext, navigation, leaveRideNavScreen]);
 
   // Pickup arrival: fire-and-forget markRideArrived + 5s auto-close + return to driver requests.
   useEffect(() => {
@@ -1448,14 +1626,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     const closeTimer = setTimeout(() => {
       if (cancelled) return;
       setRidePickupArrivedModal(false);
-      navigateToUserRideRequestsTab(navigation as any, rideContext.role);
+      leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, rideContext.role));
     }, 5000);
 
     return () => {
       cancelled = true;
       clearTimeout(closeTimer);
     };
-  }, [ridePickupArrivedModal, rideContext, navigation]);
+  }, [ridePickupArrivedModal, rideContext, navigation, leaveRideNavScreen]);
 
   const onRideTripArrivedConfirm = useCallback(async () => {
     if (!rideContext || completingRideTrip) return;
@@ -1485,11 +1663,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       }
       setRideTripArrivedModal(false);
       setTripArrivalKind(null);
-      navigateToUserRideRequestsTab(navigation as any, rideContext.role);
+      leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, rideContext.role));
     } finally {
       setCompletingRideTrip(false);
     }
-  }, [rideContext, completingRideTrip, navigation, t]);
+  }, [rideContext, completingRideTrip, leaveRideNavScreen, navigation, t]);
 
   const onDriverTripArrivedAck = useCallback(() => {
     setRideTripArrivedModal(false);
@@ -1555,6 +1733,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   }, [t, effectiveRemainingSec, remainingRouteMeters, i18n.language, etaTick]);
 
   const onRegionWillChange = (feature: any) => {
+    if (routeExitInProgressRef.current || !screenActiveRef.current) return;
     try {
       const isUser = feature?.properties?.isUserInteraction === true;
       if (isActive && isUser) {
@@ -1619,7 +1798,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         {rideContext ? (
           <TouchableOpacity
             style={styles.rideHeaderBackBtn}
-            onPress={() => navigateToUserRideRequestsTab(navigation as any, rideContext.role)}
+            onPress={() =>
+              leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, rideContext.role))
+            }
             hitSlop={12}
             accessibilityRole="button"
           >
@@ -1630,7 +1811,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       </View>
 
       <View style={styles.mapContainer}>
-        <MapView
+        {screenMapActive ? (
+        <FocusedMapView
           ref={mapRef}
           style={styles.map}
           mapStyle={MAP_STYLE_URL}
@@ -1641,6 +1823,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           attributionEnabled={false}
           onRegionWillChange={onRegionWillChange}
         >
+          {mapLayersMounted ? (
+          <>
           <Camera
             ref={cameraRef}
             defaultSettings={{
@@ -1652,20 +1836,18 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             animationMode="flyTo"
           />
 
-          {displayRouteFC && (
+          {showOverlays && displayRouteFC && (
             <ShapeSource id="route" shape={displayRouteFC}>
-              {isActive && (
-                <LineLayer
-                  id="routeLineOutline"
-                  style={{
-                    lineColor: "#1A73E8",
-                    lineWidth: 14,
-                    lineCap: "round",
-                    lineJoin: "round",
-                    lineOpacity: 0.4,
-                  } as any}
-                />
-              )}
+              <LineLayer
+                id="routeLineOutline"
+                style={{
+                  lineColor: "#1A73E8",
+                  lineWidth: 14,
+                  lineCap: "round",
+                  lineJoin: "round",
+                  lineOpacity: isActive ? 0.4 : 0,
+                } as any}
+              />
               <LineLayer
                 id="routeLine"
                 style={{
@@ -1682,7 +1864,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           {/* Dotted connector from the live "you" position to the first point of
               the actual road route — only renders when the user is visibly off
               the road (haversine threshold inside the component). */}
-          {isActive && firstRouteCoord && (
+          {showOverlays && isActive && firstRouteCoord && (
             <OffRoutePathConnector
               id="route_connector_active"
               from={{ lat: smoothedUserLocation.lat, lon: smoothedUserLocation.lon }}
@@ -1693,7 +1875,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           )}
 
           {/* Start of the road route — small circle at the actual road origin. */}
-          {firstRouteCoord && (
+          {showOverlays && firstRouteCoord && (
             <PointAnnotation id="route_start" coordinate={firstRouteCoord}>
               <RouteEndpointMarker
                 variant="start"
@@ -1702,7 +1884,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             </PointAnnotation>
           )}
 
-          {routeEtaBubbleCoord && mapEtaBubbleLabel ? (
+          {showOverlays && routeEtaBubbleCoord && mapEtaBubbleLabel ? (
             <PointAnnotation
               id="route_eta_on_path"
               coordinate={routeEtaBubbleCoord}
@@ -1713,22 +1895,27 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           ) : null}
 
           {/* Active "you" car marker driven by smoothed GPS + bearing. */}
-          {userLocation && isActive && (
-            <NavigationMarker
-              id="user_location"
+          {showOverlays && userLocation && isActive && (
+            <PointAnnotation
+              id="route_nav_user"
               coordinate={[smoothedUserLocation.lon, smoothedUserLocation.lat]}
-              bearingDeg={markerBearing}
-              variant="minimal"
-            />
+            >
+              <NavigationMarker bearingDeg={markerBearing} variant="minimal" />
+            </PointAnnotation>
           )}
 
           {/* Destination drop point — clear flag inside a brand-teal disc. */}
-          {destination && (
+          {showOverlays && destination && (
             <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
               <RouteEndpointMarker variant="end" />
             </PointAnnotation>
           )}
-        </MapView>
+          </>
+          ) : null}
+        </FocusedMapView>
+        ) : (
+          <View style={styles.map} />
+        )}
 
         {rideContext ? (
           <View style={styles.rideOverlay}>
@@ -1774,15 +1961,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           <TouchableOpacity
             style={styles.compassButton}
             onPress={() => {
-              if (cameraRef.current && userLocation) {
-                cameraRef.current.setCamera({
-                  centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
-                  zoomLevel: 17,
-                  bearing: 0,
-                  animationDuration: 300,
-                });
-                setMapBearing(0);
-              }
+              if (!mapCallbacksAllowed() || !cameraRef.current || !userLocation) return;
+              cameraRef.current.setCamera({
+                centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
+                zoomLevel: 17,
+                bearing: 0,
+                animationDuration: 300,
+              });
+              setMapBearing(0);
             }}
             activeOpacity={0.8}
           >
@@ -1801,15 +1987,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           <TouchableOpacity
             style={styles.recenterButton}
             onPress={() => {
-              if (userLocation && cameraRef.current) {
-                setIsFollowingUser(true);
-                cameraRef.current.setCamera({
-                  centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
-                  zoomLevel: 17.5,
-                  bearing: displayHeading ?? currentHeading ?? 0,
-                  animationDuration: 520,
-                });
-              }
+              if (!mapCallbacksAllowed() || !userLocation || !cameraRef.current) return;
+              setIsFollowingUser(true);
+              cameraRef.current.setCamera({
+                centerCoordinate: [smoothedUserLocation.lon, smoothedUserLocation.lat],
+                zoomLevel: 17.5,
+                bearing: displayHeading ?? currentHeading ?? 0,
+                animationDuration: 520,
+              });
             }}
             activeOpacity={0.8}
           >
@@ -1822,21 +2007,31 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           <TouchableOpacity
             style={styles.floatingButton}
             onPress={() => {
+              if (routeExitLocked) return;
               if (showFullRoute) {
-                if (isActive && userLocation) {
-                  setIsFollowingUser(true);
-                  if (cameraRef.current) {
-                    cameraRef.current.setCamera({
-                      centerCoordinate: [userLocation.lon, userLocation.lat],
-                      zoomLevel: 17.5,
-                      bearing: currentHeading ?? 0,
-                      animationDuration: 800,
-                    });
+                withOverlayPause(() => {
+                  if (
+                    isActive &&
+                    userLocation &&
+                    mapCallbacksAllowed() &&
+                    cameraRef.current
+                  ) {
+                    setIsFollowingUser(true);
+                    if (cameraRef.current) {
+                      cameraRef.current.setCamera({
+                        centerCoordinate: [userLocation.lon, userLocation.lat],
+                        zoomLevel: 17.5,
+                        bearing: currentHeading ?? 0,
+                        animationDuration: 800,
+                      });
+                    }
                   }
-                }
-                setShowFullRoute(false);
+                  setShowFullRoute(false);
+                });
               } else {
-                showFullRouteOverview();
+                withOverlayPause(() => {
+                  showFullRouteOverview();
+                });
               }
             }}
             activeOpacity={0.8}
@@ -1868,7 +2063,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         >
           {isPreview ? (
             <View style={styles.previewActions}>
-              <TouchableOpacity style={styles.startNavigationButton} onPress={startLiveNavigation}>
+              <TouchableOpacity
+                style={styles.startNavigationButton}
+                onPress={startLiveNavigation}
+                disabled={routeExitLocked}
+              >
                 <Ionicons name="navigate" size={20} color="#FFFFFF" />
                 <Text style={styles.startNavigationButtonText}>
                   {t("start_navigation") || "Start Navigation"}
@@ -1876,7 +2075,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.backToPlaceButton}
-                onPress={() => navigation.goBack()}
+                onPress={returnToMapFromPreview}
+                disabled={routeExitLocked}
               >
                 <Ionicons name="map-outline" size={20} color={DARK_TEAL} />
                 <Text style={styles.backToPlaceButtonText}>{t("return_to_map")}</Text>
@@ -1888,6 +2088,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             <TouchableOpacity
               style={styles.stopNavigationButton}
               onPress={stopLiveNavigationAndReturnHome}
+              disabled={routeExitLocked}
             >
               <Ionicons name="stop-circle" size={20} color="#FFFFFF" />
               <Text style={styles.stopNavigationButtonText}>{t("stop_navigation")}</Text>

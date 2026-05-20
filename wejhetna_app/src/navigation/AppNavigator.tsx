@@ -1,4 +1,5 @@
 import React from "react";
+import { Platform } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import HomeScreen from "../screens/HomeScreen";
 import SignUpScreen from "../screens/SignUpScreen";
@@ -256,7 +257,12 @@ export default function AppNavigator() {
 <Stack.Screen
   name="RouteDetails"
   component={RouteDetailsScreen}
-  options={{ headerShown: false }}
+  options={{
+    headerShown: false,
+    ...(Platform.OS === "ios"
+      ? { animation: "none" as const, gestureEnabled: false }
+      : {}),
+  }}
 />
       <Stack.Screen
         name="RideTrackingMap"

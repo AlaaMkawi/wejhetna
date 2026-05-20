@@ -6,7 +6,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
 import { CommonActions } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useMapScreenLifecycle } from "../../components/map/useMapScreenLifecycle";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { RootStackParamList } from "../../navigation/types";
 import {
@@ -72,6 +74,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   const markArrivalRequestInFlightRef = useRef(false);
   const myDriverGpsRef = useRef(myDriverGps);
   myDriverGpsRef.current = myDriverGps;
+  const { showOverlays, exitMapScreen, screenActiveRef } = useMapScreenLifecycle();
 
   const pickup = useMemo(() => {
     const r = mode === "driver" ? rideDriver : ridePassenger;
@@ -138,38 +141,55 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   const apiDistKm = mode === "passenger" ? ridePassenger?.distance_to_pickup_km ?? null : rideDriver?.distance_to_pickup_km ?? null;
 
   const fetchRideSnapshot = useCallback(async () => {
+    if (!screenActiveRef.current) {
+      return;
+    }
     setError(null);
     try {
       if (mode === "driver") {
         const stored = await AsyncStorage.getItem("userId");
         const did = parseStoredUserId(stored);
         if (did == null) {
-          setError("session");
-          setRideDriver(null);
-          setDriverUserId(null);
+          if (screenActiveRef.current) {
+            setError("session");
+            setRideDriver(null);
+            setDriverUserId(null);
+          }
           return;
         }
-        setDriverUserId(did);
+        if (screenActiveRef.current) {
+          setDriverUserId(did);
+        }
         const list = await getDriverRideRequests(did);
         const row = list.find((x) => x.id === rideRequestId) ?? null;
-        setRideDriver(row);
+        if (screenActiveRef.current) {
+          setRideDriver(row);
+        }
       } else {
         const stored = await AsyncStorage.getItem("userId");
         const uid = parseStoredUserId(stored);
         if (uid == null) {
-          setError("session");
-          setRidePassenger(null);
+          if (screenActiveRef.current) {
+            setError("session");
+            setRidePassenger(null);
+          }
           return;
         }
         const row = await getRegularLatestRideRequest(uid);
-        setRidePassenger(row);
+        if (screenActiveRef.current) {
+          setRidePassenger(row);
+        }
       }
     } catch {
-      setError("load");
+      if (screenActiveRef.current) {
+        setError("load");
+      }
     } finally {
-      setLoading(false);
+      if (screenActiveRef.current) {
+        setLoading(false);
+      }
     }
-  }, [mode, rideRequestId]);
+  }, [mode, rideRequestId, screenActiveRef]);
 
   useEffect(() => {
     void fetchRideSnapshot();
@@ -188,7 +208,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     const tick = async () => {
       try {
         const pos = await requestCurrentPositionWithRetry();
-        if (!cancelled) {
+        if (!cancelled && screenActiveRef.current) {
           setMyDriverGps({ lat: pos.coords.latitude, lon: pos.coords.longitude });
         }
       } catch {
@@ -204,19 +224,22 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   }, [mode]);
 
   const navigateDriverOutToRequests = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigation.dispatch(
-      CommonActions.navigate({
-        name: "UserTabs",
-        params: {
-          screen: "DriverRequests",
-        },
-      })
-    );
-  }, [navigation]);
+    const go = () => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+      navigation.dispatch(
+        CommonActions.navigate({
+          name: "UserTabs",
+          params: {
+            screen: "DriverRequests",
+          },
+        })
+      );
+    };
+    exitMapScreen(go);
+  }, [navigation, exitMapScreen]);
 
   const exitDriverMapAfterArrival = useCallback(() => {
     if (exitedDriverMapAfterArrivalRef.current) return;
@@ -226,19 +249,22 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
 
   /** Passenger: leave full-screen map — prefer stack back; otherwise open transport tab (ride requests). */
   const navigatePassengerOutOfMapToRideRequests = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigation.dispatch(
-      CommonActions.navigate({
-        name: "UserTabs",
-        params: {
-          screen: "RideTracking",
-        },
-      })
-    );
-  }, [navigation]);
+    const go = () => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+      navigation.dispatch(
+        CommonActions.navigate({
+          name: "UserTabs",
+          params: {
+            screen: "RideTracking",
+          },
+        })
+      );
+    };
+    exitMapScreen(go);
+  }, [navigation, exitMapScreen]);
 
   const exitPassengerMapAfterArrival = useCallback(() => {
     if (exitedPassengerMapAfterArrivalRef.current) return;
@@ -475,7 +501,9 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
       <View style={styles.header}>
         <TouchableOpacity
           onPress={
-            mode === "passenger" ? navigatePassengerOutOfMapToRideRequests : () => navigation.goBack()
+            mode === "passenger"
+              ? navigatePassengerOutOfMapToRideRequests
+              : navigateDriverOutToRequests
           }
           style={styles.backBtn}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -510,7 +538,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
       ) : (
         <>
           <View style={styles.mapWrap}>
-            <MapView
+            <FocusedMapView
               style={styles.map}
               mapStyle={MAP_STYLE_URL}
               scrollEnabled
@@ -532,7 +560,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   animationMode="flyTo"
                 />
               ) : null}
-              {routeBackdropFc ? (
+              {showOverlays && routeBackdropFc ? (
                 <ShapeSource id="rideRouteBackdrop" shape={routeBackdropFc}>
                   <LineLayer
                     id="rideRouteBackdropLayer"
@@ -546,7 +574,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   />
                 </ShapeSource>
               ) : null}
-              {routeRemainingFc ? (
+              {showOverlays && routeRemainingFc ? (
                 <ShapeSource id="rideRouteRemaining" shape={routeRemainingFc}>
                   <LineLayer
                     id="rideRouteRemainingLayer"
@@ -563,16 +591,16 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
               {/* Dotted leader line from the live driver dot to the start of
                   the trimmed remaining route — only shows when the driver is
                   visibly off the road geometry. */}
-              <OffRoutePathConnector
-                id="rideRouteConnector"
-                from={driverDot}
-                to={routeRemainingStart}
-                color={ROUTE_BLUE}
-                width={3}
-              />
-              {/* Small start dot at the road origin so the route reads as a
-                  proper path (driver → road → destination). */}
-              {routeRemainingStart ? (
+              {showOverlays ? (
+                <OffRoutePathConnector
+                  id="rideRouteConnector"
+                  from={driverDot}
+                  to={routeRemainingStart}
+                  color={ROUTE_BLUE}
+                  width={3}
+                />
+              ) : null}
+              {showOverlays && routeRemainingStart ? (
                 <PointAnnotation
                   id="rideRouteStart"
                   coordinate={routeRemainingStart}
@@ -580,13 +608,15 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   <RouteEndpointMarker variant="start" color={ROUTE_BLUE} />
                 </PointAnnotation>
               ) : null}
-              <PointAnnotation
-                id="pickup_mark"
-                coordinate={[pickup.lon, pickup.lat]}
-              >
-                <RouteEndpointMarker variant="end" iconName="navigate" />
-              </PointAnnotation>
-              {driverDot ? (
+              {showOverlays ? (
+                <PointAnnotation
+                  id="pickup_mark"
+                  coordinate={[pickup.lon, pickup.lat]}
+                >
+                  <RouteEndpointMarker variant="end" iconName="navigate" />
+                </PointAnnotation>
+              ) : null}
+              {showOverlays && driverDot ? (
                 <PointAnnotation
                   id="driver_mark"
                   coordinate={[driverDot.lon, driverDot.lat]}
@@ -598,7 +628,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   />
                 </PointAnnotation>
               ) : null}
-            </MapView>
+            </FocusedMapView>
             {routeLoading ? (
               <View style={styles.routeLoading}>
                 <ActivityIndicator color="#fff" />

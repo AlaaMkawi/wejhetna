@@ -9,7 +9,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, RouteProp, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -35,7 +37,7 @@ import {
   clusterNearbyDrivers,
   zoomInTargetForCluster,
 } from "../../utils/nearbyDriverClustering";
-import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
 import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
 import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
@@ -388,6 +390,17 @@ export default function RegularHomeScreen({}: Props) {
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+
+  const { showAnnotations, mapShellMounted } = useHomeMapScreen({
+    onPrepareLeaveForRoute: () => {
+      setSelectedPlace(null);
+      setDestination(null);
+      setCustomPin(null);
+      setSearchResults([]);
+      setPickPreviewCoords(null);
+      setIsPickingMapDestination(false);
+    },
+  });
 
   // Photo gallery modal
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
@@ -1030,7 +1043,7 @@ export default function RegularHomeScreen({}: Props) {
   };
 
   const getRoute = async () => {
-    await openDrivingRoutePreview({
+    await runOpenDrivingRoutePreviewFromHome({
       navigation,
       destination,
       t,
@@ -1065,7 +1078,7 @@ export default function RegularHomeScreen({}: Props) {
           setSelectedDriver(pending);
         }
       } else {
-        await openDrivingRoutePreview({
+        await runOpenDrivingRoutePreviewFromHome({
           navigation,
           destination: dest,
           t,
@@ -1237,7 +1250,8 @@ export default function RegularHomeScreen({}: Props) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      <MapView
+      {mapShellMounted ? (
+      <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
@@ -1321,36 +1335,39 @@ export default function RegularHomeScreen({}: Props) {
          * "always on top" (per spec) without any explicit zIndex hack.
          */}
 
-        {isPickingMapDestination && pickPreviewCoords && (
+        {showAnnotations && isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
             id="map_pick_preview"
             coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
           >
-            <View style={styles.customPinMarker} accessibilityLabel={t("map_pick_preview_label")}>
+            <View
+              style={styles.customPinMarker}
+              collapsable={false}
+              accessibilityLabel={t("map_pick_preview_label")}
+            >
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (destination from long-press) */}
-        {customPin && (
+        {showAnnotations && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
+            <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Destination Marker (from place selection) */}
-        {destination && !customPin && (
+        {showAnnotations && destination && !customPin && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
+            <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
             </View>
           </PointAnnotation>
         )}
 
-        {!isPickingMapDestination &&
+        {showAnnotations &&
+          !isPickingMapDestination &&
           places.map((place) => {
             if (!place.location) return null;
 
@@ -1385,8 +1402,8 @@ export default function RegularHomeScreen({}: Props) {
 
             return (
               <PointAnnotation
-                key={place.id}
-                id={String(place.id)}
+                key={`home-place-${place.id}`}
+                id={`home-place-${place.id}`}
                 coordinate={[place.location.lon, place.location.lat]}
                 onSelected={() => {
                   console.log("Place selected:", place.id, place.name);
@@ -1410,19 +1427,14 @@ export default function RegularHomeScreen({}: Props) {
          * child-order-driven z-stack. Hidden while picking a destination so the first map
          * tap reaches the basemap (the dot has `pointerEvents="none"` internally too).
          */}
-        {userLocation && !isPickingMapDestination && (
+        {showAnnotations && userLocation && !isPickingMapDestination && (
           <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
             <UserLocationDot zoom={currentZoom} />
           </PointAnnotation>
         )}
 
-        {/*
-          Drivers render last so they sit above place pins and the user dot
-          (MapLibre draw order). `driverMapItems` clusters overlapping drivers
-          so the user never sees a single icon standing in for several; tapping
-          a cluster zooms in.
-        */}
-        {driverMapItems.map((item) => {
+        {showAnnotations &&
+          driverMapItems.map((item) => {
           if (item.type === "cluster") {
             const emphasized = item.drivers.some(
               (d) => d.driver_user_id === selectedDriver?.driver_user_id
@@ -1435,18 +1447,14 @@ export default function RegularHomeScreen({}: Props) {
                 anchor={{ x: 0.5, y: 1 }}
                 onSelected={() => handleClusterTap(item.lat, item.lon)}
               >
-                <View
-                  accessibilityRole="button"
+                <RideDriverClusterMarker
+                  count={item.drivers.length}
+                  emphasized={emphasized}
                   accessibilityLabel={
                     t("map_driver_cluster_label", { count: item.drivers.length }) ||
                     `${item.drivers.length} nearby drivers`
                   }
-                >
-                  <RideDriverClusterMarker
-                    count={item.drivers.length}
-                    emphasized={emphasized}
-                  />
-                </View>
+                />
               </PointAnnotation>
             );
           }
@@ -1463,16 +1471,17 @@ export default function RegularHomeScreen({}: Props) {
               anchor={{ x: 0.5, y: 1 }}
               onSelected={() => setSelectedDriver(driver)}
             >
-              <View
-                accessibilityRole="button"
+              <NearbyDriverTaxiMarker
+                selected={isSelected}
                 accessibilityLabel={t("ride_driver_info")}
-              >
-                <NearbyDriverTaxiMarker selected={isSelected} />
-              </View>
+              />
             </PointAnnotation>
           );
         })}
-      </MapView>
+      </FocusedMapView>
+      ) : (
+        <View style={styles.map} />
+      )}
 
       <MapInlineSearch
         value={searchQuery}

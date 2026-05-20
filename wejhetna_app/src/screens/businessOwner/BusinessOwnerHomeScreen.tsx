@@ -9,7 +9,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, RouteProp, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -48,7 +50,7 @@ import {
   clusterNearbyDrivers,
   zoomInTargetForCluster,
 } from "../../utils/nearbyDriverClustering";
-import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
 import { formatDistance } from "../../utils/formatDistance";
 import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
@@ -376,6 +378,18 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+
+  const { showAnnotations, mapShellMounted } = useHomeMapScreen({
+    onPrepareLeaveForRoute: () => {
+      selectedPlaceIdRef.current = null;
+      setSelectedPlace(null);
+      setDestination(null);
+      setCustomPin(null);
+      setSearchResults([]);
+      setPickPreviewCoords(null);
+      setIsPickingMapDestination(false);
+    },
+  });
 
   // Opening hours expand state
   const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
@@ -1053,7 +1067,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
   };
 
   const getRoute = async () => {
-    await openDrivingRoutePreview({
+    await runOpenDrivingRoutePreviewFromHome({
       navigation: nav,
       destination,
       t,
@@ -1089,7 +1103,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           setSelectedDriver(pending);
         }
       } else {
-        await openDrivingRoutePreview({
+        await runOpenDrivingRoutePreviewFromHome({
           navigation: nav,
           destination: dest,
           t,
@@ -1406,7 +1420,8 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      <MapView
+      {mapShellMounted ? (
+      <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
@@ -1481,15 +1496,15 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           animationMode="flyTo"
         />
 
-        {userLocation && !isPickingMapDestination && (
+        {showAnnotations && userLocation && !isPickingMapDestination && (
           <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
+            <View style={styles.userLocationMarker} collapsable={false}>
               <View style={styles.userLocationDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {isPickingMapDestination && pickPreviewCoords && (
+        {showAnnotations && isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
             id="map_pick_preview"
             coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
@@ -1500,25 +1515,24 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (long-press) */}
-        {customPin && (
+        {showAnnotations && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
+            <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Destination Marker (from place selection) */}
-        {destination && !customPin && (
+        {showAnnotations && destination && !customPin && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
+            <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
             </View>
           </PointAnnotation>
         )}
 
-        {!isPickingMapDestination &&
+        {showAnnotations &&
+          !isPickingMapDestination &&
           places.map((place) => {
           if (!place.location) return null;
           
@@ -1541,15 +1555,15 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
 
           return (
             <PointAnnotation
-              key={place.id}
-              id={String(place.id)}
+              key={`home-place-${place.id}`}
+              id={`home-place-${place.id}`}
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
                 handlePlaceTap(place);
               }}
             >
-              <View style={styles.nativeMarkerContainer}>
+              <View style={styles.nativeMarkerContainer} collapsable={false}>
                 {/* Icon/Marker based on place type - Google Maps style */}
                 {place.place_type === 'PUBLIC_SERVICE' ? (
                   <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
@@ -1665,7 +1679,8 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
           single icon standing in for several; tapping a cluster zooms in.
           Same component / pipeline as the regular-user flow for visual parity.
         */}
-        {driverMapItems.map((item) => {
+        {showAnnotations &&
+          driverMapItems.map((item) => {
           if (item.type === "cluster") {
             const emphasized = item.drivers.some(
               (d) => d.driver_user_id === selectedDriver?.driver_user_id
@@ -1678,18 +1693,14 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                 anchor={{ x: 0.5, y: 1 }}
                 onSelected={() => handleClusterTap(item.lat, item.lon)}
               >
-                <View
-                  accessibilityRole="button"
+                <RideDriverClusterMarker
+                  count={item.drivers.length}
+                  emphasized={emphasized}
                   accessibilityLabel={
                     t("map_driver_cluster_label", { count: item.drivers.length }) ||
                     `${item.drivers.length} nearby drivers`
                   }
-                >
-                  <RideDriverClusterMarker
-                    count={item.drivers.length}
-                    emphasized={emphasized}
-                  />
-                </View>
+                />
               </PointAnnotation>
             );
           }
@@ -1705,16 +1716,17 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
               anchor={{ x: 0.5, y: 1 }}
               onSelected={() => setSelectedDriver(driver)}
             >
-              <View
-                accessibilityRole="button"
+              <NearbyDriverTaxiMarker
+                selected={isSelected}
                 accessibilityLabel={t("ride_driver_info")}
-              >
-                <NearbyDriverTaxiMarker selected={isSelected} />
-              </View>
+              />
             </PointAnnotation>
           );
         })}
-      </MapView>
+      </FocusedMapView>
+      ) : (
+        <View style={styles.map} />
+      )}
 
       <MapInlineSearch
         value={searchQuery}

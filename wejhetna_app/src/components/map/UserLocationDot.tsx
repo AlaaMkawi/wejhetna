@@ -26,13 +26,16 @@ const BRAND = "#0f5b63";
  */
 function UserLocationDotInner({ zoom, color = BRAND }: UserLocationDotProps) {
   const pulse = useRef(new Animated.Value(0)).current;
+  const zoomScale = getUserDotScale(zoom);
+  const useStaticMarker = Platform.OS === "ios";
 
   useEffect(() => {
+    if (useStaticMarker) {
+      return;
+    }
     const loop = Animated.loop(
       Animated.timing(pulse, {
         toValue: 1,
-        // ~1.6s feels alive without being distracting. Easing.out makes the wave
-        // appear to gently "roll out" from the dot.
         duration: 1600,
         easing: Easing.out(Easing.ease),
         useNativeDriver: true,
@@ -42,7 +45,7 @@ function UserLocationDotInner({ zoom, color = BRAND }: UserLocationDotProps) {
     return () => {
       loop.stop();
     };
-  }, [pulse]);
+  }, [pulse, useStaticMarker]);
 
   const pulseScale = pulse.interpolate({
     inputRange: [0, 1],
@@ -53,21 +56,28 @@ function UserLocationDotInner({ zoom, color = BRAND }: UserLocationDotProps) {
     outputRange: [0.0, 0.45, 0.0],
   });
 
-  const zoomScale = getUserDotScale(zoom);
-
   return (
-    <View style={styles.hit} pointerEvents="none">
+    <View style={styles.hit} pointerEvents="none" collapsable={false}>
       <View style={[styles.core, { transform: [{ scale: zoomScale }] }]}>
-        <Animated.View
-          style={[
-            styles.pulse,
-            {
-              backgroundColor: color,
-              opacity: pulseOpacity,
-              transform: [{ scale: pulseScale }],
-            },
-          ]}
-        />
+        {useStaticMarker ? (
+          <View
+            style={[
+              styles.pulse,
+              { backgroundColor: color, opacity: 0.22, transform: [{ scale: 1.8 }] },
+            ]}
+          />
+        ) : (
+          <Animated.View
+            style={[
+              styles.pulse,
+              {
+                backgroundColor: color,
+                opacity: pulseOpacity,
+                transform: [{ scale: pulseScale }],
+              },
+            ]}
+          />
+        )}
         <View style={[styles.outerRing, { backgroundColor: "#FFFFFF" }]}>
           <View style={[styles.innerDot, { backgroundColor: color }]} />
         </View>
