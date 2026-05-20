@@ -15,7 +15,9 @@ import {
   formatHourSlotForStorage,
 } from "../../utils/openingHours";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useIosAnnotationMount } from "../../components/map/useIosAnnotationMount";
 import { RootStackParamList } from "../../navigation/types";
 import {
   getBusinessOwnerProfile,
@@ -48,6 +50,7 @@ type NavType = NativeStackNavigationProp<RootStackParamList>;
 type ManageMyBusinessRoute = RouteProp<RootStackParamList, "ManageMyBusiness">;
 
 export default function ManageMyBusinessScreen() {
+  const showMapPin = useIosAnnotationMount();
   const { t } = useTranslation();
   const navigation = useNavigation<NavType>();
   const route = useRoute<ManageMyBusinessRoute>();
@@ -860,7 +863,7 @@ export default function ManageMyBusinessScreen() {
             </View>
             {place.lat && place.lon && (
               <View style={styles.mapThumbnail}>
-                <MapView
+                <FocusedMapView
                   style={styles.mapView}
                   mapStyle={MAP_STYLE_URL}
                   logoEnabled={false}
@@ -877,15 +880,17 @@ export default function ManageMyBusinessScreen() {
                       zoomLevel: 16,
                     }}
                   />
-                  <PointAnnotation
-                    id="business-location"
-                    coordinate={[place.lon, place.lat]}
-                  >
-                    <View style={styles.markerContainer}>
-                      <Ionicons name="location" size={20} color="#FF0000" />
-                    </View>
-                  </PointAnnotation>
-                </MapView>
+                  {showMapPin ? (
+                    <PointAnnotation
+                      id="business-location"
+                      coordinate={[place.lon, place.lat]}
+                    >
+                      <View style={styles.markerContainer} collapsable={false}>
+                        <Ionicons name="location" size={20} color="#FF0000" />
+                      </View>
+                    </PointAnnotation>
+                  ) : null}
+                </FocusedMapView>
               </View>
             )}
           </View>

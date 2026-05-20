@@ -1,6 +1,7 @@
 import { CommonActions } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
+import { runMapSafeNavigation } from "./mapSafeNavigation";
 
 /** Navigate to shared in-trip screen (root stack). Call from tab screens via `navigation.getParent()`. */
 export function navigateToRideTripToDestination(
@@ -8,9 +9,11 @@ export function navigateToRideTripToDestination(
   rideRequestId: number,
   options?: { showTripSuccessIntro?: boolean }
 ): void {
-  navigation.navigate("RideTripToDestination", {
-    rideRequestId,
-    showTripSuccessIntro: options?.showTripSuccessIntro === true,
+  runMapSafeNavigation(() => {
+    navigation.navigate("RideTripToDestination", {
+      rideRequestId,
+      showTripSuccessIntro: options?.showTripSuccessIntro === true,
+    });
   });
 }
 
@@ -19,7 +22,9 @@ export function navigateToRidePickupNavigation(
   navigation: NativeStackNavigationProp<RootStackParamList>,
   rideRequestId: number
 ): void {
-  navigation.navigate("RidePickupNavigation", { rideRequestId });
+  runMapSafeNavigation(() => {
+    navigation.navigate("RidePickupNavigation", { rideRequestId });
+  });
 }
 
 /**
@@ -30,12 +35,14 @@ export function navigateToUserRideRequestsTab(
   navigation: NativeStackNavigationProp<RootStackParamList>,
   role: "DRIVER" | "REGULAR"
 ): void {
-  navigation.dispatch(
-    CommonActions.navigate({
-      name: "UserTabs",
-      params: {
-        screen: role === "DRIVER" ? "DriverRequests" : "RideTracking",
-      },
-    })
-  );
+  runMapSafeNavigation(() => {
+    navigation.dispatch(
+      CommonActions.navigate({
+        name: "UserTabs",
+        params: {
+          screen: role === "DRIVER" ? "DriverRequests" : "RideTracking",
+        },
+      })
+    );
+  });
 }

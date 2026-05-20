@@ -1,11 +1,8 @@
-import React, { memo, useEffect, useMemo, useRef } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Platform, StyleSheet, View } from "react-native";
-import { PointAnnotation } from "@maplibre/maplibre-react-native";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
 type Props = {
-  id?: string;
-  coordinate: [number, number]; // [lon, lat]
   /** degrees in screen space (already compensated for map bearing if needed) */
   bearingDeg: number;
   /**
@@ -36,17 +33,26 @@ const MINIMAL_CAR = "#4285F4";
  *
  * Rotation is animated so small GPS heading jitter does not snap visibly.
  */
+/**
+ * Child of `PointAnnotation` only — do not wrap with another PointAnnotation.
+ * Fabric recycles native views incorrectly when annotation wrappers nest on iOS.
+ */
 function NavigationMarkerInner({
-  id = "nav_user_marker",
-  coordinate,
   bearingDeg,
   variant = "minimal",
 }: Props) {
+  const useStaticRotation = Platform.OS === "ios";
   const rot = useRef(new Animated.Value(normalizeDeg(bearingDeg))).current;
   const lastDegRef = useRef(normalizeDeg(bearingDeg));
+  const [staticDeg, setStaticDeg] = useState(normalizeDeg(bearingDeg));
 
   useEffect(() => {
     const next = normalizeDeg(bearingDeg);
+    if (useStaticRotation) {
+      setStaticDeg(next);
+      lastDegRef.current = next;
+      return;
+    }
     const prev = lastDegRef.current;
     const delta = shortestDelta(prev, next);
     const target = prev + delta;
@@ -56,7 +62,7 @@ function NavigationMarkerInner({
       duration: 140,
       useNativeDriver: true,
     }).start();
-  }, [bearingDeg, rot]);
+  }, [bearingDeg, rot, useStaticRotation]);
 
   const rotate = useMemo(
     () =>
@@ -67,10 +73,21 @@ function NavigationMarkerInner({
     [rot]
   );
 
+  const staticRotate = useMemo(() => [{ rotate: `${staticDeg}deg` }], [staticDeg]);
+
   if (variant === "minimal") {
     return (
-      <PointAnnotation id={id} coordinate={coordinate}>
-        <View style={styles.minimalHit} pointerEvents="none">
+      <View style={styles.minimalHit} pointerEvents="none" collapsable={false}>
+        {useStaticRotation ? (
+          <View style={[styles.minimalPlate, { transform: staticRotate }]}>
+            <Ionicons
+              name="car"
+              size={30}
+              color={MINIMAL_CAR}
+              style={styles.minimalIconCrisp}
+            />
+          </View>
+        ) : (
           <Animated.View style={[styles.minimalPlate, { transform: [{ rotate }] }]}>
             <Ionicons
               name="car"
@@ -79,18 +96,25 @@ function NavigationMarkerInner({
               style={styles.minimalIconCrisp}
             />
           </Animated.View>
-        </View>
-      </PointAnnotation>
+        )}
+      </View>
     );
   }
 
   return (
-    <PointAnnotation id={id} coordinate={coordinate}>
-      <View style={styles.hit} pointerEvents="none">
-        <View style={styles.glow} />
-        <Animated.View
-          style={[styles.directionWrapper, { transform: [{ rotate }] }]}
-        >
+    <View style={styles.hit} pointerEvents="none" collapsable={false}>
+      <View style={styles.glow} />
+      {useStaticRotation ? (
+        <View style={[styles.directionWrapper, { transform: staticRotate }]}>
+          <View style={styles.cone} />
+          <View style={styles.ring}>
+            <View style={styles.fill}>
+              <Ionicons name="car" size={20} color={ICON} />
+            </View>
+          </View>
+        </View>
+      ) : (
+        <Animated.View style={[styles.directionWrapper, { transform: [{ rotate }] }]}>
           <View style={styles.cone} />
           <View style={styles.ring}>
             <View style={styles.fill}>
@@ -98,16 +122,13 @@ function NavigationMarkerInner({
             </View>
           </View>
         </Animated.View>
-      </View>
-    </PointAnnotation>
+      )}
+    </View>
   );
 }
 
 function areEqual(prev: Props, next: Props) {
   if (prev.variant !== next.variant) return false;
-  if (prev.coordinate[0] !== next.coordinate[0] || prev.coordinate[1] !== next.coordinate[1]) {
-    return false;
-  }
   const a = normalizeDeg(prev.bearingDeg);
   const b = normalizeDeg(next.bearingDeg);
   return Math.abs(shortestDelta(a, b)) < 0.8;

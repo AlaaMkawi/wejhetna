@@ -9,7 +9,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, translateText, Category } from "../../api/places";
@@ -23,7 +25,7 @@ import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { useInitialMapGeolocation } from "../../hooks/useInitialMapGeolocation";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
-import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
 import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
 import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
@@ -190,7 +192,7 @@ export default function AdminHomeScreen() {
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const cameraRef = useRef<any>(null);
-  
+
   // Get selectedPlaceId from route params (if navigating from SavedPlacesScreen)
   const selectedPlaceIdFromParams = (route.params as any)?.selectedPlaceId as number | undefined;
 
@@ -253,6 +255,18 @@ export default function AdminHomeScreen() {
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+
+  const { showAnnotations, mapShellMounted } = useHomeMapScreen({
+    onPrepareLeaveForRoute: () => {
+      selectedPlaceIdRef.current = null;
+      setSelectedPlace(null);
+      setDestination(null);
+      setCustomPin(null);
+      setSearchResults([]);
+      setPickPreviewCoords(null);
+      setIsPickingMapDestination(false);
+    },
+  });
 
   // Handle image load error
   const handleImageError = (error: any, index: number, allImages: string[]) => {
@@ -593,7 +607,7 @@ export default function AdminHomeScreen() {
   };
 
   const getRoute = async () => {
-    await openDrivingRoutePreview({
+    await runOpenDrivingRoutePreviewFromHome({
       navigation,
       destination,
       t,
@@ -620,7 +634,7 @@ export default function AdminHomeScreen() {
       const dest = { lat, lon, name: t("map_selected_destination_label") };
       setCustomPin(null);
       setDestination(dest);
-      await openDrivingRoutePreview({
+      await runOpenDrivingRoutePreviewFromHome({
         navigation,
         destination: dest,
         t,
@@ -836,7 +850,8 @@ export default function AdminHomeScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      <MapView
+      {mapShellMounted ? (
+      <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
@@ -889,15 +904,15 @@ export default function AdminHomeScreen() {
           animationMode="flyTo"
         />
 
-        {userLocation && !isPickingMapDestination && (
+        {showAnnotations && userLocation && !isPickingMapDestination && (
           <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
+            <View style={styles.userLocationMarker} collapsable={false}>
               <View style={styles.userLocationDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {isPickingMapDestination && pickPreviewCoords && (
+        {showAnnotations && isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
             id="map_pick_preview"
             coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
@@ -908,25 +923,24 @@ export default function AdminHomeScreen() {
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (long-press) */}
-        {customPin && (
+        {showAnnotations && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
+            <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Destination Marker (from place selection) */}
-        {destination && !customPin && (
+        {showAnnotations && destination && !customPin && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
+            <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
             </View>
           </PointAnnotation>
         )}
 
-        {!isPickingMapDestination &&
+        {showAnnotations &&
+          !isPickingMapDestination &&
           places.map((place) => {
           if (!place.location) return null;
           
@@ -949,15 +963,15 @@ export default function AdminHomeScreen() {
 
           return (
             <PointAnnotation
-              key={place.id}
-              id={String(place.id)}
+              key={`home-place-${place.id}`}
+              id={`home-place-${place.id}`}
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
                 handlePlaceTap(place);
               }}
             >
-              <View style={styles.nativeMarkerContainer}>
+              <View style={styles.nativeMarkerContainer} collapsable={false}>
                 {/* Icon/Marker based on place type - Google Maps style */}
                 {place.place_type === 'PUBLIC_SERVICE' ? (
                   <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
@@ -1066,7 +1080,10 @@ export default function AdminHomeScreen() {
             </PointAnnotation>
           );
         })}
-      </MapView>
+      </FocusedMapView>
+      ) : (
+        <View style={styles.map} />
+      )}
 
       <MapInlineSearch
         value={searchQuery}

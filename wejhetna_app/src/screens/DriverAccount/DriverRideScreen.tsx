@@ -115,6 +115,7 @@ const HISTORY_STATUSES: ReadonlySet<DriverRideRequest["status"]> = new Set([
 export default function DriverRideScreen() {
   const { t } = useTranslation();
   const navigation = useNavigation();
+  const listBottomPad = useListBottomPad(120);
   const verifySuccessTripIdRef = useRef<number | null>(null);
   const [verifySuccessVisible, setVerifySuccessVisible] = useState(false);
   const [driverUserId, setDriverUserId] = useState<number | null>(null);
@@ -805,8 +806,6 @@ export default function DriverRideScreen() {
       </View>
     );
   }
-
-  const listBottomPad = useListBottomPad(120);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>

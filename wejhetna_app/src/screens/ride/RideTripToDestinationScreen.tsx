@@ -4,7 +4,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useMapScreenLifecycle } from "../../components/map/useMapScreenLifecycle";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { RootStackParamList } from "../../navigation/types";
 import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
@@ -57,6 +59,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
   const launchedNavRef = useRef(false);
   const myDriverGpsRef = useRef(myDriverGps);
   myDriverGpsRef.current = myDriverGps;
+  const { showOverlays, exitMapScreen } = useMapScreenLifecycle();
 
   const fetchSnapshot = useCallback(async () => {
     setError(null);
@@ -267,12 +270,15 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
   }, [cameraSettings, driverDot]);
 
   const navigateOut = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigateToUserRideRequestsTab(navigation, role ?? "REGULAR");
-  }, [navigation, role]);
+    const go = () => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+      navigateToUserRideRequestsTab(navigation, role ?? "REGULAR");
+    };
+    exitMapScreen(go);
+  }, [navigation, role, exitMapScreen]);
 
   const stOk =
     ride &&
@@ -306,7 +312,8 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
     void openDrivingRoutePreview({
       navigation: {
         // Replace so we don't bounce back into this screen and re-open navigation.
-        navigate: (_name, params) => navigation.replace("RouteDetails", params),
+        navigate: (_name, params) =>
+          exitMapScreen(() => navigation.replace("RouteDetails", params)),
       },
       destination: { ...destination, name: ride.destination_text || undefined },
       t,
@@ -331,7 +338,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
       // openDrivingRoutePreview already shows alerts; allow retry by going back.
       launchedNavRef.current = false;
     });
-  }, [destination, driverPhone, navigation, passengerPhone, pickup, rd, ride, rideRequestId, role, rp, stOk, t]);
+  }, [destination, driverPhone, exitMapScreen, navigation, passengerPhone, pickup, rd, ride, rideRequestId, role, rp, stOk, t]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
@@ -358,7 +365,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
       ) : (
         <>
           <View style={styles.mapWrap}>
-            <MapView
+            <FocusedMapView
               style={styles.map}
               mapStyle={MAP_STYLE_URL}
               scrollEnabled
@@ -380,7 +387,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
                   animationMode="flyTo"
                 />
               ) : null}
-              {routeBackdropFc ? (
+              {showOverlays && routeBackdropFc ? (
                 <ShapeSource id="tripRouteBackdrop" shape={routeBackdropFc}>
                   <LineLayer
                     id="tripRouteBackdropLayer"
@@ -394,7 +401,7 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
                   />
                 </ShapeSource>
               ) : null}
-              {routeRemainingFc ? (
+              {showOverlays && routeRemainingFc ? (
                 <ShapeSource id="tripRouteRemaining" shape={routeRemainingFc}>
                   <LineLayer
                     id="tripRouteRemainingLayer"
@@ -411,14 +418,16 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
               {/* Dotted leader line from the live driver dot to the start of
                   the remaining road route — keeps the trip flow visually
                   consistent with the pickup tracking flow. */}
-              <OffRoutePathConnector
-                id="tripRouteConnector"
-                from={driverDot}
-                to={routeRemainingStart}
-                color={ROUTE_BLUE}
-                width={3}
-              />
-              {routeRemainingStart ? (
+              {showOverlays ? (
+                <OffRoutePathConnector
+                  id="tripRouteConnector"
+                  from={driverDot}
+                  to={routeRemainingStart}
+                  color={ROUTE_BLUE}
+                  width={3}
+                />
+              ) : null}
+              {showOverlays && routeRemainingStart ? (
                 <PointAnnotation
                   id="tripRouteStart"
                   coordinate={routeRemainingStart}
@@ -426,18 +435,20 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
                   <RouteEndpointMarker variant="start" color={ROUTE_BLUE} />
                 </PointAnnotation>
               ) : null}
-              <PointAnnotation
-                id="dest_mark"
-                coordinate={[destination.lon, destination.lat]}
-              >
-                <RouteEndpointMarker variant="end" iconName="flag" />
-              </PointAnnotation>
-              {driverDot ? (
+              {showOverlays ? (
+                <PointAnnotation
+                  id="dest_mark"
+                  coordinate={[destination.lon, destination.lat]}
+                >
+                  <RouteEndpointMarker variant="end" iconName="flag" />
+                </PointAnnotation>
+              ) : null}
+              {showOverlays && driverDot ? (
                 <PointAnnotation id="driver_trip" coordinate={[driverDot.lon, driverDot.lat]}>
                   <RideDriverMapMarker size="expanded" headingDeg={driverTrailHeadingDeg} vehicleIcon="car" />
                 </PointAnnotation>
               ) : null}
-            </MapView>
+            </FocusedMapView>
             {routeLoading ? (
               <View style={styles.routeLoading}>
                 <ActivityIndicator color="#fff" />

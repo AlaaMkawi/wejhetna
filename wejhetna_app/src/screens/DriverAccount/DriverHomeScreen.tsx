@@ -9,7 +9,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, RouteProp, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -24,7 +26,7 @@ import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import { isOpenNow } from "../../utils/openingHours";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
-import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
 import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
 import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
@@ -338,6 +340,17 @@ export default function DriverHomeScreen({ }: Props) {
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+
+  const { showAnnotations, mapShellMounted } = useHomeMapScreen({
+    onPrepareLeaveForRoute: () => {
+      setSelectedPlace(null);
+      setDestination(null);
+      setCustomPin(null);
+      setSearchResults([]);
+      setPickPreviewCoords(null);
+      setIsPickingMapDestination(false);
+    },
+  });
 
   // Load user ID from AsyncStorage
   useEffect(() => {
@@ -668,7 +681,7 @@ export default function DriverHomeScreen({ }: Props) {
   };
 
   const getRoute = async () => {
-    await openDrivingRoutePreview({
+    await runOpenDrivingRoutePreviewFromHome({
       navigation,
       destination,
       t,
@@ -694,7 +707,7 @@ export default function DriverHomeScreen({ }: Props) {
       const dest = { lat, lon, name: t("map_selected_destination_label") };
       setCustomPin(null);
       setDestination(dest);
-      await openDrivingRoutePreview({
+      await runOpenDrivingRoutePreviewFromHome({
         navigation,
         destination: dest,
         t,
@@ -810,7 +823,8 @@ export default function DriverHomeScreen({ }: Props) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      <MapView
+      {mapShellMounted ? (
+      <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
         onRegionDidChange={onRegionDidChange}
@@ -863,15 +877,15 @@ export default function DriverHomeScreen({ }: Props) {
           animationMode="flyTo"
         />
 
-        {userLocation && !isPickingMapDestination && (
+        {showAnnotations && userLocation && !isPickingMapDestination && (
           <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
+            <View style={styles.userLocationMarker} collapsable={false}>
               <View style={styles.userLocationDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {isPickingMapDestination && pickPreviewCoords && (
+        {showAnnotations && isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
             id="map_pick_preview"
             coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
@@ -882,25 +896,24 @@ export default function DriverHomeScreen({ }: Props) {
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (long-press) */}
-        {customPin && (
+        {showAnnotations && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
+            <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Destination Marker (from place selection) */}
-        {destination && !customPin && (
+        {showAnnotations && destination && !customPin && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
+            <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
             </View>
           </PointAnnotation>
         )}
 
-        {!isPickingMapDestination &&
+        {showAnnotations &&
+          !isPickingMapDestination &&
           places.map((place) => {
           if (!place.location) return null;
           
@@ -923,15 +936,15 @@ export default function DriverHomeScreen({ }: Props) {
 
           return (
             <PointAnnotation
-              key={place.id}
-              id={String(place.id)}
+              key={`home-place-${place.id}`}
+              id={`home-place-${place.id}`}
               coordinate={[place.location.lon, place.location.lat]}
               onSelected={() => {
                 console.log("Place selected:", place.id, place.name);
                 handlePlaceTap(place);
               }}
             >
-              <View style={styles.nativeMarkerContainer}>
+              <View style={styles.nativeMarkerContainer} collapsable={false}>
                 {/* Icon/Marker based on place type - Google Maps style */}
                 {place.place_type === 'PUBLIC_SERVICE' ? (
                   <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
@@ -1040,7 +1053,10 @@ export default function DriverHomeScreen({ }: Props) {
             </PointAnnotation>
           );
         })}
-      </MapView>
+      </FocusedMapView>
+      ) : (
+        <View style={styles.map} />
+      )}
 
       <MapInlineSearch
         value={searchQuery}

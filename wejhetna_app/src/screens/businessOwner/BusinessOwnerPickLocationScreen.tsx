@@ -1,14 +1,12 @@
 // src/screens/businessOwner/BusinessOwnerPickLocationScreen.tsx
 
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { appAlert } from "../../utils/appAlert";
 import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import {
-  MapView,
-  Camera,
-  PointAnnotation,
-} from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useMapScreenOverlays } from "../../components/map/useMapScreenOverlays";
 import { useTranslation } from "react-i18next";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -30,9 +28,17 @@ type BusinessOwnerPickLocationRoute = RouteProp<
 >;
 
 export default function BusinessOwnerPickLocationScreen() {
+  const { showOverlays, exitMapScreen } = useMapScreenOverlays();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
+  const navigateAway = useCallback(
+    <T extends keyof RootStackParamList>(name: T, params: RootStackParamList[T]) => {
+      exitMapScreen(() => navigation.navigate(name, params));
+    },
+    [exitMapScreen, navigation]
+  );
   const { t } = useTranslation();
   const route = useRoute<BusinessOwnerPickLocationRoute>();
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const insets = useSafeAreaInsets();
 
   // personalInfo will be passed to details form and used to create user
@@ -137,7 +143,7 @@ export default function BusinessOwnerPickLocationScreen() {
                 {
                   text: "Claim This Place",
                   onPress: () => {
-                    navigation.navigate("BusinessOwnerDetailsForm", {
+                    navigateAway("BusinessOwnerDetailsForm", {
                       personalInfo,
                       lat: latitude,
                       lon: longitude,
@@ -152,7 +158,7 @@ export default function BusinessOwnerPickLocationScreen() {
                   text: t("create_new_place") || "Create New Place",
                   style: "cancel",
                   onPress: () => {
-                    navigation.navigate("BusinessOwnerDetailsForm", {
+                    navigateAway("BusinessOwnerDetailsForm", {
                       personalInfo,
                       lat: latitude,
                       lon: longitude,
@@ -167,7 +173,7 @@ export default function BusinessOwnerPickLocationScreen() {
             );
           } else {
             // NO_PLACE - can create new place
-            navigation.navigate("BusinessOwnerDetailsForm", {
+            navigateAway("BusinessOwnerDetailsForm", {
               personalInfo,
               lat: latitude,
               lon: longitude,
@@ -250,7 +256,7 @@ export default function BusinessOwnerPickLocationScreen() {
             {
               text: "Claim This Place",
               onPress: () => {
-                navigation.navigate("BusinessOwnerDetailsForm", {
+                navigateAway("BusinessOwnerDetailsForm", {
                   personalInfo,
                   lat: selectedLat,
                   lon: selectedLon,
@@ -265,7 +271,7 @@ export default function BusinessOwnerPickLocationScreen() {
               text: t("create_new_place") || "Create New Place",
               style: "cancel",
               onPress: () => {
-                navigation.navigate("BusinessOwnerDetailsForm", {
+                navigateAway("BusinessOwnerDetailsForm", {
                   personalInfo,
                   lat: selectedLat,
                   lon: selectedLon,
@@ -280,7 +286,7 @@ export default function BusinessOwnerPickLocationScreen() {
         );
       } else {
         // NO_PLACE - can create new place
-        navigation.navigate("BusinessOwnerDetailsForm", {
+        navigateAway("BusinessOwnerDetailsForm", {
           personalInfo,
           lat: selectedLat,
           lon: selectedLon,
@@ -311,7 +317,7 @@ export default function BusinessOwnerPickLocationScreen() {
           style={styles.backButton}
           onPress={() => {
             if (navigation.canGoBack()) {
-              navigation.goBack();
+              exitMapScreen(() => navigation.goBack());
             }
           }}
           activeOpacity={0.7}
@@ -323,7 +329,7 @@ export default function BusinessOwnerPickLocationScreen() {
       </View>
 
       <View style={styles.mapContainer}>
-        <MapView
+        <FocusedMapView
           style={StyleSheet.absoluteFill}
           mapStyle={MAP_STYLE_URL}
           onPress={handleMapPress}
@@ -343,15 +349,15 @@ export default function BusinessOwnerPickLocationScreen() {
             }}
           />
 
-          {selectedLat != null && selectedLon != null && (
+          {showOverlays && selectedLat != null && selectedLon != null && (
             <PointAnnotation
               id="selected_point"
               coordinate={[selectedLon, selectedLat]}
             >
-              <View style={styles.selectedDot} />
+              <View style={styles.selectedDot} collapsable={false} />
             </PointAnnotation>
           )}
-        </MapView>
+        </FocusedMapView>
       </View>
 
       <View style={styles.bottomPanel}>

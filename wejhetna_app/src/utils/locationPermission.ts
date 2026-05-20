@@ -54,16 +54,12 @@ export async function requestForegroundLocationPermission(): Promise<boolean> {
     }
   }
 
-  return await new Promise((resolve) => {
-    try {
-      NativeGeolocation.requestAuthorization((status: unknown) => {
-        // 'granted' / 'denied' / 'disabled' are common
-        resolve(String(status) === "granted");
-      });
-    } catch {
-      resolve(false);
-    }
-  });
+  try {
+    const status = await NativeGeolocation.requestAuthorization("whenInUse");
+    return status === "granted";
+  } catch {
+    return false;
+  }
 }
 
 /**
