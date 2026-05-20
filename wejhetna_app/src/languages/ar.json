@@ -1063,5 +1063,6 @@
       "failed": "تعذّر حذف الإعلان: {{message}}"
     }
   },
-  "city_online_business": "أعمال عبر الإنترنت"
+  "city_online_business": "أعمال عبر الإنترنت",
+  "category_other": "أخرى"
 }
