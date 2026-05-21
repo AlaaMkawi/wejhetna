@@ -2,15 +2,16 @@
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { appAlert } from "../../utils/appAlert";
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, Image, PanResponder, StatusBar, Dimensions, Linking, Modal, ActivityIndicator, DeviceEventEmitter, FlatList } from "react-native";
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Pressable, ScrollView, Image, PanResponder, StatusBar, Dimensions, Linking, Modal, ActivityIndicator, DeviceEventEmitter, FlatList } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { PointAnnotation } from "@maplibre/maplibre-react-native";
 import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { RegularHomeMapCamera } from "../../components/map/RegularHomeMapCamera";
 import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, RouteProp, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -29,26 +30,36 @@ import MapInlineSearch from "../../components/map/MapInlineSearch";
 import DriverInfoPopup from "../../components/ride/DriverInfoPopup";
 import { NearbyDriverTaxiMarker } from "../../components/map/NearbyDriverTaxiMarker";
 import { RideDriverClusterMarker } from "../../components/map/RideDriverClusterMarker";
-import { MapPin, type MapPinCategory } from "../../components/map/MapPin";
+import HomeMapPlaceMarkers from "../../components/map/HomeMapPlaceMarkers";
 import { UserLocationDot } from "../../components/map/UserLocationDot";
-import { MapPickedDestinationPanel } from "../../components/map/MapPickedDestinationPanel";
-import { quantizeZoomForMarkers } from "../../components/map/markerScale";
+import { MapPickedDestinationChoiceModal } from "../../components/map/MapPickedDestinationChoiceModal";
+import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsActionButtons";
+import { usePlaceDetailsRideCtaState } from "../../hooks/usePlaceDetailsRideCtaState";
+import { useSyncPlaceDetailsDestination } from "../../hooks/useSyncPlaceDetailsDestination";
 import {
   clusterNearbyDrivers,
   zoomInTargetForCluster,
 } from "../../utils/nearbyDriverClustering";
 import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
+import {
+  mapPickStateForChoicePanel,
+  startMapPickNavigation,
+} from "../../utils/mapPickedDestination";
+import { refreshHomeMapUserLocation } from "../../utils/refreshHomeMapUserLocation";
+import { getCurrentPositionReliable } from "../../utils/locationPermission";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
-import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
-import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
+import { useHomeMapDraftNavigationCleanup } from "../../hooks/useHomeMapDraftNavigationCleanup";
+import { useRegularHomeMapCamera } from "../../hooks/useRegularHomeMapCamera";
+import {
+  destinationAfterClosingPlaceDetails,
+  shouldShowCustomMapPin,
+  shouldShowDestinationMapPin,
+} from "../../utils/placeDetailsMapPin";
 import {
   createRideRequest,
   getNearbyDrivers,
-  getRegularLatestRideRequest,
-  isActiveBlockingRideStatus,
   NearbyDriver,
   parseStoredUserId,
-  RegularLatestRideRequest,
   rideApiDetailToTranslationKey,
 } from "../../api/rides";
 import { NEARBY_DRIVER_RADIUS_M, RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
@@ -60,23 +71,6 @@ const MAP_STYLE_URL =
 const INITIAL_CENTER: [number, number] = [34.83, 31.24];
 const INITIAL_ZOOM = 12.5;
 
-/**
- * Marker visibility / labelling thresholds.
- *
- * Spec: "Important categories (hospital, school, etc.) should always be visible" — so
- * PUBLIC_SERVICE places no longer disappear at low zoom; the smooth pin scaling
- * (`getMapPinScale`) shrinks them gracefully to ~0.85x instead. Businesses still gate
- * on zoom (otherwise the map gets visually crowded in city view) but the threshold
- * is lowered substantially from the previous 16.5 to 14 so they appear much earlier.
- *
- * Labels are gated more strictly than markers — at low zoom we want the icons to be
- * recognisable but we don't want a wall of text overlapping each other.
- */
-const PUBLIC_SERVICE_VISIBILITY_ZOOM = 0; // always visible — hospitals/schools/etc. never disappear
-const PUBLIC_SERVICE_LABEL_ZOOM = 15; // labels only when zoomed enough to read
-const BUSINESS_VISIBILITY_ZOOM = 14;
-const BUSINESS_LABEL_ZOOM = 16;
-
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-rounded corners)
 const BOTTOM_SHEET_MIN_HEIGHT = 360; // גובה מינימלי של ה-bottom sheet
@@ -85,11 +79,8 @@ const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא �
 /** Inset for the map "pick destination" FAB so it sits clearly above the tab bar. */
 const MAP_PICK_DEST_FAB_BOTTOM = 124;
 const MAP_PICK_DEST_BANNER_BOTTOM = MAP_PICK_DEST_FAB_BOTTOM + 56 + 12;
-
-const NEGEV_BOUNDS = {
-  ne: [35.10, 31.42],
-  sw: [34.72, 31.18],
-};
+/** "My location" FAB — right side, above tab bar, clear of the left pick-destination FAB. */
+const MAP_LOCATE_ME_FAB_BOTTOM = 124;
 
 // Helper function to get place name based on current language
 const getPlaceName = (place: PlaceForMap): string => {
@@ -334,15 +325,21 @@ export default function RegularHomeScreen({}: Props) {
   const { t } = useTranslation();
   const mapPickFabBottom = useOverlayBottomOffset(MAP_PICK_DEST_FAB_BOTTOM);
   const mapPickBannerBottom = useOverlayBottomOffset(MAP_PICK_DEST_BANNER_BOTTOM);
+  const mapLocateMeFabBottom = useOverlayBottomOffset(MAP_LOCATE_ME_FAB_BOTTOM);
   const routeParams = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
   const cameraRef = useRef<any>(null);
+  /** Last place id that already received a one-shot camera focus (avoids repeat on onSelected). */
+  const placeCameraFocusedIdRef = useRef<number | null>(null);
+  /** Deep link / saved-place param handled once per id. */
+  const deepLinkPlaceAppliedIdRef = useRef<number | null>(null);
 
   // Places
   const [places, setPlaces] = useState<PlaceForMap[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<PlaceForMap | null>(null);
-  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
+  /** Marker clustering/scale only — debounced after region idle, not every pinch frame. */
+  const [markerZoom, setMarkerZoom] = useState(INITIAL_ZOOM);
 
   // Save/Unsave place
   const [isPlaceSaved, setIsPlaceSaved] = useState(false);
@@ -361,7 +358,9 @@ export default function RegularHomeScreen({}: Props) {
   const [rideSendErrorHint, setRideSendErrorHint] = useState<string | null>(null);
   const [ridePlaceSearchQuery, setRidePlaceSearchQuery] = useState("");
   const [rideWithDriverLoading, setRideWithDriverLoading] = useState(false);
-  const [passengerRideLatest, setPassengerRideLatest] = useState<RegularLatestRideRequest | null>(null);
+
+  const { rideWithDriverMuted, alertIfCannotBookRide, refreshPassengerRide } =
+    usePlaceDetailsRideCtaState(userId, "REGULAR");
 
   // Ref for ScrollView to reset scroll position when place changes
   const scrollViewRef = useRef<ScrollView>(null);
@@ -374,6 +373,10 @@ export default function RegularHomeScreen({}: Props) {
   // Destination
   const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
   const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
+  /** Center modal: self-nav vs ride-with-driver (map pick only). */
+  const [mapPickChoiceModalVisible, setMapPickChoiceModalVisible] = useState(false);
+
+  useSyncPlaceDetailsDestination(selectedPlace, destination, setDestination, getPlaceName);
 
   // Route
   const [routeLoading, setRouteLoading] = useState(false);
@@ -393,12 +396,14 @@ export default function RegularHomeScreen({}: Props) {
 
   const { showAnnotations, mapShellMounted } = useHomeMapScreen({
     onPrepareLeaveForRoute: () => {
+      setMapPickChoiceModalVisible(false);
       setSelectedPlace(null);
       setDestination(null);
       setCustomPin(null);
       setSearchResults([]);
       setPickPreviewCoords(null);
       setIsPickingMapDestination(false);
+      pickMapTapInFlightRef.current = false;
     },
   });
 
@@ -471,15 +476,54 @@ export default function RegularHomeScreen({}: Props) {
     }, [])
   );
 
-  useEffect(() => {
-    const sub = DeviceEventEmitter.addListener(LIVE_NAVIGATION_EXIT_EVENT, () => {
-      setDestination(null);
-      setCustomPin(null);
-      setIsPickingMapDestination(false);
-      setPickPreviewCoords(null);
-    });
-    return () => sub.remove();
+  const refreshUserLocationOnHome = useCallback(() => {
+    void refreshHomeMapUserLocation(setUserLocation);
   }, []);
+
+  useHomeMapDraftNavigationCleanup({
+    setRouteLoading,
+    setDestination,
+    setCustomPin,
+    setIsPickingMapDestination,
+    setPickPreviewCoords,
+    pickMapTapInFlightRef,
+    setMapPickChoiceModalVisible,
+    refreshUserLocation: refreshUserLocationOnHome,
+  });
+
+  const {
+    onRegionWillChange,
+    onRegionDidChange,
+    requestCameraMove,
+    centerOnUserLocation,
+  } = useRegularHomeMapCamera({
+    cameraRef,
+    setMarkerZoom,
+  });
+
+  const [locateMeLoading, setLocateMeLoading] = useState(false);
+
+  /** Explicit one-shot recenter on user GPS (no follow, no useEffect on userLocation). */
+  const handleLocateMePress = useCallback(async () => {
+    if (locateMeLoading) return;
+
+    let loc = userLocation;
+    if (!loc) {
+      setLocateMeLoading(true);
+      try {
+        loc = await getCurrentPositionReliable();
+        setUserLocation(loc);
+      } catch {
+        appAlert(t("error"), t("ride_location_unavailable_hint"));
+        return;
+      } finally {
+        setLocateMeLoading(false);
+      }
+    }
+
+    if (!loc) return;
+    centerOnUserLocation(loc, { zoomLevel: 15.5, animationDuration: 720 });
+  }, [locateMeLoading, userLocation, centerOnUserLocation, t]);
 
   // Fetch all places on mount
   useEffect(() => {
@@ -514,33 +558,13 @@ export default function RegularHomeScreen({}: Props) {
     }
   }, [userId, userLocation]);
 
-  const refreshPassengerLatestRide = useCallback(async () => {
-    if (!userId) {
-      setPassengerRideLatest(null);
-      return;
-    }
-    try {
-      const row = await getRegularLatestRideRequest(userId);
-      setPassengerRideLatest(row);
-    } catch {
-      setPassengerRideLatest(null);
-    }
-  }, [userId]);
-
-  const hasBlockingPassengerRide =
-    passengerRideLatest != null && isActiveBlockingRideStatus(passengerRideLatest.status);
-
-  /** Refresh driver markers and center the map on the user (helps testing / visibility). */
+  /** Refresh driver markers and center the map on the user (ride-with-driver flow). */
   const focusNearbyDriversOnMap = useCallback(() => {
     void refreshNearbyDrivers();
-    if (userLocation && cameraRef.current) {
-      cameraRef.current.setCamera({
-        centerCoordinate: [userLocation.lon, userLocation.lat],
-        zoomLevel: 14,
-        animationDuration: 900,
-      });
+    if (userLocation) {
+      centerOnUserLocation(userLocation, { zoomLevel: 14, animationDuration: 900 });
     }
-  }, [refreshNearbyDrivers, userLocation]);
+  }, [refreshNearbyDrivers, centerOnUserLocation, userLocation]);
 
   useEffect(() => {
     refreshNearbyDrivers();
@@ -572,64 +596,12 @@ export default function RegularHomeScreen({}: Props) {
   }, [selectedDriver]);
 
   useEffect(() => {
-    if (!isPickingMapDestination || userLocation == null || !cameraRef.current) return;
-    const timer = setTimeout(() => {
-      try {
-        cameraRef.current.setCamera({
-          centerCoordinate: [userLocation.lon, userLocation.lat],
-          zoomLevel: 15.25,
-          animationDuration: 720,
-        });
-      } catch {
-        /* ignore */
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [isPickingMapDestination, userLocation]);
-
-  useEffect(() => {
     if (!userId || !userLocation) return;
     const interval = setInterval(() => {
       void refreshNearbyDrivers();
     }, RIDE_STATUS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [userId, userLocation, refreshNearbyDrivers]);
-
-  useEffect(() => {
-    void refreshPassengerLatestRide();
-  }, [refreshPassengerLatestRide]);
-
-  useEffect(() => {
-    if (!userId) return;
-    const interval = setInterval(() => {
-      void refreshPassengerLatestRide();
-    }, RIDE_STATUS_POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [userId, refreshPassengerLatestRide]);
-
-  useFocusEffect(
-    useCallback(() => {
-      void refreshPassengerLatestRide();
-    }, [refreshPassengerLatestRide])
-  );
-
-  // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)
-  useEffect(() => {
-    if (selectedPlaceIdFromParams && places.length > 0) {
-      const place = places.find(p => p.id === selectedPlaceIdFromParams);
-      if (place) {
-        setSelectedPlace(place);
-        // Center camera on the place location
-        if (place.location && cameraRef.current) {
-          cameraRef.current.setCamera({
-            centerCoordinate: [place.location.lon, place.location.lat],
-            zoomLevel: 16.5,
-            animationDuration: 1000,
-          });
-        }
-      }
-    }
-  }, [selectedPlaceIdFromParams, places]);
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -860,24 +832,6 @@ export default function RegularHomeScreen({}: Props) {
     };
   });
 
-  const onRegionDidChange = async (feature: any) => {
-    // We used to re-center the camera whenever it drifted past a hardcoded
-    // threshold, but that fought the user's own zoom/pan gestures (the map
-    // appeared to "bounce back" mid-pinch). The Camera's `maxBounds` below
-    // already keeps the view inside the Negev service area naturally, so
-    // here we only need to track the latest zoom level for marker visibility.
-    //
-    // Quantize to half-steps before committing to state so a continuous pinch
-    // gesture only triggers a (re)render of all PointAnnotations when zoom
-    // actually crosses a step — the smooth `transform: scale()` interpolation
-    // in `MapPin` / `UserLocationDot` does the visual smoothing per pin.
-    const newZoom = feature?.properties?.zoomLevel;
-    if (typeof newZoom === "number") {
-      const next = quantizeZoomForMarkers(newZoom);
-      setCurrentZoom((prev) => (prev === next ? prev : next));
-    }
-  };
-
   /**
    * Group nearby drivers into singles/clusters/spread items so overlapping
    * markers don't obscure each other. Anchor latitude is the user's location
@@ -887,8 +841,8 @@ export default function RegularHomeScreen({}: Props) {
   const driverMapItems = useMemo(() => {
     if (nearbyDrivers.length === 0) return [];
     const anchorLat = userLocation?.lat ?? INITIAL_CENTER[1];
-    return clusterNearbyDrivers(nearbyDrivers, currentZoom, anchorLat);
-  }, [nearbyDrivers, currentZoom, userLocation?.lat]);
+    return clusterNearbyDrivers(nearbyDrivers, markerZoom, anchorLat);
+  }, [nearbyDrivers, markerZoom, userLocation?.lat]);
 
   /**
    * Tapping a cluster badge zooms the camera in by a couple of levels centered
@@ -897,14 +851,16 @@ export default function RegularHomeScreen({}: Props) {
    */
   const handleClusterTap = useCallback(
     (lat: number, lon: number) => {
-      if (!cameraRef.current) return;
-      cameraRef.current.setCamera({
-        centerCoordinate: [lon, lat],
-        zoomLevel: zoomInTargetForCluster(currentZoom),
-        animationDuration: 500,
-      });
+      requestCameraMove(
+        {
+          centerCoordinate: [lon, lat],
+          zoomLevel: zoomInTargetForCluster(markerZoom),
+          animationDuration: 500,
+        },
+        { userInitiated: true, reason: "driver-cluster-tap" }
+      );
     },
-    [currentZoom]
+    [markerZoom, requestCameraMove]
   );
 
   // Handle map long press (drop custom pin for destination)
@@ -916,11 +872,18 @@ export default function RegularHomeScreen({}: Props) {
         const ok = await assertDestinationInServiceCities(lat, lon, t);
         if (!ok) return;
 
-        setCustomPin({ lat, lon });
-        setDestination({ lat, lon, name: t("map_selected_destination_label") });
+        const pick = mapPickStateForChoicePanel(
+          lat,
+          lon,
+          t("map_selected_destination_label")
+        );
+        setCustomPin(pick.customPin);
+        setDestination(pick.destination);
+        setRideDestinationInput(pick.rideDestinationInput);
         setSelectedPlace(null);
         setSearchResults([]);
         setIsPickingMapDestination(false);
+        setMapPickChoiceModalVisible(true);
       }
     } catch (error) {
       console.error("Error handling long press:", error);
@@ -933,6 +896,7 @@ export default function RegularHomeScreen({}: Props) {
       setDestination((d) => destinationAfterClosingPlaceDetails(d, prev));
       return null;
     });
+    placeCameraFocusedIdRef.current = null;
   }, []);
 
   /**
@@ -942,6 +906,7 @@ export default function RegularHomeScreen({}: Props) {
    * to preserve, so we simply clear both.
    */
   const dismissPickedDestinationPanel = useCallback(() => {
+    setMapPickChoiceModalVisible(false);
     setCustomPin(null);
     setDestination(null);
     setRideDestinationInput("");
@@ -951,27 +916,64 @@ export default function RegularHomeScreen({}: Props) {
   const isPickedDestinationActive =
     !!customPin && !selectedPlace && !!destination;
 
-  const handlePlaceTap = async (place: PlaceForMap) => {
-    if (!place.location) return;
-    
-    // Places from database are already validated, so we can use them directly
-    // Only check boundary for custom pins (long press on map)
-    setSelectedPlace(place);
-    setDestination({
-      lat: place.location.lat,
-      lon: place.location.lon,
-      name: getPlaceName(place),
-    });
-    setCustomPin(null);
-    setSearchResults([]);
-    if (cameraRef.current) {
-      cameraRef.current.setCamera({
-        centerCoordinate: [place.location.lon, place.location.lat],
-        zoomLevel: 16.5,
-        animationDuration: 700,
+  const showCustomPinOnMap = shouldShowCustomMapPin(customPin, selectedPlace);
+  const showDestinationPinOnMap = shouldShowDestinationMapPin(
+    destination,
+    customPin,
+    selectedPlace
+  );
+
+  const handlePlaceTap = useCallback(
+    (place: PlaceForMap) => {
+      if (!place.location) return;
+
+      // Places from database are already validated, so we can use them directly
+      // Only check boundary for custom pins (long press on map)
+      setSelectedPlace(place);
+      setDestination({
+        lat: place.location.lat,
+        lon: place.location.lon,
+        name: getPlaceName(place),
       });
-    }
-  };
+      setCustomPin(null);
+      setSearchResults([]);
+    },
+    []
+  );
+
+  /** MapLibre `onSelected` — sheet + one-shot camera focus per place id. */
+  const handlePlaceMarkerPress = useCallback(
+    (place: PlaceForMap) => {
+      if (__DEV__) {
+        console.log("[RegularMapMarker] place press id=", place.id);
+      }
+      if (selectedPlace?.id === place.id) return;
+
+      handlePlaceTap(place);
+
+      if (!place.location) return;
+      requestCameraMove(
+        {
+          centerCoordinate: [place.location.lon, place.location.lat],
+          zoomLevel: 16.5,
+          animationDuration: 700,
+        },
+        { userInitiated: true, reason: "place-marker-press-once" }
+      );
+      placeCameraFocusedIdRef.current = place.id;
+    },
+    [selectedPlace?.id, handlePlaceTap, requestCameraMove]
+  );
+
+  // Saved places / deep link: open place sheet with nav+ride CTAs immediately
+  useEffect(() => {
+    if (!selectedPlaceIdFromParams || places.length === 0) return;
+    if (deepLinkPlaceAppliedIdRef.current === selectedPlaceIdFromParams) return;
+    const place = places.find((p) => p.id === selectedPlaceIdFromParams);
+    if (!place?.location) return;
+    deepLinkPlaceAppliedIdRef.current = selectedPlaceIdFromParams;
+    handlePlaceMarkerPress(place);
+  }, [selectedPlaceIdFromParams, places, handlePlaceMarkerPress]);
 
   /** Same matching rules as the map search bar; reused for ride destination search. */
   const filterPlacesByQuery = useCallback(
@@ -1042,13 +1044,29 @@ export default function RegularHomeScreen({}: Props) {
     setRideFieldHighlight((h) => ({ ...h, destination: false }));
   };
 
-  const getRoute = async () => {
+  const getRoute = async (destOverride?: { lat: number; lon: number; name?: string } | null) => {
+    const destSnapshot = destOverride ?? destination;
+    if (!destSnapshot) {
+      return;
+    }
+    pickMapTapInFlightRef.current = false;
     await runOpenDrivingRoutePreviewFromHome({
       navigation,
-      destination,
+      destination: destSnapshot,
       t,
       setRouteLoading,
-      setUserLocation,
+    });
+  };
+
+  const startNavigationFromMapPick = () => {
+    const destSnapshot = destination;
+    void startMapPickNavigation({
+      navigation,
+      destination: destSnapshot,
+      t,
+      setRouteLoading,
+      onModalClose: () => setMapPickChoiceModalVisible(false),
+      pickMapTapInFlightRef,
     });
   };
 
@@ -1066,26 +1084,15 @@ export default function RegularHomeScreen({}: Props) {
       setPickPreviewCoords(null);
       setSelectedPlace(null);
       setSearchResults([]);
-      const dest = { lat, lon, name: t("map_selected_destination_label") };
-      setCustomPin(null);
-      setDestination(dest);
-      setRideDestinationInput(dest.name || "");
-      if (rideMapPickSkipRouteRef.current) {
-        rideMapPickSkipRouteRef.current = false;
-        const pending = pendingRideDriverRef.current;
-        pendingRideDriverRef.current = null;
-        if (pending) {
-          setSelectedDriver(pending);
-        }
-      } else {
-        await runOpenDrivingRoutePreviewFromHome({
-          navigation,
-          destination: dest,
-          t,
-          setRouteLoading,
-          setUserLocation,
-        });
-      }
+      const pick = mapPickStateForChoicePanel(
+        lat,
+        lon,
+        t("map_selected_destination_label")
+      );
+      setCustomPin(pick.customPin);
+      setDestination(pick.destination);
+      setRideDestinationInput(pick.rideDestinationInput);
+      setMapPickChoiceModalVisible(true);
     } finally {
       pickMapTapInFlightRef.current = false;
     }
@@ -1095,8 +1102,7 @@ export default function RegularHomeScreen({}: Props) {
     if (!userId || !selectedDriver) {
       return;
     }
-    if (hasBlockingPassengerRide) {
-      appAlert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
+    if (alertIfCannotBookRide()) {
       return;
     }
 
@@ -1182,7 +1188,11 @@ export default function RegularHomeScreen({}: Props) {
       await createRideRequest(payload);
       setRideSendErrorHint(null);
       setSelectedDriver(null);
-      void refreshPassengerLatestRide();
+      setMapPickChoiceModalVisible(false);
+      if (customPin) {
+        dismissPickedDestinationPanel();
+      }
+      void refreshPassengerRide();
       appAlert(t("success"), t("ride_request_sent"));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1200,8 +1210,7 @@ export default function RegularHomeScreen({}: Props) {
       appAlert(t("error"), t("ride_session_invalid"));
       return;
     }
-    if (hasBlockingPassengerRide) {
-      appAlert(t("ride_active_request_title"), t("ride_active_request_message"), [{ text: t("ok") || "OK" }]);
+    if (alertIfCannotBookRide()) {
       return;
     }
     if (!userLocation) {
@@ -1254,6 +1263,7 @@ export default function RegularHomeScreen({}: Props) {
       <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
+        onRegionWillChange={onRegionWillChange}
         onRegionDidChange={onRegionDidChange}
         onLongPress={handleMapLongPress}
         onPress={(e: any) => {
@@ -1275,7 +1285,7 @@ export default function RegularHomeScreen({}: Props) {
               return distance < 0.001;
             });
             if (nearestPlace) {
-              handlePlaceTap(nearestPlace);
+              handlePlaceMarkerPress(nearestPlace);
               return;
             }
 
@@ -1316,17 +1326,7 @@ export default function RegularHomeScreen({}: Props) {
           }
         }}
       >
-        <Camera
-          ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: INITIAL_CENTER,
-            zoomLevel: INITIAL_ZOOM,
-          }}
-          maxBounds={NEGEV_BOUNDS}
-          minZoomLevel={10}
-          maxZoomLevel={18}
-          animationMode="flyTo"
-        />
+        <RegularHomeMapCamera cameraRef={cameraRef} />
 
         {/*
          * User location is rendered LAST in this MapView — see the bottom of the children list,
@@ -1350,7 +1350,7 @@ export default function RegularHomeScreen({}: Props) {
           </PointAnnotation>
         )}
 
-        {showAnnotations && customPin && (
+        {showAnnotations && showCustomPinOnMap && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
             <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
@@ -1358,7 +1358,11 @@ export default function RegularHomeScreen({}: Props) {
           </PointAnnotation>
         )}
 
-        {showAnnotations && destination && !customPin && (
+        {/*
+         * Destination pin (📍) only for free map picks. Known places: selected MapPin only;
+         * destination stays in state for nav / ride CTAs but is not drawn on the map.
+         */}
+        {showAnnotations && showDestinationPinOnMap && destination && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
             <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
@@ -1366,61 +1370,28 @@ export default function RegularHomeScreen({}: Props) {
           </PointAnnotation>
         )}
 
-        {showAnnotations &&
-          !isPickingMapDestination &&
-          places.map((place) => {
-            if (!place.location) return null;
-
-            const isSelected = selectedPlace?.id === place.id;
-            const placeIcon = getPlaceIcon(place);
-
-            // Visibility: PUBLIC_SERVICE is always rendered (smooth shrink to ~0.85x at low
-            // zoom in MapPin handles "feels too big at far zoom"); BUSINESS still gates so
-            // city view doesn't get cluttered, but with a much lower threshold than before.
-            // Selected place always renders regardless so the user never loses their pick.
-            let visibilityZoom = 0;
-            let labelZoom = 0;
-            if (place.place_type === "PUBLIC_SERVICE") {
-              visibilityZoom = PUBLIC_SERVICE_VISIBILITY_ZOOM;
-              labelZoom = PUBLIC_SERVICE_LABEL_ZOOM;
-            } else if (place.place_type === "BUSINESS") {
-              visibilityZoom = BUSINESS_VISIBILITY_ZOOM;
-              labelZoom = BUSINESS_LABEL_ZOOM;
+        {showAnnotations && !isPickingMapDestination ? (
+          <HomeMapPlaceMarkers
+            places={places}
+            currentZoom={markerZoom}
+            anchorLatitude={userLocation?.lat ?? INITIAL_CENTER[1]}
+            selectedPlace={selectedPlace}
+            getPlaceIcon={getPlaceIcon}
+            getPlaceName={getPlaceName}
+            onPlaceTap={handlePlaceMarkerPress}
+            onClusterTap={(lat, lon) =>
+              requestCameraMove(
+                {
+                  centerCoordinate: [lon, lat],
+                  zoomLevel: zoomInTargetForCluster(markerZoom),
+                  animationDuration: 500,
+                },
+                { userInitiated: true, reason: "place-cluster-tap" }
+              )
             }
-            const shouldShow = currentZoom >= visibilityZoom || isSelected;
-            const shouldShowLabel = currentZoom >= labelZoom || isSelected;
-
-            if (!shouldShow) return null;
-
-            // `getPlaceIcon` already returns one of the recognised category keys; if a future
-            // backend value sneaks through we fall back to the neutral "default" pin so the
-            // place is still tappable and visible.
-            const category: MapPinCategory =
-              place.place_type === "BUSINESS"
-                ? "business"
-                : ((placeIcon.type as MapPinCategory) ?? "default");
-
-            return (
-              <PointAnnotation
-                key={`home-place-${place.id}`}
-                id={`home-place-${place.id}`}
-                coordinate={[place.location.lon, place.location.lat]}
-                onSelected={() => {
-                  console.log("Place selected:", place.id, place.name);
-                  handlePlaceTap(place);
-                }}
-              >
-                <MapPin
-                  category={category}
-                  colorOverride={placeIcon.color}
-                  selected={isSelected}
-                  zoom={currentZoom}
-                  label={getPlaceName(place)}
-                  showLabel={shouldShowLabel}
-                />
-              </PointAnnotation>
-            );
-          })}
+            useRegularHomeTapSplit
+          />
+        ) : null}
 
         {/*
          * User location dot — rendered AFTER place pins so it sits on top in MapLibre's
@@ -1429,7 +1400,7 @@ export default function RegularHomeScreen({}: Props) {
          */}
         {showAnnotations && userLocation && !isPickingMapDestination && (
           <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <UserLocationDot zoom={currentZoom} />
+            <UserLocationDot zoom={markerZoom} />
           </PointAnnotation>
         )}
 
@@ -1445,16 +1416,17 @@ export default function RegularHomeScreen({}: Props) {
                 id={item.id}
                 coordinate={[item.lon, item.lat]}
                 anchor={{ x: 0.5, y: 1 }}
-                onSelected={() => handleClusterTap(item.lat, item.lon)}
               >
-                <RideDriverClusterMarker
-                  count={item.drivers.length}
-                  emphasized={emphasized}
-                  accessibilityLabel={
-                    t("map_driver_cluster_label", { count: item.drivers.length }) ||
-                    `${item.drivers.length} nearby drivers`
-                  }
-                />
+                <Pressable onPress={() => handleClusterTap(item.lat, item.lon)}>
+                  <RideDriverClusterMarker
+                    count={item.drivers.length}
+                    emphasized={emphasized}
+                    accessibilityLabel={
+                      t("map_driver_cluster_label", { count: item.drivers.length }) ||
+                      `${item.drivers.length} nearby drivers`
+                    }
+                  />
+                </Pressable>
               </PointAnnotation>
             );
           }
@@ -1503,7 +1475,7 @@ export default function RegularHomeScreen({}: Props) {
           return city || cat || undefined;
         }}
         onSelectPlace={(place) => {
-          handlePlaceTap(place);
+          handlePlaceMarkerPress(place);
           setSearchQuery("");
         }}
         emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
@@ -1511,6 +1483,22 @@ export default function RegularHomeScreen({}: Props) {
         onSearchFocus={dismissPlaceDetailsPanel}
       />
 
+      <TouchableOpacity
+        style={[styles.locateMeFab, { bottom: mapLocateMeFabBottom }]}
+        onPress={() => void handleLocateMePress()}
+        disabled={locateMeLoading}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={t("my_location")}
+      >
+        {locateMeLoading ? (
+          <ActivityIndicator size="small" color="#0f5b63" />
+        ) : (
+          <Ionicons name="locate" size={22} color="#0f5b63" />
+        )}
+      </TouchableOpacity>
+
+      {!mapPickChoiceModalVisible ? (
       <TouchableOpacity
         style={[
           styles.pickDestinationFab,
@@ -1543,8 +1531,9 @@ export default function RegularHomeScreen({}: Props) {
           color="#FFFFFF"
         />
       </TouchableOpacity>
+      ) : null}
 
-      {isPickingMapDestination && (
+      {isPickingMapDestination && !mapPickChoiceModalVisible && (
         <View
           style={[styles.pickDestinationBanner, { bottom: mapPickBannerBottom }]}
           pointerEvents="box-none"
@@ -1720,99 +1709,18 @@ export default function RegularHomeScreen({}: Props) {
               )}
             </View>
 
-            {/* Action buttons: two rows (share/save, then nav/ride) so labels are not truncated */}
-            <View style={styles.actionButtonsBlock}>
-              <View style={styles.actionButtonsRowTop}>
-                <TouchableOpacity style={styles.actionButtonSecondary}>
-                  <Ionicons name="share-outline" size={20} color="#0f5b63" />
-                  <Text style={styles.actionButtonSecondaryText}>
-                    {t("share") || "שיתוף"}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionButtonSecondary}
-                  onPress={handleToggleSave}
-                  disabled={savingPlace || !userId}
-                >
-                  <Ionicons
-                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"}
-                    size={20}
-                    color={isPlaceSaved ? "#0f5b63" : "#0f5b63"}
-                  />
-                  <Text style={styles.actionButtonSecondaryText}>
-                    {isPlaceSaved ? t("saved") || "שמור" : t("save") || "שמירה"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              {destination && (
-                <View style={styles.actionButtonsRowNavRide}>
-                  <TouchableOpacity
-                    style={[styles.actionButtonPrimary, styles.actionButtonPrimarySplit]}
-                    onPress={getRoute}
-                    disabled={routeLoading || rideWithDriverLoading}
-                  >
-                    {routeLoading ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <>
-                        <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
-                        <Text
-                          style={[styles.actionButtonPrimaryText, styles.actionButtonCtaLabel]}
-                        >
-                          {t("start_navigation") || "Start Navigation"}
-                        </Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.actionButtonRideWithDriver,
-                      styles.actionButtonPrimarySplit,
-                      hasBlockingPassengerRide && styles.actionButtonRideWithDriverMuted,
-                    ]}
-                    onPress={handleRideWithDriverFromPlaceDetails}
-                    disabled={rideWithDriverLoading}
-                  >
-                    {rideWithDriverLoading ? (
-                      <ActivityIndicator size="small" color="#0f5b63" />
-                    ) : (
-                      <>
-                        <Ionicons
-                          name="car-sport"
-                          size={20}
-                          color={hasBlockingPassengerRide ? "#999" : "#0f5b63"}
-                        />
-                        <Text
-                          style={[
-                            styles.actionButtonRideWithDriverText,
-                            hasBlockingPassengerRide && styles.actionButtonRideWithDriverTextMuted,
-                            styles.actionButtonCtaLabel,
-                          ]}
-                        >
-                          {t("ride_with_driver_button")}
-                        </Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {!destination && (
-                <TouchableOpacity
-                  style={styles.actionButtonPrimaryFull}
-                  onPress={() => {
-                    if (selectedPlace && selectedPlace.location) {
-                      handlePlaceTap(selectedPlace);
-                    }
-                  }}
-                >
-                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.actionButtonPrimaryText}>
-                    {t("set_destination") || "Set Destination"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            <PlaceDetailsActionButtons
+              hasDestination={!!destination}
+              routeLoading={routeLoading}
+              rideWithDriverLoading={rideWithDriverLoading}
+              rideWithDriverMuted={rideWithDriverMuted}
+              isPlaceSaved={isPlaceSaved}
+              savingPlace={savingPlace}
+              canSave={!!userId}
+              onToggleSave={() => void handleToggleSave()}
+              onStartNavigation={() => void getRoute()}
+              onRideWithDriver={() => void handleRideWithDriverFromPlaceDetails()}
+            />
 
 
             {/* Announcement Banner */}
@@ -2054,21 +1962,18 @@ export default function RegularHomeScreen({}: Props) {
         </Animated.View>
       )}
 
-      {/*
-       * Panel for unnamed map-picked destinations (long-press flow).
-       * Mirrors the action footer of the known-place bottom sheet so the user has
-       * the same Start-Navigation + Ride-with-Driver entry points without exposing
-       * raw coordinates. Hidden while the place sheet is open or while the user is
-       * driver-shopping (selectedDriver) so it never overlaps other ride UI.
-       */}
-      <MapPickedDestinationPanel
-        visible={isPickedDestinationActive && !selectedDriver}
+      <MapPickedDestinationChoiceModal
+        visible={mapPickChoiceModalVisible}
         onDismiss={dismissPickedDestinationPanel}
-        onStartNavigation={() => void getRoute()}
-        onRideWithDriver={() => void handleRideWithDriverFromPlaceDetails()}
+        onStartNavigation={startNavigationFromMapPick}
+        onRideWithDriver={() => {
+          setMapPickChoiceModalVisible(false);
+          pickMapTapInFlightRef.current = false;
+          void handleRideWithDriverFromPlaceDetails();
+        }}
         navigationLoading={routeLoading}
         rideWithDriverLoading={rideWithDriverLoading}
-        rideWithDriverMuted={hasBlockingPassengerRide}
+        rideWithDriverMuted={rideWithDriverMuted}
       />
 
       {/* Compact, map-anchored driver info popup (replaces legacy form modal + list picker). */}
@@ -2230,6 +2135,24 @@ const styles = StyleSheet.create({
   // Place / category marker styles previously lived here. They have been moved into the
   // reusable `MapPin` component (`src/components/map/MapPin.tsx`), which now owns the disc,
   // pin point, label chip, and selected-state visuals — see that file for the design tokens.
+  locateMeFab: {
+    position: "absolute",
+    right: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1100,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.14)",
+  },
   pickDestinationFab: {
     position: "absolute",
     left: 20,

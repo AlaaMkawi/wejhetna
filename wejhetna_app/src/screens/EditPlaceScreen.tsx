@@ -37,6 +37,17 @@ export default function EditPlaceScreen() {
 
   const { placeId, userRole, userId } = route.params;
 
+  // Admin uses the shared place-management screen (ManageMyBusiness admin mode).
+  useEffect(() => {
+    if (userRole === "ADMIN") {
+      navigation.replace("ManageMyBusiness", {
+        fromMap: true,
+        adminPlaceId: placeId,
+        adminUserId: userId,
+      });
+    }
+  }, [userRole, placeId, userId, navigation]);
+
   const [place, setPlace] = useState<PlaceForMap | null>(null);
   const [name, setName] = useState("");
   const [nameAr, setNameAr] = useState("");
@@ -321,6 +332,14 @@ export default function EditPlaceScreen() {
     } finally {
       setUpdating(false);
     }
+  }
+
+  if (userRole === "ADMIN") {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={DARK_TEAL} />
+      </View>
+    );
   }
 
   if (loading) {

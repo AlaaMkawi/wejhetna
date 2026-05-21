@@ -30,27 +30,30 @@ export function useHomeMapScreen(options: UseHomeMapScreenOptions = {}) {
   const screenActiveRef = lifecycle.screenActiveRef;
 
   const prepareLeaveForRoute = useCallback(() => {
-    logHomeMapNav("prepareLeaveForRoute");
+    if (Platform.OS !== "ios") {
+      return;
+    }
+    logHomeMapNav("ios:prepareLeaveForRoute");
     onPrepareLeaveRef.current?.();
     hideOverlaysRef.current();
     screenActiveRef.current = false;
-    if (Platform.OS === "ios") {
-      setMapShellMounted(false);
-      suppressMapOverlays();
-      logHomeMapNav("mapChildrenRemoved");
-    }
+    setMapShellMounted(false);
+    suppressMapOverlays();
+    logHomeMapNav("ios:mapChildrenRemoved");
   }, [screenActiveRef]);
 
   useFocusEffect(
     useCallback(() => {
       screenActiveRef.current = true;
-      registerHomeMapNavigationPrep({ prepareLeaveForRoute });
       if (Platform.OS === "ios") {
+        registerHomeMapNavigationPrep({ prepareLeaveForRoute });
         setMapShellMounted(true);
       }
       return () => {
         screenActiveRef.current = false;
-        unregisterHomeMapNavigationPrep();
+        if (Platform.OS === "ios") {
+          unregisterHomeMapNavigationPrep();
+        }
       };
     }, [prepareLeaveForRoute, screenActiveRef])
   );

@@ -32,6 +32,7 @@ import {
   ProfileStatTile,
   LogoutConfirmModal,
 } from "../components/profile";
+import AttachmentPreview from "../components/driver/AttachmentPreview";
 import type { StatusTone } from "../components/ui/StatusDot";
 
 // Translated, role-aware label map for the header badge.
@@ -863,10 +864,9 @@ export default function ProfileScreen() {
                       label={t("car_license") || "Car License"}
                       icon="document-outline"
                     >
-                      <Image
-                        source={{ uri: driverInfo.vehicle.car_license_image_url }}
-                        style={styles.documentImage}
-                        resizeMode="cover"
+                      <AttachmentPreview
+                        url={driverInfo.vehicle.car_license_image_url}
+                        imageStyle={styles.documentImage}
                       />
                     </ProfileDetailRow>
                   ) : null}
@@ -875,10 +875,9 @@ export default function ProfileScreen() {
                       label={t("car_insurance") || "Car Insurance"}
                       icon="shield-checkmark-outline"
                     >
-                      <Image
-                        source={{ uri: driverInfo.vehicle.car_insurance_image_url }}
-                        style={styles.documentImage}
-                        resizeMode="cover"
+                      <AttachmentPreview
+                        url={driverInfo.vehicle.car_insurance_image_url}
+                        imageStyle={styles.documentImage}
                       />
                     </ProfileDetailRow>
                   ) : null}
@@ -909,6 +908,35 @@ export default function ProfileScreen() {
                   </Text>
                 </View>
               )}
+            </ProfileSection>
+          ) : null}
+
+          {role === "DRIVER" && userProfile?.status === "ACTIVE" ? (
+            <ProfileSection
+              title={t("vehicle_requests_section") || "בקשות רכב"}
+              icon="document-text-outline"
+              defaultOpen
+            >
+              {driverInfo?.vehicle_update_blocked ? (
+                <Text style={styles.blockedHint}>
+                  {t("driver_vehicle_blocked_profile_hint") ||
+                    "אינך יכול לבצע נסיעות עד אישור בקשת רכב חדשה."}
+                </Text>
+              ) : null}
+              <ProfileShortcutCard
+                icon="create-outline"
+                tone="primary"
+                title={t("submit_vehicle_update_request") || "שליחת בקשה לעדכון/הוספת רכב"}
+                isRTL={isRTL}
+                onPress={() => navigation.navigate("DriverVehicleUpdateRequest")}
+              />
+              <ProfileShortcutCard
+                icon="list-outline"
+                tone="info"
+                title={t("my_requests") || "הבקשות שלי"}
+                isRTL={isRTL}
+                onPress={() => navigation.navigate("DriverVehicleRequestsList")}
+              />
             </ProfileSection>
           ) : null}
 
@@ -1646,6 +1674,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: Spacing.xxl,
     gap: Spacing.sm,
+  },
+  blockedHint: {
+    color: Colors.error,
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: Spacing.sm,
+    lineHeight: 20,
   },
   emptyStateText: {
     fontSize: Typography.sizeSm,

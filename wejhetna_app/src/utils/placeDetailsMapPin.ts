@@ -18,3 +18,33 @@ export function destinationAfterClosingPlaceDetails(
   const sameLon = Math.abs(destination.lon - closedPlace.location.lon) < COORD_EPS;
   return sameLat && sameLon ? null : destination;
 }
+
+function destinationMatchesPlace(
+  destination: MapDest,
+  place: PlaceForMap | null
+): boolean {
+  if (!destination || !place?.location) return false;
+  return (
+    Math.abs(destination.lat - place.location.lat) < COORD_EPS &&
+    Math.abs(destination.lon - place.location.lon) < COORD_EPS
+  );
+}
+
+/** 📍 destination pin — only for free map picks / unnamed points, never with a known place sheet open. */
+export function shouldShowDestinationMapPin(
+  destination: MapDest,
+  customPin: { lat: number; lon: number } | null,
+  selectedPlace: PlaceForMap | null
+): boolean {
+  if (!destination || customPin || selectedPlace) return false;
+  if (destinationMatchesPlace(destination, selectedPlace)) return false;
+  return true;
+}
+
+/** Red custom-pin dot — map pick only, not while a known place is selected. */
+export function shouldShowCustomMapPin(
+  customPin: { lat: number; lon: number } | null,
+  selectedPlace: PlaceForMap | null
+): boolean {
+  return !!customPin && !selectedPlace;
+}

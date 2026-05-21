@@ -6,12 +6,10 @@ export function logRouteDetailsMapExit(
   step: string,
   extra?: Record<string, unknown>
 ): void {
-  if (Platform.OS === "ios" || __DEV__) {
-    if (extra) {
-      console.log(LOG_PREFIX, step, extra);
-    } else {
-      console.log(LOG_PREFIX, step);
-    }
+  if (extra) {
+    console.log(LOG_PREFIX, step, extra);
+  } else {
+    console.log(LOG_PREFIX, step);
   }
 }
 

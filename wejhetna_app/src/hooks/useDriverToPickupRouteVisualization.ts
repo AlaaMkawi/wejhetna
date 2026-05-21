@@ -10,6 +10,12 @@ import {
   polylineLengthMeters,
   trimPolylineAheadOfUser,
 } from "../utils/routePolyline";
+import { zeroNavMetricsIfForced } from "../utils/navMetricsAtArrival";
+
+export type DriverToPickupRouteVisualizationOptions = {
+  /** When true, remaining distance and ETA read as 0 (pickup/destination reached). */
+  forceZeroMetrics?: boolean;
+};
 
 /** Same throttling as RideTrackingMapScreen — OSRM refetch only when needed. */
 const OSRM_MIN_INTERVAL_MS = 28_000;
@@ -36,8 +42,10 @@ export type DriverToPickupRouteVisualization = {
  */
 export function useDriverToPickupRouteVisualization(
   driverDot: { lat: number; lon: number } | null,
-  pickup: { lat: number; lon: number } | null
+  pickup: { lat: number; lon: number } | null,
+  options?: DriverToPickupRouteVisualizationOptions
 ): DriverToPickupRouteVisualization {
+  const forceZeroMetrics = options?.forceZeroMetrics === true;
   const [routeGeometryCoords, setRouteGeometryCoords] = useState<RouteLineStringCoords | null>(null);
   const [osrmLegDurationSec, setOsrmLegDurationSec] = useState<number | null>(null);
   const [osrmLegDistanceM, setOsrmLegDistanceM] = useState<number | null>(null);
@@ -147,11 +155,17 @@ export function useDriverToPickupRouteVisualization(
     return Math.max(0, (remainM / totalM) * osrmLegDurationSec);
   }, [osrmLegDurationSec, osrmLegDistanceM, routeGeometryCoords, trimmed?.remainingLengthMeters]);
 
+  const zeroed = zeroNavMetricsIfForced(
+    remainingDistanceMeters,
+    etaSecondsRemaining,
+    forceZeroMetrics
+  );
+
   return {
     routeBackdropFc,
     routeRemainingFc,
-    remainingDistanceMeters,
-    etaSecondsRemaining,
+    remainingDistanceMeters: zeroed.remainingDistanceMeters,
+    etaSecondsRemaining: zeroed.etaSecondsRemaining,
     routeLoading,
     osrmLegDurationSec,
     /** Last OSRM leg length (meters), for UI such as progress along the leg. */

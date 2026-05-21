@@ -78,7 +78,6 @@ import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScr
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import {
-  completeRideTrip,
   getDriverRideRequests,
   getRegularLatestRideRequest,
   markRideArrived,
@@ -86,7 +85,16 @@ import {
   parseStoredUserId,
   updateDriverLocation,
 } from "../../api/rides";
+import {
+  completeRideTripAtDestination,
+  TRIP_DESTINATION_ARRIVAL_POPUP_MS,
+} from "../../utils/rideTripDestinationComplete";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
+import {
+  formatNavRemainingDistanceMeters,
+  navRemainingMinutesFromSeconds,
+  shouldLockNavMetricsForProximity,
+} from "../../utils/navMetricsAtArrival";
 import {
   clearNavigationRouteSnapshot,
   saveNavigationRouteSnapshot,
@@ -251,6 +259,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [etaTick, setEtaTick] = useState(0);
   const watchIdRef = useRef<number | null>(null);
   const hasArrivedRef = useRef(false);
+  /** Drives UI to show 0 remaining distance/time when destination or ride leg is reached. */
+  const [navAtArrival, setNavAtArrival] = useState(false);
   const autoStartedLiveNavRef = useRef(false);
   const [showFullRoute, setShowFullRoute] = useState(false);
   const [isFollowingUser, setIsFollowingUser] = useState(false);
@@ -261,11 +271,9 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const [rideDestModalOpen, setRideDestModalOpen] = useState(false);
   // Ride-only arrival modal: replaces the generic "You arrived" popup while a ride is active.
   const [rideTripArrivedModal, setRideTripArrivedModal] = useState(false);
-  /** `driver` = waiting for passenger to end trip; `passenger` = must tap to call `complete`. */
-  const [tripArrivalKind, setTripArrivalKind] = useState<null | "driver" | "passenger">(null);
-  const [completingRideTrip, setCompletingRideTrip] = useState(false);
-  /** Trip leg: passenger follows driver GPS — fire destination arrival once from driver position. */
-  const tripDestArrivalPromptedRef = useRef(false);
+  /** Trip leg: destination arrival UI + complete API fired once per mount. */
+  const tripDestArrivalHandledRef = useRef(false);
+  const tripCompleteRequestedRef = useRef(false);
   // Pickup-mode arrival: driver reached passenger's pickup — 5 sec auto-dismiss popup + server notify.
   const [ridePickupArrivedModal, setRidePickupArrivedModal] = useState(false);
   /** Passenger pickup viewer: detect `arrived` from API even when driver_live stops updating. */
@@ -359,8 +367,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
     setSessionPhase(navigationPhaseParam === "active" ? "active" : "preview");
     hasArrivedRef.current = false;
-    tripDestArrivalPromptedRef.current = false;
-    setTripArrivalKind(null);
+    setNavAtArrival(false);
+    tripDestArrivalHandledRef.current = false;
+    tripCompleteRequestedRef.current = false;
+    setRideTripArrivedModal(false);
     autoStartedLiveNavRef.current = false;
     lastProactiveRouteAtRef.current = 0;
     setShowArrivalModal(false);
@@ -464,7 +474,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
       const last = lastGoodFixRef.current;
       const coords = activeRouteCoordsRef.current;
-      if (!last || coords.length < 2) return;
+      if (!last || coords.length < 2 || hasArrivedRef.current) return;
 
       const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
         last.lat,
@@ -551,15 +561,8 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     }
   }, [sessionPhase, initialCoords, fitCameraToRoute, mapLayersMounted, screenMapActive, screenActiveRef]);
 
-  const formatDistance = (meters: number): string => {
-    if (meters < 1000) {
-      return `${Math.round(meters)} m`;
-    }
-    return `${(meters / 1000).toFixed(1)} km`;
-  };
-
-  const formatDuration = (seconds: number): string => {
-    const minutes = Math.max(1, Math.round(seconds / 60));
+  const formatDuration = (seconds: number, atArrival = false): string => {
+    const minutes = navRemainingMinutesFromSeconds(seconds, { atArrival });
     if (minutes < 60) {
       return `${minutes} min`;
     }
@@ -567,6 +570,59 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     const mins = minutes % 60;
     return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
   };
+
+  const applyNavArrivalZeroMetrics = useCallback(() => {
+    hasArrivedRef.current = true;
+    setNavAtArrival(true);
+    setRemainingSeconds(0);
+    setRemainingRouteMeters(0);
+    setStagnationDelaySec(0);
+  }, []);
+
+  const enterTripDestinationArrivalUi = useCallback(() => {
+    applyNavArrivalZeroMetrics();
+    const wid = watchIdRef.current;
+    if (wid != null) {
+      NativeGeolocation.clearWatch(wid);
+    }
+    watchIdRef.current = null;
+    setSessionPhase("preview");
+    setIsFollowingUser(false);
+    isNavigatingRef.current = false;
+  }, [applyNavArrivalZeroMetrics]);
+
+  /** Final destination on a ride trip: complete on server immediately + show auto-dismiss popup. */
+  const handleTripDestinationArrival = useCallback(() => {
+    if (tripDestArrivalHandledRef.current) return;
+    const rc = rideContextRef.current;
+    if (!rc || rc.mode === "pickup") return;
+    tripDestArrivalHandledRef.current = true;
+    enterTripDestinationArrivalUi();
+    setRideTripArrivedModal(true);
+    if (!tripCompleteRequestedRef.current) {
+      tripCompleteRequestedRef.current = true;
+      void (async () => {
+        try {
+          const stored = await AsyncStorage.getItem("userId");
+          const uid = parseStoredUserId(stored);
+          if (uid == null) return;
+          await completeRideTripAtDestination(rc.rideRequestId, rc.role, uid);
+        } catch {
+          /* Other device or poll may have completed; popup + auto-exit still run. */
+        }
+      })();
+    }
+  }, [enterTripDestinationArrivalUi]);
+
+  /** Peer completed the trip first — same popup/exit, no second complete call. */
+  const showTripDestinationArrivalFromRemote = useCallback(() => {
+    if (tripDestArrivalHandledRef.current) return;
+    const rc = rideContextRef.current;
+    if (!rc || rc.mode === "pickup") return;
+    tripDestArrivalHandledRef.current = true;
+    enterTripDestinationArrivalUi();
+    setRideTripArrivedModal(true);
+  }, [enterTripDestinationArrivalUi]);
 
   const formatEtaClock = (date: Date): string => {
     const locale = i18n.language === "he" ? "he-IL" : i18n.language === "ar" ? "ar" : "en-GB";
@@ -582,7 +638,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const applyNewRoute = useCallback(
     (coords: RouteLineStringCoords, distanceM: number, durationS: number) => {
-      if (!screenActiveRef.current) return;
+      if (!screenActiveRef.current || hasArrivedRef.current) return;
       activeRouteCoordsRef.current = [...coords];
       legDistanceRef.current = distanceM;
       legDurationRef.current = durationS;
@@ -609,7 +665,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   const maybeReroute = useCallback(
     async (lat: number, lon: number) => {
-      if (!screenActiveRef.current) return;
+      if (!screenActiveRef.current || hasArrivedRef.current) return;
       if (!isOnlineRef.current) return;
       const dest = destinationRef.current;
       if (!dest) return;
@@ -636,7 +692,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   /** Full OSRM refresh from current position (throttled) — same engine as off-route, keeps ETA/distance in sync with the road network. */
   const refreshLiveRouteFromServer = useCallback(
     async (lat: number, lon: number) => {
-      if (!screenActiveRef.current) return;
+      if (!screenActiveRef.current || hasArrivedRef.current) return;
       if (!isOnlineRef.current) return;
       const dest = destinationRef.current;
       if (!dest) return;
@@ -661,6 +717,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   );
 
   const leaveScreenToHome = useCallback(async () => {
+    emitLiveNavigationExit();
     if (Platform.OS === "ios") {
       const homeRoute = await resolveHomeRootRoute();
       dispatchIosResetToHomeMap(navigation, homeRoute);
@@ -690,6 +747,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       setRerouting(false);
 
       if (Platform.OS !== "ios") {
+        logRouteDetailsMapExit(`${logKey}:androidGoBack`);
         hideOverlays();
         setMapLayersMounted(false);
         setScreenMapActive(false);
@@ -741,6 +799,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     setDisplayHeading(null);
     setCurrentHeading(null);
     hasArrivedRef.current = false;
+    setNavAtArrival(false);
     setShowArrivalModal(false);
     clearNavigationRouteSnapshot();
 
@@ -771,6 +830,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
     setShowFullRoute(false);
     hasArrivedRef.current = false;
+    setNavAtArrival(false);
     setShowArrivalModal(false);
     headingForSmoothRef.current = null;
     setDisplayHeading(null);
@@ -974,27 +1034,35 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           if (dest && !hasArrivedRef.current) {
             const dDest = calculateDistance(latitude, longitude, dest.lat, dest.lon);
             if (dDest <= ARRIVAL_RADIUS_M) {
-              hasArrivedRef.current = true;
+              applyNavArrivalZeroMetrics();
               const rc = rideContextRef.current;
               if (rc) {
                 // Ride-only dedicated arrival UI; do NOT show the generic personal-navigation popup.
                 if (rc.mode === "pickup") {
+                  applyNavArrivalZeroMetrics();
                   setRidePickupArrivedModal(true);
+                  const widPickup = watchIdRef.current;
+                  if (widPickup != null) {
+                    NativeGeolocation.clearWatch(widPickup);
+                  }
+                  watchIdRef.current = null;
+                  setSessionPhase("preview");
+                  setIsFollowingUser(false);
+                  isNavigatingRef.current = false;
                 } else {
-                  setTripArrivalKind("driver");
-                  setRideTripArrivedModal(true);
+                  handleTripDestinationArrival();
                 }
               } else {
                 setShowArrivalModal(true);
+                const wid = watchIdRef.current;
+                if (wid != null) {
+                  NativeGeolocation.clearWatch(wid);
+                }
+                watchIdRef.current = null;
+                setSessionPhase("preview");
+                setIsFollowingUser(false);
+                isNavigatingRef.current = false;
               }
-              const wid = watchIdRef.current;
-              if (wid != null) {
-                NativeGeolocation.clearWatch(wid);
-              }
-              watchIdRef.current = null;
-              setSessionPhase("preview");
-              setIsFollowingUser(false);
-              isNavigatingRef.current = false;
               return;
             }
           }
@@ -1086,7 +1154,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           const shouldProgress =
             coords.length >= 2 &&
             (lastProgressAtRef.current === 0 || now - lastProgressAtRef.current > 3200);
-          if (shouldProgress) {
+          if (shouldProgress && !hasArrivedRef.current) {
             lastProgressAtRef.current = now;
             const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
               latitude,
@@ -1114,14 +1182,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
             prevRemainingLengthMetersRef.current = remainingLengthMeters;
           }
 
-          if (isNavigatingRef.current) {
+          if (isNavigatingRef.current && !hasArrivedRef.current) {
             const tPro = Date.now();
             if (tPro - lastProactiveRouteAtRef.current >= PROACTIVE_ROUTE_REFRESH_MS) {
               void refreshLiveRouteFromServer(latitude, longitude);
             }
           }
 
-          {
+          if (!hasArrivedRef.current) {
             const anc0 = stagnationAnchorRef.current;
             if (anc0 == null) {
               stagnationAnchorRef.current = { lat: latitude, lon: longitude };
@@ -1251,11 +1319,14 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     if (rideContext?.mode === "pickup") {
       // Pickup leg: passenger phone must not trigger arrival; driver marks arrived separately.
       hasArrivedRef.current = true;
-      tripDestArrivalPromptedRef.current = false;
+      tripDestArrivalHandledRef.current = false;
+      tripCompleteRequestedRef.current = false;
     } else {
       // Trip to destination: arrival is derived from driver's live position vs destination.
       hasArrivedRef.current = false;
-      tripDestArrivalPromptedRef.current = false;
+      setNavAtArrival(false);
+      tripDestArrivalHandledRef.current = false;
+      tripCompleteRequestedRef.current = false;
     }
     setSessionPhase("active");
     setIsFollowingUser(true);
@@ -1319,7 +1390,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           !passengerPickupArrivedFromServerRef.current
         ) {
           passengerPickupArrivedFromServerRef.current = true;
-          hasArrivedRef.current = true;
+          applyNavArrivalZeroMetrics();
           isNavigatingRef.current = false;
           isFollowingRef.current = false;
           setSessionPhase("preview");
@@ -1345,7 +1416,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         displayLocationRef.current = newLoc;
 
         const coords = activeRouteCoordsRef.current;
-        if (coords.length >= 2) {
+        if (coords.length >= 2 && !hasArrivedRef.current) {
           const { trimmed, remainingLengthMeters } = trimPolylineAheadOfUser(
             lat,
             lon,
@@ -1383,7 +1454,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           }
         }
 
-        {
+        if (!hasArrivedRef.current) {
           const pWall = Date.now();
           if (passengerStagnationWallTsRef.current === 0) {
             passengerStagnationWallTsRef.current = pWall;
@@ -1449,21 +1520,17 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
           }
         }
 
-        if (
-          rideContext?.mode !== "pickup" &&
-          destinationRef.current &&
-          !tripDestArrivalPromptedRef.current
-        ) {
+        if (rideContext?.mode !== "pickup") {
+          if (normalizeRideRequestStatus(latest.status) === "completed") {
+            showTripDestinationArrivalFromRemote();
+            return;
+          }
           const dest = destinationRef.current;
-          const dDest = haversineMeters(lat, lon, dest.lat, dest.lon);
-          if (dDest <= ARRIVAL_RADIUS_M) {
-            tripDestArrivalPromptedRef.current = true;
-            hasArrivedRef.current = true;
-            setTripArrivalKind("passenger");
-            setRideTripArrivedModal(true);
-            setSessionPhase("preview");
-            isNavigatingRef.current = false;
-            setIsFollowingUser(false);
+          if (dest && !tripDestArrivalHandledRef.current) {
+            const dDest = haversineMeters(lat, lon, dest.lat, dest.lon);
+            if (dDest <= ARRIVAL_RADIUS_M) {
+              handleTripDestinationArrival();
+            }
           }
         }
       } catch {
@@ -1477,7 +1544,15 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       cancelled = true;
       clearInterval(id);
     };
-  }, [isPassengerRideFollower, destination, rideContext?.rideRequestId, rideContext?.mode, maybeReroute]);
+  }, [
+    isPassengerRideFollower,
+    destination,
+    rideContext?.rideRequestId,
+    rideContext?.mode,
+    maybeReroute,
+    handleTripDestinationArrival,
+    showTripDestinationArrivalFromRemote,
+  ]);
 
   // Passenger follower has no GPS watch — periodic full OSRM refresh from driver's last known point.
   useEffect(() => {
@@ -1514,7 +1589,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     return () => clearInterval(id);
   }, [sessionPhase]);
 
-  // Trip to destination (driver): when the passenger completes the ride, return to requests.
+  // Trip to destination (driver): sync when passenger/other side marks ride completed.
   const isDriverOnTripNav =
     rideContext?.role === "DRIVER" && rideContext?.mode !== "pickup";
   useEffect(() => {
@@ -1530,7 +1605,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         const row = list.find((r) => r.id === rideContext.rideRequestId);
         if (row && normalizeRideRequestStatus(row.status) === "completed") {
           if (!screenActiveRef.current) return;
-          leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, "DRIVER"));
+          showTripDestinationArrivalFromRemote();
         }
       } catch {
         /* ignore */
@@ -1542,7 +1617,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       cancelled = true;
       clearInterval(id);
     };
-  }, [isDriverOnTripNav, rideContext, navigation, leaveRideNavScreen]);
+  }, [
+    isDriverOnTripNav,
+    rideContext,
+    showTripDestinationArrivalFromRemote,
+  ]);
 
   /**
    * Cancellation watchdog (both roles, all ride modes): if the ride request
@@ -1635,44 +1714,22 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
     };
   }, [ridePickupArrivedModal, rideContext, navigation, leaveRideNavScreen]);
 
-  const onRideTripArrivedConfirm = useCallback(async () => {
-    if (!rideContext || completingRideTrip) return;
-    if (rideContext.role !== "REGULAR") {
-      return;
-    }
-    setCompletingRideTrip(true);
-    try {
-      const stored = await AsyncStorage.getItem("userId");
-      const uid = parseStoredUserId(stored);
-      if (uid != null) {
-        try {
-          await completeRideTrip({
-            ride_request_id: rideContext.rideRequestId,
-            regular_user_id: uid,
-          });
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (!/already completed/i.test(msg)) {
-            appAlert(t("error"), t("ride_trip_complete_failed"), [
-              { text: t("ok") || "OK" },
-            ]);
-            setCompletingRideTrip(false);
-            return;
-          }
-        }
-      }
+  // Trip destination arrival: message only (no buttons), then auto-exit to the correct tab.
+  useEffect(() => {
+    if (!rideTripArrivedModal) return;
+    if (!rideContext || rideContext.mode === "pickup") return;
+    let cancelled = false;
+    const role = rideContext.role;
+    const timer = setTimeout(() => {
+      if (cancelled || !screenActiveRef.current) return;
       setRideTripArrivedModal(false);
-      setTripArrivalKind(null);
-      leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, rideContext.role));
-    } finally {
-      setCompletingRideTrip(false);
-    }
-  }, [rideContext, completingRideTrip, leaveRideNavScreen, navigation, t]);
-
-  const onDriverTripArrivedAck = useCallback(() => {
-    setRideTripArrivedModal(false);
-    setTripArrivalKind(null);
-  }, []);
+      leaveRideNavScreen(() => navigateToUserRideRequestsTab(navigation as any, role));
+    }, TRIP_DESTINATION_ARRIVAL_POPUP_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [rideTripArrivedModal, rideContext, leaveRideNavScreen, navigation]);
 
   const showFullRouteOverview = () => {
     const coords = activeRouteCoordsRef.current;
@@ -1686,42 +1743,84 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
   const isPreview = sessionPhase === "preview";
   const isActive = sessionPhase === "active";
 
+  const atArrivalPoint =
+    navAtArrival || showArrivalModal || ridePickupArrivedModal || rideTripArrivedModal;
+
+  const distanceToDestinationMeters = useMemo(() => {
+    if (!destination) return null;
+    const ul = smoothedUserLocation ?? userLocation;
+    if (!ul) return null;
+    return calculateDistance(ul.lat, ul.lon, destination.lat, destination.lon);
+  }, [destination, smoothedUserLocation, userLocation]);
+
+  const navMetricsLocked =
+    atArrivalPoint ||
+    (isActive &&
+      shouldLockNavMetricsForProximity(remainingRouteMeters, distanceToDestinationMeters));
+
+  const navMetricsLockOpts = useMemo(
+    () => ({ atArrival: navMetricsLocked }),
+    [navMetricsLocked]
+  );
+
   /** Model-time remaining (trim × OSRM) + wall-clock when GPS shows almost no travel (traffic, waiting). */
   const effectiveRemainingSec = useMemo(() => {
+    if (navMetricsLocked) return 0;
     return Math.min(
       24 * 3600,
       Math.max(0, Math.round(remainingSeconds) + Math.round(stagnationDelaySec))
     );
-  }, [remainingSeconds, stagnationDelaySec]);
+  }, [navMetricsLocked, remainingSeconds, stagnationDelaySec]);
 
   const routeProgress01 = useMemo(() => {
+    if (navMetricsLocked) return 1;
     if (!isActive || !routeInfo.duration || routeInfo.duration <= 0) return 0;
     return Math.max(0, Math.min(1, 1 - effectiveRemainingSec / routeInfo.duration));
-  }, [isActive, routeInfo.duration, effectiveRemainingSec]);
+  }, [navMetricsLocked, isActive, routeInfo.duration, effectiveRemainingSec]);
 
   const navigationMetaLine = useMemo(
-    () =>
-      isActive
-        ? `${formatDuration(effectiveRemainingSec)} · ${formatDistance(remainingRouteMeters)}`
-        : `${formatDuration(routeInfo.duration)} · ${formatDistance(routeInfo.distance)}`,
-    [isActive, routeInfo.duration, routeInfo.distance, effectiveRemainingSec, remainingRouteMeters]
+    () => {
+      if (navMetricsLocked) {
+        return `${formatDuration(0, true)} · ${formatNavRemainingDistanceMeters(0, navMetricsLockOpts)}`;
+      }
+      return isActive
+        ? `${formatDuration(effectiveRemainingSec)} · ${formatNavRemainingDistanceMeters(
+            remainingRouteMeters,
+            navMetricsLockOpts
+          )}`
+        : `${formatDuration(routeInfo.duration)} · ${formatNavRemainingDistanceMeters(
+            routeInfo.distance,
+            navMetricsLockOpts
+          )}`;
+    },
+    [
+      navMetricsLocked,
+      navMetricsLockOpts,
+      isActive,
+      routeInfo.duration,
+      routeInfo.distance,
+      effectiveRemainingSec,
+      remainingRouteMeters,
+    ]
   );
 
   const navPanelStats = useMemo((): [NavInfoStat, NavInfoStat, NavInfoStat] => {
-    const arrivalD = new Date(Date.now() + effectiveRemainingSec * 1000);
+    const remainSec = navMetricsLocked ? 0 : effectiveRemainingSec;
+    const remainM = navMetricsLocked ? 0 : remainingRouteMeters;
+    const arrivalD = new Date(Date.now() + remainSec * 1000);
     const arrivalStr = formatEtaClock(arrivalD);
     return [
       {
         label: t("remaining_time") || "Remaining time",
         value: t("minutes_remaining_short", {
-          minutes: Math.max(1, Math.round(effectiveRemainingSec / 60)),
+          minutes: navRemainingMinutesFromSeconds(remainSec, navMetricsLockOpts),
         }),
         icon: "time-outline",
         highlight: true,
       },
       {
         label: t("remaining_distance") || "Remaining distance",
-        value: formatDistance(remainingRouteMeters),
+        value: formatNavRemainingDistanceMeters(remainM, navMetricsLockOpts),
         icon: "navigate-outline",
       },
       {
@@ -1730,7 +1829,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         icon: "location-outline",
       },
     ];
-  }, [t, effectiveRemainingSec, remainingRouteMeters, i18n.language, etaTick]);
+  }, [t, navMetricsLocked, navMetricsLockOpts, effectiveRemainingSec, remainingRouteMeters, i18n.language, etaTick]);
 
   const onRegionWillChange = (feature: any) => {
     if (routeExitInProgressRef.current || !screenActiveRef.current) return;
@@ -1767,10 +1866,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
   /** Localized remaining ETA for the on-route chip (active navigation only). */
   const mapEtaBubbleLabel = useMemo(() => {
-    if (!isActive) return null;
+    if (!isActive || navMetricsLocked) return null;
     const sec = effectiveRemainingSec;
     if (sec <= 0) return null;
-    const totalMin = Math.max(1, Math.round(sec / 60));
+    const totalMin = navRemainingMinutesFromSeconds(sec, navMetricsLockOpts);
     if (totalMin < 60) {
       return t("nav_on_route_eta_minutes", { minutes: totalMin });
     }
@@ -1780,7 +1879,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
       return t("nav_on_route_eta_hours_only", { hours: h });
     }
     return t("nav_on_route_eta_hours_mins", { hours: h, minutes: m });
-  }, [isActive, effectiveRemainingSec, t]);
+  }, [isActive, navMetricsLocked, navMetricsLockOpts, effectiveRemainingSec, t]);
 
   /** ~mid-remaining path — readable ahead of the vehicle without covering the destination. */
   const routeEtaBubbleCoord = useMemo<[number, number] | null>(() => {
@@ -2063,16 +2162,18 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         >
           {isPreview ? (
             <View style={styles.previewActions}>
-              <TouchableOpacity
-                style={styles.startNavigationButton}
-                onPress={startLiveNavigation}
-                disabled={routeExitLocked}
-              >
-                <Ionicons name="navigate" size={20} color="#FFFFFF" />
-                <Text style={styles.startNavigationButtonText}>
-                  {t("start_navigation") || "Start Navigation"}
-                </Text>
-              </TouchableOpacity>
+              {!atArrivalPoint ? (
+                <TouchableOpacity
+                  style={styles.startNavigationButton}
+                  onPress={startLiveNavigation}
+                  disabled={routeExitLocked}
+                >
+                  <Ionicons name="navigate" size={20} color="#FFFFFF" />
+                  <Text style={styles.startNavigationButtonText}>
+                    {t("start_navigation") || "Start Navigation"}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
                 style={styles.backToPlaceButton}
                 onPress={returnToMapFromPreview}
@@ -2133,11 +2234,7 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
         visible={rideTripArrivedModal}
         transparent
         animationType="fade"
-        onRequestClose={() => {
-          if (tripArrivalKind === "driver") {
-            onDriverTripArrivedAck();
-          }
-        }}
+        onRequestClose={() => {}}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.arrivalModalContainer}>
@@ -2146,39 +2243,11 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
                 <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
               </View>
               <Text style={styles.arrivalModalTitle}>
-                {tripArrivalKind === "driver"
-                  ? t("ride_trip_driver_arrived_title")
-                  : t("ride_trip_arrived_title")}
+                {t("ride_trip_arrived_title")}
               </Text>
-              {tripArrivalKind === "driver" ? (
-                <Text style={styles.arrivalModalMessage}>
-                  {t("ride_trip_driver_arrived_body")}
-                </Text>
-              ) : (
-                <Text style={styles.arrivalModalMessage}>
-                  {t("ride_trip_passenger_end_body")}
-                </Text>
-              )}
-              <TouchableOpacity
-                style={styles.arrivalModalButton}
-                onPress={() => {
-                  if (tripArrivalKind === "driver") {
-                    onDriverTripArrivedAck();
-                  } else {
-                    void onRideTripArrivedConfirm();
-                  }
-                }}
-                disabled={completingRideTrip}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.arrivalModalButtonText}>
-                  {completingRideTrip
-                    ? "…"
-                    : tripArrivalKind === "driver"
-                      ? t("ride_trip_driver_arrived_ok")
-                      : t("ride_trip_passenger_end_confirm")}
-                </Text>
-              </TouchableOpacity>
+              <Text style={styles.arrivalModalMessage}>
+                {t("ride_trip_arrived_body_finished")}
+              </Text>
             </View>
           </View>
         </View>

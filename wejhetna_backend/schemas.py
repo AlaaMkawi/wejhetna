@@ -156,6 +156,14 @@ class PlaceUpdate(BaseModel):
     social_links: Optional[str] = None
     announcement: Optional[str] = None
 
+    # עדכון מיקום (geom בטבלת locations) — דורש editor_role + editor_user_id
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    location_source: Optional[str] = None
+    osm_id: Optional[str] = None
+    editor_role: Optional[str] = None  # "ADMIN" | "BUSINESS_OWNER"
+    editor_user_id: Optional[int] = None
+
 
 class PlaceResponse(PlaceBase):
     id: int
@@ -198,6 +206,7 @@ class AdminPlaceCreate(BaseModel):
     phone: Optional[str] = None
     opening_hours: Optional[str] = None
     main_image_url: Optional[str] = None
+    business_images_urls: Optional[List[str]] = None
     social_links: Optional[str] = None
 
     owner_user_id: Optional[int] = None  # אם זה עסק משויך לבעלים

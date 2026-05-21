@@ -26,6 +26,8 @@ type Props = {
   rideWithDriverLoading?: boolean;
   /** When true, the ride-with-driver button is rendered muted (e.g., active ride blocking). */
   rideWithDriverMuted?: boolean;
+  /** When false, only navigation is shown (e.g. Admin). Defaults to true. */
+  showRideWithDriver?: boolean;
 };
 
 /**
@@ -44,6 +46,7 @@ export function MapPickedDestinationPanel({
   navigationLoading = false,
   rideWithDriverLoading = false,
   rideWithDriverMuted = false,
+  showRideWithDriver = true,
 }: Props) {
   const { t } = useTranslation();
   if (!visible) return null;
@@ -95,37 +98,39 @@ export function MapPickedDestinationPanel({
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[
-              styles.actionSecondary,
-              rideWithDriverMuted && styles.actionSecondaryMuted,
-              rideWithDriverLoading && styles.actionDisabled,
-            ]}
-            onPress={onRideWithDriver}
-            disabled={rideWithDriverLoading || navigationLoading}
-            activeOpacity={0.85}
-          >
-            {rideWithDriverLoading ? (
-              <ActivityIndicator color={TEAL} size="small" />
-            ) : (
-              <>
-                <Ionicons
-                  name="car-sport"
-                  size={18}
-                  color={rideWithDriverMuted ? "#999" : TEAL}
-                />
-                <Text
-                  style={[
-                    styles.actionSecondaryText,
-                    rideWithDriverMuted && styles.actionSecondaryTextMuted,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {t("ride_with_driver_button")}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
+          {showRideWithDriver ? (
+            <TouchableOpacity
+              style={[
+                styles.actionSecondary,
+                rideWithDriverMuted && styles.actionSecondaryMuted,
+                rideWithDriverLoading && styles.actionDisabled,
+              ]}
+              onPress={onRideWithDriver}
+              disabled={rideWithDriverLoading || navigationLoading}
+              activeOpacity={0.85}
+            >
+              {rideWithDriverLoading ? (
+                <ActivityIndicator color={TEAL} size="small" />
+              ) : (
+                <>
+                  <Ionicons
+                    name="car-sport"
+                    size={18}
+                    color={rideWithDriverMuted ? "#999" : TEAL}
+                  />
+                  <Text
+                    style={[
+                      styles.actionSecondaryText,
+                      rideWithDriverMuted && styles.actionSecondaryTextMuted,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {t("ride_with_driver_button")}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
     </View>

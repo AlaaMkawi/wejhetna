@@ -46,6 +46,17 @@ class VehicleStatus(str, enum.Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
+
+class VehicleUpdateRequestType(str, enum.Enum):
+    UPDATE_EXISTING = "UPDATE_EXISTING"
+    ADD_NEW = "ADD_NEW"
+
+
+class VehicleUpdateRequestStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
 class PlaceType(str, enum.Enum):
     PUBLIC_SERVICE = "PUBLIC_SERVICE"   # בתי ספר, מרפאה, מסגד...
     BUSINESS = "BUSINESS"        
@@ -127,6 +138,9 @@ class DriverProfile(Base):
     driver_status = Column(Enum(DriverStatus), nullable=False, default=DriverStatus.PENDING)
     driver_status_updated_at = Column(DateTime(timezone=True), nullable=True)
 
+    # True when latest vehicle-update request was rejected without can_continue_driving
+    vehicle_update_blocked = Column(Boolean, nullable=False, default=False)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),
@@ -173,6 +187,51 @@ class DriverVehicle(Base):
 
     # relationships
     driver_profile = relationship("DriverProfile", back_populates="vehicles")
+
+
+class DriverVehicleUpdateRequest(Base):
+    __tablename__ = "driver_vehicle_update_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    driver_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    driver_profile_id = Column(Integer, ForeignKey("driver_profiles.id"), nullable=False, index=True)
+
+    request_type = Column(
+        Enum(VehicleUpdateRequestType), nullable=False
+    )
+    status = Column(
+        Enum(VehicleUpdateRequestStatus),
+        nullable=False,
+        default=VehicleUpdateRequestStatus.PENDING,
+    )
+
+    # Snapshot of submitted data (not applied until approved)
+    car_type = Column(String, nullable=False)
+    plate_number = Column(String, nullable=False)
+    production_year = Column(Integer, nullable=False)
+    driver_license_image_url = Column(Text, nullable=False)
+    id_card_image_url = Column(Text, nullable=False)
+    car_license_image_url = Column(Text, nullable=False)
+    car_insurance_image_url = Column(Text, nullable=False)
+    car_photos_urls = Column(ARRAY(Text), nullable=True)
+
+    message_to_admin = Column(Text, nullable=True)
+
+    rejection_reason = Column(Text, nullable=True)
+    can_continue_driving = Column(Boolean, nullable=True)
+
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by_admin_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    driver_user = relationship("User", foreign_keys=[driver_user_id])
+    driver_profile = relationship("DriverProfile", foreign_keys=[driver_profile_id])
 
 class Location(Base):
     __tablename__ = "locations"

@@ -58,6 +58,8 @@ const FocusedMapViewInner = forwardRef<MapViewRef, FocusedMapViewProps>(
     ref
   ) {
     const isVisible = useIsMapScreenVisible();
+    /** iOS only: unmount MapView when another stack screen owns focus (Fabric safety). */
+    const mountMapView = Platform.OS === "ios" ? isVisible : true;
     const readyFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const markMapReady = useCallback(() => {
@@ -73,10 +75,8 @@ const FocusedMapViewInner = forwardRef<MapViewRef, FocusedMapViewProps>(
 
     useEffect(() => {
       clearReadyFallback();
-      if (!isVisible) {
-        if (Platform.OS === "ios") {
-          suppressMapOverlays();
-        }
+      if (!mountMapView) {
+        suppressMapOverlays();
         resetMapAnnotationsReadyForPlatform();
         return;
       }
@@ -90,7 +90,7 @@ const FocusedMapViewInner = forwardRef<MapViewRef, FocusedMapViewProps>(
         setMapAnnotationsReady(true);
       }
       return clearReadyFallback;
-    }, [isVisible, clearReadyFallback]);
+    }, [mountMapView, clearReadyFallback]);
 
     const handleDidFinishLoadingMap = useCallback(() => {
       clearReadyFallback();
@@ -110,7 +110,7 @@ const FocusedMapViewInner = forwardRef<MapViewRef, FocusedMapViewProps>(
       onDidFinishLoadingStyle?.();
     }, [clearReadyFallback, markMapReady, onDidFinishLoadingStyle]);
 
-    if (!isVisible) {
+    if (!mountMapView) {
       return <View style={[style, placeholderStyle]} />;
     }
 

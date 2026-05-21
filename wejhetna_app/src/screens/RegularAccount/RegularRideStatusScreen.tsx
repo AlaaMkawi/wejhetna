@@ -18,6 +18,7 @@ import {
   rideApiDetailToTranslationKey,
   RideRequestStatus,
   verifyRideStartCode,
+  normalizeRideRequestStatus,
 } from "../../api/rides";
 import {
   PostRideFeedbackModal,
@@ -25,6 +26,10 @@ import {
 } from "../../components/ride/PostRideFeedbackModal";
 import { RIDE_STATUS_POLL_INTERVAL_MS } from "../../../config";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
+import {
+  navDistanceKmFromMeters,
+  navEtaMinutesFromSeconds,
+} from "../../utils/navMetricsAtArrival";
 import {
   markPassengerCancelledOwnRide,
   markVerificationMismatchSelfAlert,
@@ -339,27 +344,38 @@ export default function RegularRideStatusScreen() {
     return { lat: activeRide.driver_live_lat, lon: activeRide.driver_live_lon };
   }, [activeRide?.driver_live_lat, activeRide?.driver_live_lon]);
 
+  const atPickupArrival =
+    activeRide != null && normalizeRideRequestStatus(activeRide.status) === "arrived";
+
   const { remainingDistanceMeters, etaSecondsRemaining } = useDriverToPickupRouteVisualization(
     driverLive,
-    pickupCoord
+    pickupCoord,
+    { forceZeroMetrics: atPickupArrival }
   );
 
-  const displayEtaMinutes = useMemo(() => {
-    if (etaSecondsRemaining == null || !Number.isFinite(etaSecondsRemaining)) return null;
-    if (etaSecondsRemaining <= 90) return 1;
-    return Math.max(1, Math.round(etaSecondsRemaining / 60));
-  }, [etaSecondsRemaining]);
+  const pickupNavLockOpts = useMemo(() => ({ atArrival: atPickupArrival }), [atPickupArrival]);
 
-  const displayDistKm = useMemo(() => {
-    if (remainingDistanceMeters == null || !Number.isFinite(remainingDistanceMeters)) return null;
-    return Math.round((remainingDistanceMeters / 1000) * 10) / 10;
-  }, [remainingDistanceMeters]);
+  const displayEtaMinutes = useMemo(
+    () => navEtaMinutesFromSeconds(etaSecondsRemaining, pickupNavLockOpts),
+    [etaSecondsRemaining, pickupNavLockOpts]
+  );
+
+  const displayDistKm = useMemo(
+    () => navDistanceKmFromMeters(remainingDistanceMeters, pickupNavLockOpts),
+    [remainingDistanceMeters, pickupNavLockOpts]
+  );
 
   const liveEtaDistLines = useMemo(() => {
     if (!activeRide) {
       return { etaLine: null as string | null, distLine: null as string | null };
     }
     const st = activeRide.status;
+    if (atPickupArrival) {
+      return {
+        etaLine: t("ride_driver_eta_minutes_away", { minutes: 0 }),
+        distLine: t("ride_distance_to_pickup_km", { km: 0 }),
+      };
+    }
     const eta =
       displayEtaMinutes != null &&
       (st === "accepted" || st === "on_the_way" || st === "driving_to_customer")
@@ -377,24 +393,18 @@ export default function RegularRideStatusScreen() {
 
     const distKm =
       displayDistKm != null &&
-      (st === "accepted" ||
-        st === "on_the_way" ||
-        st === "driving_to_customer" ||
-        st === "arrived")
+      (st === "accepted" || st === "on_the_way" || st === "driving_to_customer")
         ? displayDistKm
         : activeRide.distance_to_pickup_km;
 
     const distLine =
       distKm != null &&
-      (st === "accepted" ||
-        st === "on_the_way" ||
-        st === "driving_to_customer" ||
-        st === "arrived")
+      (st === "accepted" || st === "on_the_way" || st === "driving_to_customer")
         ? t("ride_distance_to_pickup_km", { km: distKm })
         : null;
 
     return { etaLine, distLine };
-  }, [activeRide, displayEtaMinutes, displayDistKm, t]);
+  }, [activeRide, atPickupArrival, displayEtaMinutes, displayDistKm, t]);
 
   const renderBody = () => {
     if (userId == null) {

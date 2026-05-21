@@ -25,8 +25,16 @@ import { RouteEndpointMarker } from "../../components/map/RouteEndpointMarker";
 import { OffRoutePathConnector } from "../../components/map/OffRoutePathConnector";
 import { useDriverTrailHeading } from "../../components/map/useDriverTrailHeading";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
+import {
+  navDistanceKmFromMeters,
+  navEtaMinutesFromSeconds,
+  navEtaSecondsForDisplay,
+} from "../../utils/navMetricsAtArrival";
 import { RideDestinationDetailsModal } from "../../components/ride/RideDestinationDetailsModal";
 import { navigateToUserRideRequestsTab } from "../../utils/rideNavigateToTripScreen";
+import { haversineMeters } from "../../utils/routePolyline";
+import { NAV_DEST_ARRIVAL_RADIUS_M } from "../../utils/homeNavigationExit";
+import { shouldLockNavMetricsForProximity } from "../../utils/navMetricsAtArrival";
 import { NavigationInfoPanel, type NavInfoStat } from "../../components/navigation/NavigationInfoPanel";
 import i18n from "../../i18n";
 
@@ -163,6 +171,11 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
     return null;
   }, [role, myDriverGps, ridePassenger]);
 
+  const tripDestHaversineM = useMemo(() => {
+    if (!destination || !driverDot) return null;
+    return haversineMeters(driverDot.lat, driverDot.lon, destination.lat, destination.lon);
+  }, [destination, driverDot]);
+
   const {
     routeBackdropFc,
     routeRemainingFc,
@@ -170,7 +183,26 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
     etaSecondsRemaining,
     routeLoading,
     osrmLegDistanceM,
-  } = useDriverToPickupRouteVisualization(driverDot, destination);
+  } = useDriverToPickupRouteVisualization(driverDot, destination, {
+    forceZeroMetrics:
+      tripDestHaversineM != null && tripDestHaversineM <= NAV_DEST_ARRIVAL_RADIUS_M,
+  });
+
+  const tripDestArrivalReached = useMemo(() => {
+    if (tripDestHaversineM == null) return false;
+    return (
+      tripDestHaversineM <= NAV_DEST_ARRIVAL_RADIUS_M ||
+      shouldLockNavMetricsForProximity(
+        remainingDistanceMeters ?? Number.POSITIVE_INFINITY,
+        tripDestHaversineM
+      )
+    );
+  }, [tripDestHaversineM, remainingDistanceMeters]);
+
+  const tripNavLockOpts = useMemo(
+    () => ({ atArrival: tripDestArrivalReached }),
+    [tripDestArrivalReached]
+  );
 
   const driverTrailHeadingDeg = useDriverTrailHeading(driverDot?.lat, driverDot?.lon, 6);
 
@@ -188,39 +220,46 @@ export default function RideTripToDestinationScreen({ route, navigation }: Props
   }, [routeRemainingFc]);
 
   const etaLine = useMemo(() => {
+    if (tripDestArrivalReached) {
+      return t("ride_driver_eta_minutes_away", { minutes: 0 });
+    }
     if (etaSecondsRemaining != null && Number.isFinite(etaSecondsRemaining)) {
-      if (etaSecondsRemaining < 90) {
-        return t("ride_tracking_passenger_eta_seconds", {
-          seconds: Math.max(1, Math.round(etaSecondsRemaining)),
-        });
+      const sec = navEtaSecondsForDisplay(etaSecondsRemaining, tripNavLockOpts);
+      if (sec != null && sec < 90) {
+        return t("ride_tracking_passenger_eta_seconds", { seconds: sec });
       }
-      const min = Math.max(1, Math.round(etaSecondsRemaining / 60));
-      if (min <= 1) return t("ride_driver_eta_arriving_now");
-      return t("ride_driver_eta_minutes_away", { minutes: min });
+      const min = navEtaMinutesFromSeconds(etaSecondsRemaining, tripNavLockOpts);
+      if (min != null && min <= 1) return t("ride_driver_eta_arriving_now");
+      if (min != null) return t("ride_driver_eta_minutes_away", { minutes: min });
     }
     return null;
-  }, [etaSecondsRemaining, t]);
+  }, [tripDestArrivalReached, tripNavLockOpts, etaSecondsRemaining, t]);
 
-  const distKm = useMemo(() => {
-    if (remainingDistanceMeters != null && Number.isFinite(remainingDistanceMeters)) {
-      return Math.round((remainingDistanceMeters / 1000) * 10) / 10;
-    }
-    return null;
-  }, [remainingDistanceMeters]);
+  const distKm = useMemo(
+    () => navDistanceKmFromMeters(remainingDistanceMeters, tripNavLockOpts),
+    [remainingDistanceMeters, tripNavLockOpts]
+  );
 
   const legProgress = useMemo(() => {
+    if (tripDestArrivalReached) return 1;
     if (osrmLegDistanceM == null || osrmLegDistanceM <= 0 || remainingDistanceMeters == null) return 0;
     return Math.max(0, Math.min(1, 1 - remainingDistanceMeters / osrmLegDistanceM));
-  }, [osrmLegDistanceM, remainingDistanceMeters]);
+  }, [tripDestArrivalReached, osrmLegDistanceM, remainingDistanceMeters]);
 
   const arrivalClock = useMemo(() => {
-    if (etaSecondsRemaining == null || !Number.isFinite(etaSecondsRemaining)) return null;
     const locale = i18n.language === "he" ? "he-IL" : "ar";
+    if (tripDestArrivalReached) {
+      return new Date().toLocaleTimeString(locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+    if (etaSecondsRemaining == null || !Number.isFinite(etaSecondsRemaining)) return null;
     return new Date(Date.now() + etaSecondsRemaining * 1000).toLocaleTimeString(locale, {
       hour: "2-digit",
       minute: "2-digit",
     });
-  }, [etaSecondsRemaining]);
+  }, [tripDestArrivalReached, etaSecondsRemaining]);
 
   const tripNavStats = useMemo((): [NavInfoStat, NavInfoStat, NavInfoStat] => {
     const distLabel = t("distance");

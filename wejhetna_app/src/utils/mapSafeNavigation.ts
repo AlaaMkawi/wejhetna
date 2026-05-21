@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 import { invokeHomeMapNavigationPrep } from "../components/map/homeMapNavigationPrep";
 import { suppressMapOverlays } from "../components/map/mapOverlayStore";
-import { runAfterIosMapTeardown } from "./iosMapScreenTeardown";
+import { runAfterIosMapTeardown, waitForIosHomeMapBeforeRouteDetails } from "./iosMapScreenTeardown";
 
 /**
  * Run a navigation action after iOS map overlays are hidden and native views settle.
@@ -21,5 +21,7 @@ export function runMapSafeNavigation(
     invokeHomeMapNavigationPrep();
     suppressMapOverlays();
   }
-  runAfterIosMapTeardown(action, "navigate");
+  runAfterIosMapTeardown(() => {
+    void waitForIosHomeMapBeforeRouteDetails().then(action);
+  }, "navigate");
 }

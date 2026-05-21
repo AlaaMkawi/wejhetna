@@ -29,6 +29,10 @@ export interface DriverProfileInfo {
   user: UserProfile;
   vehicle?: DriverVehicleInfo;
   driver_status: string;
+  driver_license_image_url?: string;
+  id_card_image_url?: string;
+  vehicle_update_blocked?: boolean;
+  has_pending_vehicle_request?: boolean;
 }
 
 export interface BusinessPlaceInfo {

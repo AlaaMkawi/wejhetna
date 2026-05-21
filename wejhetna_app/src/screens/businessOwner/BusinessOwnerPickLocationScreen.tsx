@@ -1,6 +1,7 @@
 // src/screens/businessOwner/BusinessOwnerPickLocationScreen.tsx
 
 import React, { useCallback, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { appAlert } from "../../utils/appAlert";
 import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,7 +15,7 @@ import Ionicons from "react-native-vector-icons/Ionicons";
 
 import { RootStackParamList } from "../../navigation/types";
 import { checkNearbyForOwner } from "../../api/businessOwnerApi";
-import { checkLocationInServiceCities } from "../../api/places";
+import { checkLocationInServiceCities, updatePlace } from "../../api/places";
 import { NativeGeolocation as Geolocation } from "../../utils/nativeGeolocation";
 
 const DARK_TEAL = "#0f5b63";
@@ -41,46 +42,232 @@ export default function BusinessOwnerPickLocationScreen() {
   const route = useRoute<BusinessOwnerPickLocationRoute>();
   const insets = useSafeAreaInsets();
 
-  // personalInfo will be passed to details form and used to create user
-  const { personalInfo } = route.params;
+  const { personalInfo, editMode } = route.params;
+  const isEditMode = editMode != null;
 
-  const [selectedLat, setSelectedLat] = useState<number | null>(31.25);
-  const [selectedLon, setSelectedLon] = useState<number | null>(34.8);
+  const [selectedLat, setSelectedLat] = useState<number | null>(
+    editMode?.initialLat ?? 31.25
+  );
+  const [selectedLon, setSelectedLon] = useState<number | null>(
+    editMode?.initialLon ?? 34.8
+  );
   const [gpsLoading, setGpsLoading] = useState(false);
   const [checkingNearby, setCheckingNearby] = useState(false);
   const [detectedCityId, setDetectedCityId] = useState<number | null>(null);
+
+  const validateServiceBoundary = async (
+    lat: number,
+    lon: number
+  ): Promise<number | null | false> => {
+    try {
+      const boundaryCheck = await checkLocationInServiceCities(lat, lon);
+      if (!boundaryCheck.is_within) {
+        appAlert(
+          t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
+          t("location_outside_service_area_message") ||
+            "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום אחר.",
+          [{ text: t("ok") || "אישור" }]
+        );
+        return false;
+      }
+      const cityId = boundaryCheck.city_id ?? detectedCityId;
+      if (cityId) {
+        setDetectedCityId(cityId);
+      }
+      return cityId ?? null;
+    } catch (error: any) {
+      console.error("Error checking city boundary:", error);
+      const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
+      appAlert(
+        t("boundary_check_error") || "שגיאה בבדיקת גבולות",
+        `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
+        [{ text: t("ok") || "אישור" }]
+      );
+      return false;
+    }
+  };
+
+  const PLACE_LOCATION_UPDATED_KEY = "placeLocationUpdated";
+
+  const returnToManageScreen = useCallback(async () => {
+    if (!editMode) return;
+    await AsyncStorage.setItem(PLACE_LOCATION_UPDATED_KEY, String(editMode.placeId));
+    exitMapScreen(() => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      }
+    });
+  }, [editMode, exitMapScreen, navigation]);
+
+  const saveEditedLocation = async (
+    lat: number,
+    lon: number,
+    locationSource: string
+  ) => {
+    if (!editMode) return;
+    const cityId = await validateServiceBoundary(lat, lon);
+    if (cityId === false) return;
+
+    try {
+      setCheckingNearby(true);
+      const nearbyResult = await checkNearbyForOwner(
+        lat,
+        lon,
+        50,
+        editMode.placeId
+      );
+      if (nearbyResult.status === "HAS_OWNER") {
+        appAlert(
+          t("error") || "שגיאה",
+          t("location_already_claimed") ||
+            "במיקום זה כבר קיים עסק עם בעלים. אנא בחרי מיקום אחר."
+        );
+        return;
+      }
+      if (
+        nearbyResult.status === "CAN_CLAIM" &&
+        nearbyResult.candidate &&
+        nearbyResult.candidate.place_id !== editMode.placeId
+      ) {
+        appAlert(
+          t("error") || "שגיאה",
+          t("location_too_close_to_other_place") ||
+            "במיקום זה קיים מקום אחר. אנא בחרי מיקום רחוק יותר."
+        );
+        return;
+      }
+
+      await updatePlace(editMode.placeId, {
+        lat,
+        lon,
+        location_source: locationSource,
+        editor_role: editMode.editorRole,
+        editor_user_id: editMode.editorUserId,
+        ...(cityId != null ? { city_id: cityId } : {}),
+      });
+
+      appAlert(
+        t("success") || "הצלחה",
+        t("location_updated_successfully") || "המיקום עודכן בהצלחה",
+        [{ text: t("ok") || "אישור", onPress: returnToManageScreen }]
+      );
+    } catch (err: any) {
+      appAlert(
+        t("error") || "שגיאה",
+        err?.message ||
+          t("failed_to_update_location") ||
+          "לא הצלחנו לעדכן את המיקום"
+      );
+    } finally {
+      setCheckingNearby(false);
+    }
+  };
+
+  const proceedSignupWithLocation = async (
+    lat: number,
+    lon: number,
+    source: string
+  ) => {
+    if (!personalInfo) {
+      appAlert(t("error") || "Error", t("unknown_error") || "Missing signup data");
+      return;
+    }
+
+    try {
+      setCheckingNearby(true);
+      const nearbyResult = await checkNearbyForOwner(lat, lon);
+
+      if (nearbyResult.status === "HAS_OWNER") {
+        appAlert(
+          "Location Already Claimed",
+          "This location already has a business owner. Please select a different location."
+        );
+      } else if (nearbyResult.status === "CAN_CLAIM" && nearbyResult.candidate) {
+        appAlert(
+          "Existing Place Found",
+          `Found an existing place: ${nearbyResult.candidate.name}. You can claim this place.`,
+          [
+            {
+              text: "Claim This Place",
+              onPress: () => {
+                navigateAway("BusinessOwnerDetailsForm", {
+                  personalInfo,
+                  lat,
+                  lon,
+                  source,
+                  osmId: null,
+                  existingPlaceId: nearbyResult.candidate?.place_id || null,
+                  detectedCityId: detectedCityId,
+                });
+              },
+            },
+            {
+              text: t("create_new_place") || "Create New Place",
+              style: "cancel",
+              onPress: () => {
+                navigateAway("BusinessOwnerDetailsForm", {
+                  personalInfo,
+                  lat,
+                  lon,
+                  source,
+                  osmId: null,
+                  existingPlaceId: null,
+                  detectedCityId: detectedCityId,
+                });
+              },
+            },
+          ]
+        );
+      } else {
+        navigateAway("BusinessOwnerDetailsForm", {
+          personalInfo,
+          lat,
+          lon,
+          source,
+          osmId: null,
+          existingPlaceId: null,
+          detectedCityId: detectedCityId,
+        });
+      }
+    } catch (err: any) {
+      console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
+      appAlert(
+        t("error") || "Error",
+        err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
+      );
+    } finally {
+      setCheckingNearby(false);
+    }
+  };
 
   async function handleMapPress(e: any) {
     const coords = e?.geometry?.coordinates;
     if (Array.isArray(coords) && coords.length === 2) {
       const lon = coords[0];
       const lat = coords[1];
-      
-      // בדיקת גבולות הערים
+
       try {
         const boundaryCheck = await checkLocationInServiceCities(lat, lon);
         if (!boundaryCheck.is_within) {
           appAlert(
             t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
-            t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום בתוך אחת מהערים.",
+            t("location_outside_service_area_message") ||
+              "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום בתוך אחת מהערים.",
             [{ text: t("ok") || "אישור" }]
           );
           return;
         }
-        
-        // המיקום תקין - עדכון
+
         setSelectedLon(lon);
         setSelectedLat(lat);
-        // שמירת city_id שנמצא
         if (boundaryCheck.city_id) {
           setDetectedCityId(boundaryCheck.city_id);
         }
       } catch (error) {
         console.error("Error checking boundary:", error);
-        // אם יש שגיאה בבדיקה, עדיין מאפשרים לבחור (לא חוסמים)
         setSelectedLon(lon);
         setSelectedLat(lat);
-        setDetectedCityId(null); // לא הצלחנו לזהות עיר
+        setDetectedCityId(null);
       }
     }
   }
@@ -91,26 +278,24 @@ export default function BusinessOwnerPickLocationScreen() {
     Geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        
-        // בדיקת גבולות הערים קודם
+
         try {
           const boundaryCheck = await checkLocationInServiceCities(latitude, longitude);
           if (!boundaryCheck.is_within) {
             appAlert(
               t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
-              t("current_location_outside_service_area") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nהמיקום הנוכחי שלך נמצא מחוץ לאזור השירות.",
+              t("current_location_outside_service_area") ||
+                "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nהמיקום הנוכחי שלך נמצא מחוץ לאזור השירות.",
               [{ text: t("ok") || "אישור" }]
             );
             setGpsLoading(false);
             return;
           }
-          // שמירת city_id שנמצא
           if (boundaryCheck.city_id) {
             setDetectedCityId(boundaryCheck.city_id);
           }
         } catch (error: any) {
           console.error("Error checking boundary:", error);
-          // אם יש שגיאה בבדיקה, מציגים הודעה למשתמש
           const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
           appAlert(
             t("boundary_check_error") || "שגיאה בבדיקת גבולות",
@@ -120,78 +305,16 @@ export default function BusinessOwnerPickLocationScreen() {
           setGpsLoading(false);
           return;
         }
-        
+
         setSelectedLat(latitude);
         setSelectedLon(longitude);
         setGpsLoading(false);
 
-        // Automatically check nearby and navigate
-        try {
-          setCheckingNearby(true);
-          const nearbyResult = await checkNearbyForOwner(latitude, longitude);
-
-          if (nearbyResult.status === "HAS_OWNER") {
-            appAlert(
-              "Location Already Claimed",
-              "This location already has a business owner. Please select a different location."
-            );
-          } else if (nearbyResult.status === "CAN_CLAIM" && nearbyResult.candidate) {
-            appAlert(
-              "Existing Place Found",
-              `Found an existing place: ${nearbyResult.candidate.name}. You can claim this place.`,
-              [
-                {
-                  text: "Claim This Place",
-                  onPress: () => {
-                    navigateAway("BusinessOwnerDetailsForm", {
-                      personalInfo,
-                      lat: latitude,
-                      lon: longitude,
-                      source: "GPS_WITH_OSM",
-                      osmId: null,
-                      existingPlaceId: nearbyResult.candidate?.place_id || null,
-                      detectedCityId: detectedCityId,
-                    });
-                  },
-                },
-                {
-                  text: t("create_new_place") || "Create New Place",
-                  style: "cancel",
-                  onPress: () => {
-                    navigateAway("BusinessOwnerDetailsForm", {
-                      personalInfo,
-                      lat: latitude,
-                      lon: longitude,
-                      source: "GPS_NO_OSM",
-                      osmId: null,
-                      existingPlaceId: null,
-                      detectedCityId: detectedCityId,
-                    });
-                  },
-                },
-              ]
-            );
-          } else {
-            // NO_PLACE - can create new place
-            navigateAway("BusinessOwnerDetailsForm", {
-              personalInfo,
-              lat: latitude,
-              lon: longitude,
-              source: "GPS_NO_OSM",
-              osmId: null,
-              existingPlaceId: null,
-              detectedCityId: detectedCityId,
-            });
-          }
-        } catch (err: any) {
-          console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
-          appAlert(
-            t("error") || "Error",
-            err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
-          );
-        } finally {
-          setCheckingNearby(false);
+        if (isEditMode) {
+          return;
         }
+
+        await proceedSignupWithLocation(latitude, longitude, "GPS_NO_OSM");
       },
       (error) => {
         console.log("GPS error", error);
@@ -212,107 +335,22 @@ export default function BusinessOwnerPickLocationScreen() {
       return;
     }
 
-    // בדיקת גבולות הערים לפני המשך
-    try {
-      const boundaryCheck = await checkLocationInServiceCities(selectedLat, selectedLon);
-      if (!boundaryCheck.is_within) {
-        appAlert(
-          t("location_outside_service_area") || "מיקום מחוץ לאזור השירות",
-          t("location_outside_service_area_message") || "ניתן להוסיף מקומות רק בתוך אחת מ-3 הערים: רהט, לקיה, תל שבע.\n\nאנא בחרי מיקום אחר.",
-          [{ text: t("ok") || "אישור" }]
-        );
-        return;
-      }
-      // אם לא זיהינו עיר עדיין, ננסה שוב
-      const finalCityId = detectedCityId || boundaryCheck.city_id;
-      if (finalCityId) {
-        setDetectedCityId(finalCityId);
-      }
-    } catch (error: any) {
-      console.error("Error checking city boundary:", error);
-      const errorMessage = error?.message || t("unknown_error") || "שגיאה לא ידועה";
-      appAlert(
-        t("boundary_check_error") || "שגיאה בבדיקת גבולות",
-        `${t("boundary_check_error_message") || "לא הצלחנו לבדוק את המיקום."} ${errorMessage}\n\n${t("please_ensure_server_running") || "אנא ודאי שהשרת רץ ונסה שוב."}`,
-        [{ text: t("ok") || "אישור" }]
-      );
+    if (isEditMode) {
+      await saveEditedLocation(selectedLat, selectedLon, "MAP_PICK");
       return;
     }
 
-    try {
-      setCheckingNearby(true);
-      const nearbyResult = await checkNearbyForOwner(selectedLat, selectedLon);
+    const cityId = await validateServiceBoundary(selectedLat, selectedLon);
+    if (cityId === false) return;
 
-      if (nearbyResult.status === "HAS_OWNER") {
-        appAlert(
-          "Location Already Claimed",
-          "This location already has a business owner. Please select a different location."
-        );
-      } else if (nearbyResult.status === "CAN_CLAIM" && nearbyResult.candidate) {
-        appAlert(
-          "Existing Place Found",
-          `Found an existing place: ${nearbyResult.candidate.name}. You can claim this place.`,
-          [
-            {
-              text: "Claim This Place",
-              onPress: () => {
-                navigateAway("BusinessOwnerDetailsForm", {
-                  personalInfo,
-                  lat: selectedLat,
-                  lon: selectedLon,
-                  source: "MAP_PICK",
-                  osmId: null,
-                  existingPlaceId: nearbyResult.candidate?.place_id || null,
-                  detectedCityId: detectedCityId,
-                });
-              },
-            },
-            {
-              text: t("create_new_place") || "Create New Place",
-              style: "cancel",
-              onPress: () => {
-                navigateAway("BusinessOwnerDetailsForm", {
-                  personalInfo,
-                  lat: selectedLat,
-                  lon: selectedLon,
-                  source: "MAP_PICK",
-                  osmId: null,
-                  existingPlaceId: null,
-                  detectedCityId: detectedCityId,
-                });
-              },
-            },
-          ]
-        );
-      } else {
-        // NO_PLACE - can create new place
-        navigateAway("BusinessOwnerDetailsForm", {
-          personalInfo,
-          lat: selectedLat,
-          lon: selectedLon,
-          source: "MAP_PICK",
-          osmId: null,
-          existingPlaceId: null,
-          detectedCityId: detectedCityId,
-        });
-      }
-    } catch (err: any) {
-      console.log("checkNearbyForOwner error:", err?.response?.data || err?.message);
-      appAlert(
-        t("error") || "Error",
-        err?.response?.data?.detail || t("could_not_check_nearby") || "Could not check nearby places"
-      );
-    } finally {
-      setCheckingNearby(false);
-    }
+    await proceedSignupWithLocation(selectedLat, selectedLon, "MAP_PICK");
   }
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: Math.max(insets.top, Platform.OS === 'ios' ? 50 : 16) + 8 }]}>
+
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, Platform.OS === "ios" ? 50 : 16) + 8 }]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => {
@@ -324,7 +362,11 @@ export default function BusinessOwnerPickLocationScreen() {
         >
           <Ionicons name="arrow-forward" size={24} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.title}>{t("select_location_on_map") || "בחירת מיקום על המפה"}</Text>
+        <Text style={styles.title}>
+          {isEditMode
+            ? t("change_location") || "שנה מיקום"
+            : t("select_location_on_map") || "בחירת מיקום על המפה"}
+        </Text>
         <View style={styles.headerSpacer} />
       </View>
 
@@ -345,7 +387,7 @@ export default function BusinessOwnerPickLocationScreen() {
                 selectedLon ?? 34.8,
                 selectedLat ?? 31.25,
               ],
-              zoomLevel: 13,
+              zoomLevel: isEditMode ? 16 : 13,
             }}
           />
 
@@ -367,10 +409,10 @@ export default function BusinessOwnerPickLocationScreen() {
             onPress={handleUseMyLocation}
             disabled={gpsLoading || checkingNearby}
           >
-            <Ionicons 
-              name="location" 
-              size={20} 
-              color={DARK_TEAL} 
+            <Ionicons
+              name="location"
+              size={20}
+              color={DARK_TEAL}
               style={styles.buttonIcon}
             />
             <Text style={styles.secondaryButtonText}>
@@ -383,7 +425,11 @@ export default function BusinessOwnerPickLocationScreen() {
             onPress={handleConfirm}
             disabled={checkingNearby || selectedLat == null || selectedLon == null}
           >
-            <Text style={styles.primaryButtonText}>{t("confirm_location") || "אישור מיקום"}</Text>
+            <Text style={styles.primaryButtonText}>
+              {isEditMode
+                ? t("save_location") || "שמור מיקום"
+                : t("confirm_location") || "אישור מיקום"}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -392,7 +438,7 @@ export default function BusinessOwnerPickLocationScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { 
+  container: {
     flex: 1,
     backgroundColor: "#FFFFFF",
   },
@@ -419,9 +465,9 @@ const styles = StyleSheet.create({
     color: "#1A1A1A",
   },
   headerSpacer: {
-    width: 40, // Same width as back button to center title
+    width: 40,
   },
-  mapContainer: { 
+  mapContainer: {
     flex: 1,
   },
   bottomPanel: {
@@ -429,7 +475,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: "#E5E7EB",
     backgroundColor: "#fff",
-    paddingBottom: Platform.OS === 'ios' ? 30 : 16,
+    paddingBottom: Platform.OS === "ios" ? 30 : 16,
   },
   buttonsRow: {
     flexDirection: "row",
@@ -492,4 +538,3 @@ const styles = StyleSheet.create({
     borderColor: "#fff",
   },
 });
-

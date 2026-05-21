@@ -18,6 +18,10 @@ import { RootStackParamList } from "../../navigation/types";
 import Ionicons from "react-native-vector-icons/Ionicons";
 
 import { API_BASE_URL } from "../../../config";
+import {
+  DriverVehicleUpdateRequest,
+  listPendingVehicleUpdateRequests,
+} from "../../api/driverVehicleRequests";
 const DARK_TEAL = "#0f5b63";
 
 export type DriverApplication = {
@@ -48,7 +52,9 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
   const { t } = useTranslation();
   const { adminUserId, role } = route.params;
 
+  const [listTab, setListTab] = useState<"signup" | "vehicle">("signup");
   const [drivers, setDrivers] = useState<DriverApplication[]>([]);
+  const [vehicleRequests, setVehicleRequests] = useState<DriverVehicleUpdateRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,12 +65,17 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/admin/drivers/pending`);
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.detail || t("failed_to_load_drivers") || "Failed to load drivers");
+      if (listTab === "signup") {
+        const res = await fetch(`${API_BASE_URL}/admin/drivers/pending`);
+        const json = await res.json();
+        if (!res.ok) {
+          setError(json.detail || t("failed_to_load_drivers") || "Failed to load drivers");
+        } else {
+          setDrivers(json);
+        }
       } else {
-        setDrivers(json);
+        const list = await listPendingVehicleUpdateRequests();
+        setVehicleRequests(list);
       }
     } catch (e: any) {
       setError(`${t("network_error") || "Network error"}: ${e.message}`);
@@ -77,7 +88,7 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
   useFocusEffect(
     React.useCallback(() => {
       loadPending();
-    }, [])
+    }, [listTab])
   );
 
   const getVisibleDrivers = () => {
@@ -177,6 +188,16 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
 
   const visibleDrivers = getVisibleDrivers();
 
+  const visibleVehicleRequests = vehicleRequests.filter((r) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (r.driver_full_name || "").toLowerCase().includes(q) ||
+      (r.plate_number || "").toLowerCase().includes(q) ||
+      (r.car_type || "").toLowerCase().includes(q)
+    );
+  });
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -184,6 +205,25 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
       {/* Modern Centered Header */}
       <View style={styles.header}>
         <Text style={styles.title}>{t("drivers_requests")}</Text>
+      </View>
+
+      <View style={styles.tabRow}>
+        <TouchableOpacity
+          style={[styles.tabBtn, listTab === "signup" && styles.tabBtnActive]}
+          onPress={() => setListTab("signup")}
+        >
+          <Text style={[styles.tabBtnText, listTab === "signup" && styles.tabBtnTextActive]}>
+            {t("new_driver_signups") || "הרשמות נהגים"}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabBtn, listTab === "vehicle" && styles.tabBtnActive]}
+          onPress={() => setListTab("vehicle")}
+        >
+          <Text style={[styles.tabBtnText, listTab === "vehicle" && styles.tabBtnTextActive]}>
+            {t("vehicle_update_requests") || "עדכוני רכב"}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity
@@ -259,19 +299,54 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
 
       {error && <Text style={styles.error}>{error}</Text>}
 
-      {visibleDrivers.length === 0 ? (
+      {listTab === "signup" ? (
+        visibleDrivers.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>
+              {search ? t("no_drivers_found") : t("no_pending_drivers")}
+            </Text>
+          </View>
+        ) : (
+          <FlatList
+            data={visibleDrivers}
+            keyExtractor={(item) => String(item.driver_profile_id)}
+            renderItem={renderItem}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+          />
+        )
+      ) : visibleVehicleRequests.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>
-            {search ? t("no_drivers_found") : t("no_pending_drivers")}
+            {search ? t("no_drivers_found") : t("no_pending_vehicle_requests") || "אין בקשות רכב ממתינות"}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={visibleDrivers}
-          keyExtractor={(item) => String(item.driver_profile_id)}
-          renderItem={renderItem}
+          data={visibleVehicleRequests}
+          keyExtractor={(item) => String(item.id)}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={styles.vehicleRequestCard}
+              onPress={() =>
+                navigation.navigate("AdminVehicleUpdateRequestDetails", {
+                  adminUserId,
+                  role,
+                  requestId: item.id,
+                })
+              }
+            >
+              <Text style={styles.vehicleRequestTitle}>{item.driver_full_name}</Text>
+              <Text style={styles.cardSubtitle}>
+                {item.request_type === "ADD_NEW"
+                  ? t("add_new_vehicle")
+                  : t("update_existing_vehicle")}{" "}
+                · {item.car_type} · {item.plate_number}
+              </Text>
+            </TouchableOpacity>
+          )}
         />
       )}
     </View>
@@ -539,5 +614,51 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
     paddingHorizontal: 0,
     backgroundColor: "#FFFFFF",
+  },
+  tabRow: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 4,
+    gap: 8,
+  },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+    alignItems: "center",
+  },
+  tabBtnActive: {
+    backgroundColor: DARK_TEAL,
+    borderColor: DARK_TEAL,
+  },
+  tabBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#6B7280",
+  },
+  tabBtnTextActive: {
+    color: "#fff",
+  },
+  vehicleRequestCard: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+    backgroundColor: "#F8F9FA",
+  },
+  vehicleRequestTitle: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#1A1A1A",
+  },
+  cardSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#6B7280",
   },
 });

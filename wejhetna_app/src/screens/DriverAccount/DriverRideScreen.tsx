@@ -8,6 +8,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import { useTranslation } from "react-i18next";
+import { setDriverAvailabilityCached } from "../../utils/driverAvailabilitySession";
 import {
   acceptRideRequest,
   cancelRideRequest,
@@ -120,6 +121,7 @@ export default function DriverRideScreen() {
   const [verifySuccessVisible, setVerifySuccessVisible] = useState(false);
   const [driverUserId, setDriverUserId] = useState<number | null>(null);
   const [isAvailable, setIsAvailable] = useState(false);
+  const [vehicleUpdateBlocked, setVehicleUpdateBlocked] = useState(false);
   const [requests, setRequests] = useState<DriverRideRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyActionId, setBusyActionId] = useState<number | null>(null);
@@ -197,6 +199,12 @@ export default function DriverRideScreen() {
     try {
       const availability = await getDriverAvailability(id);
       setIsAvailable(availability.is_available);
+      setVehicleUpdateBlocked(!!availability.vehicle_update_blocked);
+      setDriverAvailabilityCached(availability.is_available);
+      if (availability.vehicle_update_blocked && availability.is_available) {
+        setIsAvailable(false);
+        setDriverAvailabilityCached(false);
+      }
     } catch {
       // Availability is best-effort; requests list is shown independently
     }
@@ -258,8 +266,18 @@ export default function DriverRideScreen() {
 
   const onToggleAvailability = async (next: boolean) => {
     if (!driverUserId) return;
+    if (next && vehicleUpdateBlocked) {
+      appAlert(
+        t("error") || "שגיאה",
+        t("driver_vehicle_update_blocked") ||
+          "אינך יכול לבצע נסיעות כרגע. אתה מחוץ לשירות עד אישור בקשת הרכב. אנא שלח בקשה מתוקנת.",
+        [{ text: t("ok") || "OK" }]
+      );
+      return;
+    }
     const previous = isAvailable;
     setIsAvailable(next);
+    setDriverAvailabilityCached(next);
     setUpdatingAvailability(true);
     try {
       if (next) {
@@ -268,6 +286,7 @@ export default function DriverRideScreen() {
           current = await requestCurrentPositionWithRetry();
         } catch {
           setIsAvailable(previous);
+          setDriverAvailabilityCached(previous);
           appAlert(t("error"), t("failed_to_read_location"), [{ text: t("ok") || "OK" }]);
           return;
         }
@@ -280,6 +299,7 @@ export default function DriverRideScreen() {
           });
         } catch (e: unknown) {
           setIsAvailable(previous);
+          setDriverAvailabilityCached(previous);
           const msg = e instanceof Error ? e.message : "";
           const key = rideApiDetailToTranslationKey(msg);
           appAlert(t("error"), key ? t(key) : t("ride_failed_update_availability"), [{ text: t("ok") || "OK" }]);
@@ -292,6 +312,7 @@ export default function DriverRideScreen() {
           });
         } catch (e: unknown) {
           setIsAvailable(previous);
+          setDriverAvailabilityCached(previous);
           const msg = e instanceof Error ? e.message : "";
           const key = rideApiDetailToTranslationKey(msg);
           appAlert(t("error"), key ? t(key) : t("ride_failed_update_availability"), [{ text: t("ok") || "OK" }]);
@@ -567,7 +588,12 @@ export default function DriverRideScreen() {
   const renderRequestItem = ({ item, section }: { item: DriverRideRequest; section: RideListSection }) => {
     const isHistory = section.type === "history";
     const isActive = section.type === "active";
-    const distanceToPickupText = formatDistanceText(item.distance_to_pickup_km, t);
+    const distanceToPickupText =
+      item.status === "arrived"
+        ? formatDistanceText(0, t)
+        : formatDistanceText(item.distance_to_pickup_km, t);
+    const etaMinutesAtPickup =
+      item.status === "arrived" ? 0 : (item.eta_to_user ?? item.eta_to_pickup_min);
     const phaseKey = driverTrackingPhaseKey(item);
     const hideTrackingPhaseForPickupWait =
       item.status === "arrived" && driverPassengerReadyForVerifyByRequestId[item.id] !== true;
@@ -679,9 +705,9 @@ export default function DriverRideScreen() {
                 {t("ride_driver_distance_to_user")}: {distanceToPickupText}
               </Text>
             ) : null}
-            {(item.eta_to_user ?? item.eta_to_pickup_min) != null ? (
+            {etaMinutesAtPickup != null ? (
               <Text style={styles.detailLine}>
-                {t("ride_eta_to_user")}: {item.eta_to_user ?? item.eta_to_pickup_min} {t("ride_min")}
+                {t("ride_eta_to_user")}: {etaMinutesAtPickup} {t("ride_min")}
               </Text>
             ) : null}
             {item.estimated_trip_time != null ? (
@@ -735,33 +761,60 @@ export default function DriverRideScreen() {
             <Text style={styles.heroTitle}>{t("ride_driver_dashboard_title")}</Text>
           </View>
         </View>
-        <View style={styles.availabilityRow}>
+        <View
+          style={[
+            styles.availabilityRow,
+            vehicleUpdateBlocked && styles.availabilityRowBlocked,
+          ]}
+        >
           <View style={styles.availabilityIconWrap}>
             <View
               style={[
                 styles.availabilityIcon,
-                { backgroundColor: isAvailable ? Colors.primary : Colors.borderStrong },
+                {
+                  backgroundColor: vehicleUpdateBlocked
+                    ? "#9e9e9e"
+                    : isAvailable
+                    ? Colors.primary
+                    : Colors.borderStrong,
+                },
               ]}
             >
-              <Ionicons name="power" size={18} color={Colors.textInverse} />
+              <Ionicons
+                name={vehicleUpdateBlocked ? "ban" : "power"}
+                size={18}
+                color={Colors.textInverse}
+              />
             </View>
-            {isAvailable ? <View style={styles.pingRing} /> : null}
+            {isAvailable && !vehicleUpdateBlocked ? <View style={styles.pingRing} /> : null}
           </View>
           <View style={styles.availabilityTextCol}>
             <Text style={styles.availabilityState}>
-              {isAvailable ? t("ride_driver_online") : t("ride_driver_offline")}
+              {vehicleUpdateBlocked
+                ? t("ride_driver_blocked") || "מחוץ לשירות"
+                : isAvailable
+                ? t("ride_driver_online")
+                : t("ride_driver_offline")}
             </Text>
             <Text style={styles.availabilitySub}>
-              {isAvailable ? t("ride_driver_online_sub") : t("ride_driver_offline_sub")}
+              {vehicleUpdateBlocked
+                ? t("driver_vehicle_update_blocked") ||
+                  "אינך יכול לבצע נסיעות עד אישור בקשת הרכב."
+                : isAvailable
+                ? t("ride_driver_online_sub")
+                : t("ride_driver_offline_sub")}
             </Text>
           </View>
           <Switch
-            value={isAvailable}
+            value={isAvailable && !vehicleUpdateBlocked}
             onValueChange={onToggleAvailability}
-            disabled={updatingAvailability}
-            trackColor={{ false: "#c4c4c4", true: Colors.primary }}
+            disabled={updatingAvailability || vehicleUpdateBlocked}
+            trackColor={{
+              false: vehicleUpdateBlocked ? "#bdbdbd" : "#c4c4c4",
+              true: Colors.primary,
+            }}
             thumbColor={Colors.surface}
-            ios_backgroundColor="#c4c4c4"
+            ios_backgroundColor={vehicleUpdateBlocked ? "#bdbdbd" : "#c4c4c4"}
           />
         </View>
       </View>
@@ -938,6 +991,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     zIndex: 1,
+  },
+  availabilityRowBlocked: {
+    backgroundColor: "rgba(158, 158, 158, 0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(198, 40, 40, 0.35)",
   },
   availabilityIconWrap: { width: 40, height: 40, marginEnd: 10, justifyContent: "center" },
   availabilityIcon: {

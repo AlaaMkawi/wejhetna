@@ -43,6 +43,9 @@ from models import (
     EmailVerification,
     SavedPlace,
     DriverAvailability,
+    DriverVehicleUpdateRequest,
+    VehicleUpdateRequestType,
+    VehicleUpdateRequestStatus,
     RideRequest,
     RideRequestStatus,
     DriverRating,
@@ -119,6 +122,37 @@ from services.advertisement_service import (
     AdvertisementS3UploadError,
 )
 from ride_notifications import enqueue_ride_in_progress, enqueue_verification_code_created
+
+
+def normalize_place_image_storage(
+    main_image_url: Optional[str],
+    business_images_urls: Optional[List[str]],
+) -> Tuple[Optional[str], Optional[List[str]]]:
+    """
+    Persist place images consistently:
+    - main_image_url: single primary/thumbnail (first image).
+    - business_images_urls: additional gallery URLs only (no duplicate of main).
+    Accepts clients that send the full list in business_images_urls (including main).
+    """
+    ordered: List[str] = []
+
+    def add_url(raw: Optional[str]) -> None:
+        if not raw or not isinstance(raw, str):
+            return
+        u = raw.strip()
+        if u and u not in ordered:
+            ordered.append(u)
+
+    add_url(main_image_url)
+    if business_images_urls:
+        for item in business_images_urls:
+            add_url(item)
+
+    if not ordered:
+        return None, None
+    main_out = ordered[0]
+    gallery_out = ordered[1:] if len(ordered) > 1 else None
+    return main_out, gallery_out if gallery_out else None
 
 
 def find_osm_poi(lat: float, lon: float):
@@ -733,6 +767,53 @@ class DriverProfileOut(BaseModel):
     driver_status: str
     driver_license_image_url: Optional[str] = None
     id_card_image_url: Optional[str] = None
+    vehicle_update_blocked: bool = False
+    has_pending_vehicle_request: bool = False
+
+
+class DriverVehicleUpdateRequestCreate(BaseModel):
+    driver_user_id: int
+    request_type: str  # UPDATE_EXISTING | ADD_NEW
+    car_type: str
+    plate_number: str
+    production_year: int
+    driver_license_image_url: str
+    id_card_image_url: str
+    car_license_image_url: str
+    car_insurance_image_url: str
+    car_photos_urls: Optional[List[str]] = None
+    message_to_admin: Optional[str] = None
+
+
+class DriverVehicleUpdateRequestOut(BaseModel):
+    id: int
+    driver_user_id: int
+    driver_profile_id: int
+    request_type: str
+    status: str
+    car_type: str
+    plate_number: str
+    production_year: int
+    driver_license_image_url: str
+    id_card_image_url: str
+    car_license_image_url: str
+    car_insurance_image_url: str
+    car_photos_urls: Optional[List[str]] = None
+    message_to_admin: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    can_continue_driving: Optional[bool] = None
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    driver_full_name: Optional[str] = None
+    driver_email: Optional[str] = None
+    driver_phone: Optional[str] = None
+
+
+class DriverVehicleUpdateRequestReview(BaseModel):
+    admin_user_id: int
+    rejection_reason: Optional[str] = None
+    can_continue_driving: bool = False
+    driver_language: Optional[str] = "ar"
 
 
 class BusinessPlaceOut(BaseModel):
@@ -833,7 +914,12 @@ def approve_business_owner_request(
         place.description = req.description
         place.phone = req.phone
         place.opening_hours = req.opening_hours
-        place.main_image_url = req.main_image_url
+        main_img, gallery_imgs = normalize_place_image_storage(
+            req.main_image_url,
+            req.business_images_urls,
+        )
+        place.main_image_url = main_img
+        place.business_images_urls = gallery_imgs
         place.social_links = req.social_links
         place.owner_user_id = user.id
         place.can_be_claimed = False  # יש בעלים עכשיו
@@ -849,6 +935,9 @@ def approve_business_owner_request(
         db.add(location)
         db.flush()  # location.id
 
+        new_main_img, new_gallery_imgs = normalize_place_image_storage(
+            req.main_image_url, req.business_images_urls
+        )
         place = Place(
             location_id=location.id,
             city_id=req.city_id,
@@ -861,7 +950,8 @@ def approve_business_owner_request(
             description=req.description,
             phone=req.phone,
             opening_hours=req.opening_hours,
-            main_image_url=req.main_image_url,
+            main_image_url=new_main_img,
+            business_images_urls=new_gallery_imgs,
             social_links=req.social_links,
             owner_user_id=user.id,
             created_by_admin_id=admin.id,
@@ -2493,6 +2583,437 @@ Wejhetna Team"""
     return {"detail": "Driver rejected"}
 
 
+def _vehicle_update_request_out(
+    req: DriverVehicleUpdateRequest,
+    user: Optional[User] = None,
+) -> DriverVehicleUpdateRequestOut:
+    return DriverVehicleUpdateRequestOut(
+        id=req.id,
+        driver_user_id=req.driver_user_id,
+        driver_profile_id=req.driver_profile_id,
+        request_type=req.request_type.value,
+        status=req.status.value,
+        car_type=req.car_type,
+        plate_number=req.plate_number,
+        production_year=req.production_year,
+        driver_license_image_url=req.driver_license_image_url,
+        id_card_image_url=req.id_card_image_url,
+        car_license_image_url=req.car_license_image_url,
+        car_insurance_image_url=req.car_insurance_image_url,
+        car_photos_urls=req.car_photos_urls,
+        message_to_admin=req.message_to_admin,
+        rejection_reason=req.rejection_reason,
+        can_continue_driving=req.can_continue_driving,
+        created_at=req.created_at,
+        reviewed_at=req.reviewed_at,
+        driver_full_name=user.full_name if user else None,
+        driver_email=user.email if user else None,
+        driver_phone=user.phone if user else None,
+    )
+
+
+def _apply_approved_vehicle_request(
+    db: Session,
+    req: DriverVehicleUpdateRequest,
+    admin_id: int,
+) -> DriverVehicle:
+    profile = (
+        db.query(DriverProfile)
+        .filter(DriverProfile.id == req.driver_profile_id)
+        .first()
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    profile.driver_license_image_url = req.driver_license_image_url
+    profile.id_card_image_url = req.id_card_image_url
+    profile.vehicle_update_blocked = False
+
+    now = datetime.now(timezone.utc)
+
+    if req.request_type == VehicleUpdateRequestType.ADD_NEW:
+        vehicle = DriverVehicle(
+            driver_profile_id=profile.id,
+            car_type=req.car_type,
+            plate_number=req.plate_number,
+            production_year=req.production_year,
+            car_license_image_url=req.car_license_image_url,
+            car_insurance_image_url=req.car_insurance_image_url,
+            car_photos_urls=req.car_photos_urls,
+            status=VehicleStatus.APPROVED,
+            submitted_at=now,
+            reviewed_at=now,
+            reviewed_by_admin_id=admin_id,
+            rejection_reason=None,
+        )
+        db.add(vehicle)
+        db.flush()
+        return vehicle
+
+    vehicle = (
+        db.query(DriverVehicle)
+        .filter(DriverVehicle.driver_profile_id == profile.id)
+        .order_by(DriverVehicle.id.desc())
+        .first()
+    )
+    if not vehicle:
+        vehicle = DriverVehicle(
+            driver_profile_id=profile.id,
+            car_type=req.car_type,
+            plate_number=req.plate_number,
+            production_year=req.production_year,
+            car_license_image_url=req.car_license_image_url,
+            car_insurance_image_url=req.car_insurance_image_url,
+            car_photos_urls=req.car_photos_urls,
+            status=VehicleStatus.APPROVED,
+            submitted_at=now,
+            reviewed_at=now,
+            reviewed_by_admin_id=admin_id,
+        )
+        db.add(vehicle)
+        db.flush()
+        return vehicle
+
+    vehicle.car_type = req.car_type
+    vehicle.plate_number = req.plate_number
+    vehicle.production_year = req.production_year
+    vehicle.car_license_image_url = req.car_license_image_url
+    vehicle.car_insurance_image_url = req.car_insurance_image_url
+    vehicle.car_photos_urls = req.car_photos_urls
+    vehicle.status = VehicleStatus.APPROVED
+    vehicle.reviewed_at = now
+    vehicle.reviewed_by_admin_id = admin_id
+    vehicle.rejection_reason = None
+    return vehicle
+
+
+def _force_driver_offline(db: Session, driver_user_id: int) -> None:
+    availability = (
+        db.query(DriverAvailability)
+        .filter(DriverAvailability.driver_user_id == driver_user_id)
+        .first()
+    )
+    if availability:
+        availability.is_available = False
+
+
+@app.post(
+    "/drivers/vehicle-update-requests",
+    response_model=DriverVehicleUpdateRequestOut,
+    status_code=201,
+)
+def create_driver_vehicle_update_request(
+    data: DriverVehicleUpdateRequestCreate,
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == data.driver_user_id).first()
+    if not user or user.role != UserRole.DRIVER:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    if user.status != UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=400,
+            detail="Only active drivers can submit vehicle update requests",
+        )
+
+    profile = (
+        db.query(DriverProfile)
+        .filter(DriverProfile.user_id == user.id)
+        .first()
+    )
+    if not profile or profile.driver_status != DriverStatus.APPROVED:
+        raise HTTPException(
+            status_code=400,
+            detail="Driver profile must be approved before vehicle update requests",
+        )
+
+    try:
+        req_type = VehicleUpdateRequestType(data.request_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid request_type")
+
+    pending = (
+        db.query(DriverVehicleUpdateRequest)
+        .filter(
+            DriverVehicleUpdateRequest.driver_user_id == user.id,
+            DriverVehicleUpdateRequest.status == VehicleUpdateRequestStatus.PENDING,
+        )
+        .first()
+    )
+    if pending:
+        raise HTTPException(
+            status_code=400,
+            detail="You already have a pending vehicle update request",
+        )
+
+    req = DriverVehicleUpdateRequest(
+        driver_user_id=user.id,
+        driver_profile_id=profile.id,
+        request_type=req_type,
+        status=VehicleUpdateRequestStatus.PENDING,
+        car_type=data.car_type.strip(),
+        plate_number=data.plate_number.strip(),
+        production_year=data.production_year,
+        driver_license_image_url=data.driver_license_image_url.strip(),
+        id_card_image_url=data.id_card_image_url.strip(),
+        car_license_image_url=data.car_license_image_url.strip(),
+        car_insurance_image_url=data.car_insurance_image_url.strip(),
+        car_photos_urls=data.car_photos_urls or None,
+        message_to_admin=(
+            data.message_to_admin.strip()
+            if data.message_to_admin and data.message_to_admin.strip()
+            else None
+        ),
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return _vehicle_update_request_out(req, user)
+
+
+@app.get(
+    "/drivers/{driver_user_id}/vehicle-update-requests",
+    response_model=List[DriverVehicleUpdateRequestOut],
+)
+def list_driver_vehicle_update_requests(
+    driver_user_id: int,
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(DriverVehicleUpdateRequest, User)
+        .join(User, User.id == DriverVehicleUpdateRequest.driver_user_id)
+        .filter(DriverVehicleUpdateRequest.driver_user_id == driver_user_id)
+        .order_by(DriverVehicleUpdateRequest.created_at.desc())
+        .all()
+    )
+    return [_vehicle_update_request_out(req, user) for req, user in rows]
+
+
+@app.get(
+    "/drivers/vehicle-update-requests/{request_id}",
+    response_model=DriverVehicleUpdateRequestOut,
+)
+def get_driver_vehicle_update_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(DriverVehicleUpdateRequest, User)
+        .join(User, User.id == DriverVehicleUpdateRequest.driver_user_id)
+        .filter(DriverVehicleUpdateRequest.id == request_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Request not found")
+    req, user = row
+    return _vehicle_update_request_out(req, user)
+
+
+@app.get(
+    "/admin/drivers/vehicle-update-requests/pending",
+    response_model=List[DriverVehicleUpdateRequestOut],
+)
+def list_pending_vehicle_update_requests(db: Session = Depends(get_db)):
+    rows = (
+        db.query(DriverVehicleUpdateRequest, User)
+        .join(User, User.id == DriverVehicleUpdateRequest.driver_user_id)
+        .filter(
+            DriverVehicleUpdateRequest.status == VehicleUpdateRequestStatus.PENDING
+        )
+        .order_by(DriverVehicleUpdateRequest.created_at.asc())
+        .all()
+    )
+    return [_vehicle_update_request_out(req, user) for req, user in rows]
+
+
+@app.post("/admin/drivers/vehicle-update-requests/{request_id}/approve")
+def approve_vehicle_update_request(
+    request_id: int,
+    data: DriverVehicleUpdateRequestReview,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can approve")
+
+    req = (
+        db.query(DriverVehicleUpdateRequest)
+        .filter(DriverVehicleUpdateRequest.id == request_id)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != VehicleUpdateRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Request is not pending")
+
+    user = db.query(User).filter(User.id == req.driver_user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    _apply_approved_vehicle_request(db, req, admin.id)
+    req.status = VehicleUpdateRequestStatus.APPROVED
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.reviewed_by_admin_id = admin.id
+    req.rejection_reason = None
+    req.can_continue_driving = None
+
+    profile = (
+        db.query(DriverProfile)
+        .filter(DriverProfile.id == req.driver_profile_id)
+        .first()
+    )
+    if profile:
+        profile.vehicle_update_blocked = False
+
+    db.commit()
+
+    to_email = str(user.email)
+    full_name = str(user.full_name)
+    subject = "وجهتنا / ווג'הטנא – אישור עדכון רכב / الموافقة على تحديث المركبة"
+    email_body_ar = f"""عزيزي/عزيزتي {full_name},
+
+تمت الموافقة على طلب تحديث/إضافة المركبة الخاص بك.
+
+يمكنك الآن متابعة استخدام التطبيق كسائق مع بيانات المركبة الجديدة.
+
+مع أطيب التحيات،
+فريق وجهتنا"""
+    email_body_he = f"""שלום {full_name},
+
+בקשתך לעדכון/הוספת רכב אושרה.
+
+נתוני הרכב החדשים שלך פעילים כעת במערכת.
+
+בברכה,
+צוות ווג'הטנא"""
+    email_body = f"{email_body_ar}\n\n------------------------------\n\n{email_body_he}"
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="approved",
+        request_type="driver_vehicle",
+    )
+
+    return {"detail": "Vehicle update request approved"}
+
+
+@app.post("/admin/drivers/vehicle-update-requests/{request_id}/reject")
+def reject_vehicle_update_request(
+    request_id: int,
+    data: DriverVehicleUpdateRequestReview,
+    db: Session = Depends(get_db),
+):
+    admin = (
+        db.query(User)
+        .filter(User.id == data.admin_user_id, User.role == UserRole.ADMIN)
+        .first()
+    )
+    if not admin:
+        raise HTTPException(status_code=403, detail="Only admin can reject")
+
+    req = (
+        db.query(DriverVehicleUpdateRequest)
+        .filter(DriverVehicleUpdateRequest.id == request_id)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != VehicleUpdateRequestStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Request is not pending")
+
+    user = db.query(User).filter(User.id == req.driver_user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    reason = (data.rejection_reason or "").strip() or "Your vehicle update request was not approved."
+    req.status = VehicleUpdateRequestStatus.REJECTED
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.reviewed_by_admin_id = admin.id
+    req.rejection_reason = reason
+    req.can_continue_driving = bool(data.can_continue_driving)
+
+    profile = (
+        db.query(DriverProfile)
+        .filter(DriverProfile.id == req.driver_profile_id)
+        .first()
+    )
+    if profile:
+        if data.can_continue_driving:
+            profile.vehicle_update_blocked = False
+        else:
+            profile.vehicle_update_blocked = True
+            _force_driver_offline(db, req.driver_user_id)
+
+    db.commit()
+
+    to_email = str(user.email)
+    full_name = str(user.full_name)
+    driver_language = data.driver_language or "ar"
+
+    if data.can_continue_driving:
+        extra_ar = "يمكنك الاستمرار في تنفيذ الرحلات باستخدام بيانات المركبة الحالية حتى يتم إرسال طلب مصحح واعتماده."
+        extra_he = "ניתן להמשיך לבצע נסיעות עם הרכב הקיים בזמן תיקון הבקשה."
+        extra_en = "You may continue driving with your current vehicle until a corrected request is approved."
+    else:
+        extra_ar = "لا يمكنك تنفيذ رحلات حتى يتم إرسال طلب مصحح والموافقة عليه."
+        extra_he = "אינך יכול לבצע נסיעות עד שהבקשה תאושר. אנא שלח בקשה מתוקנת."
+        extra_en = "You cannot take rides until you submit a corrected request and it is approved."
+
+    if driver_language == "he":
+        subject = "ווג'הטנא – דחיית בקשת עדכון רכב"
+        email_body = f"""שלום {full_name},
+
+בקשתך לעדכון/הוספת רכב נדחתה.
+
+סיבת הדחייה:
+{reason}
+
+{extra_he}
+
+בברכה,
+צוות ווג'הטנא"""
+    elif driver_language == "en":
+        subject = "Wejhetna – Vehicle update request rejected"
+        email_body = f"""Dear {full_name},
+
+Your vehicle update/add request was rejected.
+
+Rejection reason:
+{reason}
+
+{extra_en}
+
+Best regards,
+Wejhetna Team"""
+    else:
+        subject = "وجهتنا – رفض طلب تحديث المركبة"
+        email_body = f"""عزيزي/عزيزتي {full_name},
+
+تم رفض طلب تحديث/إضافة المركبة.
+
+سبب الرفض:
+{reason}
+
+{extra_ar}
+
+مع أطيب التحيات،
+فريق وجهتنا"""
+
+    enqueue_admin_status_email(
+        to_email,
+        subject,
+        email_body,
+        status="rejected",
+        request_type="driver_vehicle",
+    )
+
+    return {"detail": "Vehicle update request rejected"}
+
+
 @app.get("/admin/drivers/pending", response_model=List[DriverApplicationOut])
 def list_pending_drivers(db: Session = Depends(get_db)):
     # all drivers whose driver_status is PENDING
@@ -3199,6 +3720,7 @@ def check_nearby_places_for_owner(
         lat: float,
         lon: float,
         radius_m: float = 50,  # ברירת מחדל 50 מטר
+        exclude_place_id: Optional[int] = None,
         db: Session = Depends(get_db),
 ):
     """
@@ -3232,6 +3754,9 @@ def check_nearby_places_for_owner(
         return BusinessOwnerNearbyCheckResponse(status="NO_PLACE", candidate=None)
 
     place, city = row
+    if exclude_place_id is not None and place.id == exclude_place_id:
+        return BusinessOwnerNearbyCheckResponse(status="NO_PLACE", candidate=None)
+
     has_owner = place.owner_user_id is not None
 
     candidate = NearbyPlaceInfo(
@@ -3301,7 +3826,14 @@ def create_place(data: PlaceCreate, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="User is not a business owner")
 
     # יוצרים את המקום
-    place = Place(**data.model_dump())
+    dump = data.model_dump()
+    main_img, gallery_imgs = normalize_place_image_storage(
+        dump.get("main_image_url"),
+        dump.get("business_images_urls"),
+    )
+    dump["main_image_url"] = main_img
+    dump["business_images_urls"] = gallery_imgs
+    place = Place(**dump)
     db.add(place)
     db.commit()
     db.refresh(place)
@@ -3462,6 +3994,10 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
     # -----------------------------------------
     # 5) יצירת Place
     # -----------------------------------------
+    main_img, gallery_imgs = normalize_place_image_storage(
+        data.main_image_url,
+        data.business_images_urls,
+    )
     place = Place(
         location_id=location.id,
         city_id=data.city_id,
@@ -3472,7 +4008,8 @@ def admin_create_place(data: AdminPlaceCreate, db: Session = Depends(get_db)):
         description=data.description,
         phone=data.phone,
         opening_hours=data.opening_hours,
-        main_image_url=data.main_image_url,
+        main_image_url=main_img,
+        business_images_urls=gallery_imgs,
         social_links=data.social_links,
         owner_user_id=data.owner_user_id,
         created_by_admin_id=data.created_by_admin_id,
@@ -3549,18 +4086,80 @@ def admin_update_place(
     if data.opening_hours is not None:
         # Allow setting to None/empty string to clear the field
         place.opening_hours = data.opening_hours.strip() if data.opening_hours and data.opening_hours.strip() else None
-    if data.main_image_url is not None:
-        # Allow setting to None/empty string to clear the field
-        place.main_image_url = data.main_image_url.strip() if data.main_image_url and data.main_image_url.strip() else None
-    if data.business_images_urls is not None:
-        # Allow setting to None/empty list to clear the field
-        place.business_images_urls = data.business_images_urls if data.business_images_urls else None
+    if data.main_image_url is not None or data.business_images_urls is not None:
+        main_for_norm = place.main_image_url
+        gallery_for_norm = place.business_images_urls
+        if data.main_image_url is not None:
+            main_for_norm = (
+                data.main_image_url.strip()
+                if data.main_image_url and data.main_image_url.strip()
+                else None
+            )
+        if data.business_images_urls is not None:
+            gallery_for_norm = (
+                data.business_images_urls if data.business_images_urls else None
+            )
+        main_norm, gallery_norm = normalize_place_image_storage(
+            main_for_norm,
+            gallery_for_norm,
+        )
+        place.main_image_url = main_norm
+        place.business_images_urls = gallery_norm
     if data.social_links is not None:
         # Allow setting to None/empty string to clear the field
         place.social_links = data.social_links.strip() if data.social_links and data.social_links.strip() else None
     if data.announcement is not None:
         # Allow setting to None/empty string to clear the field
         place.announcement = data.announcement.strip() if data.announcement and data.announcement.strip() else None
+
+    if data.lat is not None or data.lon is not None:
+        if data.lat is None or data.lon is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Both lat and lon are required to update location",
+            )
+        if not data.editor_role or data.editor_user_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="editor_role and editor_user_id are required for location update",
+            )
+        if place.owner_user_id is not None:
+            if data.editor_role != "BUSINESS_OWNER":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the business owner can change this place location",
+                )
+            if data.editor_user_id != place.owner_user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to update this place location",
+                )
+        elif data.editor_role != "ADMIN":
+            raise HTTPException(
+                status_code=403,
+                detail="Only admin can change location of unowned places",
+            )
+
+        location = db.query(Location).filter(Location.id == place.location_id).first()
+        if not location:
+            raise HTTPException(status_code=404, detail="Location not found")
+
+        location.geom = func.ST_SetSRID(
+            func.ST_MakePoint(data.lon, data.lat), 4326
+        )
+        if data.location_source:
+            location.source = data.location_source
+        if data.osm_id is not None:
+            location.osm_id = data.osm_id
+        elif data.location_source in ("GPS_NO_OSM", "GPS_WITH_OSM", "MAP_PICK"):
+            detected_osm = find_osm_feature(data.lat, data.lon)
+            location.osm_id = detected_osm
+
+        if data.city_id is not None:
+            city = db.query(City).filter(City.id == data.city_id).first()
+            if not city:
+                raise HTTPException(status_code=404, detail="City not found")
+            place.city_id = data.city_id
 
     # סנכרון התרגום לקבצי התרגום אם השמות השתנו
     try:
@@ -4033,6 +4632,8 @@ def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
             ),
             vehicle=None,
             driver_status="N/A",
+            vehicle_update_blocked=False,
+            has_pending_vehicle_request=False,
         )
 
     # Get the most recent vehicle
@@ -4056,6 +4657,15 @@ def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
             status=vehicle.status.value,
         )
 
+    pending_vehicle_req = (
+        db.query(DriverVehicleUpdateRequest)
+        .filter(
+            DriverVehicleUpdateRequest.driver_user_id == user_id,
+            DriverVehicleUpdateRequest.status == VehicleUpdateRequestStatus.PENDING,
+        )
+        .first()
+    )
+
     return DriverProfileOut(
         user=UserProfileOut(
             id=user.id,
@@ -4071,6 +4681,8 @@ def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
         driver_status=driver_profile.driver_status.value,
         driver_license_image_url=driver_profile.driver_license_image_url,
         id_card_image_url=driver_profile.id_card_image_url,
+        vehicle_update_blocked=bool(driver_profile.vehicle_update_blocked),
+        has_pending_vehicle_request=pending_vehicle_req is not None,
     )
 
 
@@ -4669,6 +5281,18 @@ def update_driver_availability(data: DriverAvailabilityUpdateRequest, db: Sessio
     if not driver or driver.role != UserRole.DRIVER:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    if data.is_available:
+        profile = (
+            db.query(DriverProfile)
+            .filter(DriverProfile.user_id == driver.id)
+            .first()
+        )
+        if profile and profile.vehicle_update_blocked:
+            raise HTTPException(
+                status_code=403,
+                detail="vehicle_update_blocked",
+            )
+
     if data.is_available and (data.lat is None or data.lon is None):
         raise HTTPException(status_code=400, detail="Location is required when enabling availability")
 
@@ -4706,9 +5330,21 @@ def get_driver_availability(driver_user_id: int, db: Session = Depends(get_db)):
     availability = db.query(DriverAvailability).filter(
         DriverAvailability.driver_user_id == driver_user_id
     ).first()
+    profile = (
+        db.query(DriverProfile)
+        .filter(DriverProfile.user_id == driver_user_id)
+        .first()
+    )
+    blocked = bool(profile.vehicle_update_blocked) if profile else False
     if not availability:
-        return {"is_available": False}
-    return {"is_available": bool(availability.is_available)}
+        return {
+            "is_available": False,
+            "vehicle_update_blocked": blocked,
+        }
+    return {
+        "is_available": bool(availability.is_available),
+        "vehicle_update_blocked": blocked,
+    }
 
 
 @app.post("/drivers/location", response_model=RideRequestStatusOut)
@@ -4758,6 +5394,7 @@ def list_nearby_available_drivers(
             DriverAvailability.is_available.is_(True),
             DriverAvailability.updated_at >= cutoff,
             DriverProfile.driver_status == DriverStatus.APPROVED,
+            DriverProfile.vehicle_update_blocked.is_(False),
             func.ST_DWithin(
                 Location.geom,
                 cast(
