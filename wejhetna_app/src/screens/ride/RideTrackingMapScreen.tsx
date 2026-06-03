@@ -6,7 +6,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTranslation } from "react-i18next";
 import { CommonActions } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { MapView, Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation, ShapeSource, LineLayer } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useMapScreenLifecycle } from "../../components/map/useMapScreenLifecycle";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { RootStackParamList } from "../../navigation/types";
 import {
@@ -28,6 +30,14 @@ import { OffRoutePathConnector } from "../../components/map/OffRoutePathConnecto
 import { useDriverTrailHeading } from "../../components/map/useDriverTrailHeading";
 import { useDriverToPickupRouteVisualization } from "../../hooks/useDriverToPickupRouteVisualization";
 import { haversineMeters } from "../../utils/routePolyline";
+import {
+  isPickupArrivalStatus,
+  navDistanceKmFromMeters,
+  navEtaMinutesFromSeconds,
+  navEtaSecondsForDisplay,
+  navRemainingMeters,
+  shouldLockNavMetricsForProximity,
+} from "../../utils/navMetricsAtArrival";
 import { markDriverCancelledOwnRide } from "../../utils/rideCancelAlertGate";
 import { NavigationInfoPanel, type NavInfoStat } from "../../components/navigation/NavigationInfoPanel";
 import i18n from "../../i18n";
@@ -72,6 +82,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   const markArrivalRequestInFlightRef = useRef(false);
   const myDriverGpsRef = useRef(myDriverGps);
   myDriverGpsRef.current = myDriverGps;
+  const { showOverlays, exitMapScreen, screenActiveRef } = useMapScreenLifecycle();
 
   const pickup = useMemo(() => {
     const r = mode === "driver" ? rideDriver : ridePassenger;
@@ -97,6 +108,19 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     return null;
   }, [mode, myDriverGps, ridePassenger]);
 
+  const rideForPickup = mode === "driver" ? rideDriver : ridePassenger;
+  const pickupArrivalReached = useMemo(() => {
+    if (!rideForPickup || rideForPickup.id !== rideRequestId) return false;
+    const st = normalizeRideRequestStatus(rideForPickup.status);
+    if (isPickupArrivalStatus(st)) return true;
+    if (mode !== "driver" || !driverDot || !pickup) return false;
+    if (st !== "on_the_way" && st !== "driving_to_customer") return false;
+    return (
+      haversineMeters(driverDot.lat, driverDot.lon, pickup.lat, pickup.lon) <=
+      DRIVER_PICKUP_ARRIVAL_HAVERSINE_M
+    );
+  }, [rideForPickup, rideRequestId, mode, driverDot, pickup]);
+
   const {
     routeBackdropFc,
     routeRemainingFc,
@@ -104,7 +128,20 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     etaSecondsRemaining,
     routeLoading,
     osrmLegDistanceM,
-  } = useDriverToPickupRouteVisualization(driverDot, pickup);
+  } = useDriverToPickupRouteVisualization(driverDot, pickup, {
+    forceZeroMetrics: pickupArrivalReached,
+  });
+
+  const pickupProximityLock = useMemo(() => {
+    if (!pickup || !driverDot) return false;
+    return shouldLockNavMetricsForProximity(
+      remainingDistanceMeters ?? Number.POSITIVE_INFINITY,
+      haversineMeters(driverDot.lat, driverDot.lon, pickup.lat, pickup.lon)
+    );
+  }, [pickup, driverDot, remainingDistanceMeters]);
+
+  const atPickupArrival = pickupArrivalReached || pickupProximityLock;
+  const pickupNavLockOpts = useMemo(() => ({ atArrival: atPickupArrival }), [atPickupArrival]);
 
   const driverTrailHeadingDeg = useDriverTrailHeading(
     driverDot?.lat,
@@ -138,38 +175,55 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   const apiDistKm = mode === "passenger" ? ridePassenger?.distance_to_pickup_km ?? null : rideDriver?.distance_to_pickup_km ?? null;
 
   const fetchRideSnapshot = useCallback(async () => {
+    if (!screenActiveRef.current) {
+      return;
+    }
     setError(null);
     try {
       if (mode === "driver") {
         const stored = await AsyncStorage.getItem("userId");
         const did = parseStoredUserId(stored);
         if (did == null) {
-          setError("session");
-          setRideDriver(null);
-          setDriverUserId(null);
+          if (screenActiveRef.current) {
+            setError("session");
+            setRideDriver(null);
+            setDriverUserId(null);
+          }
           return;
         }
-        setDriverUserId(did);
+        if (screenActiveRef.current) {
+          setDriverUserId(did);
+        }
         const list = await getDriverRideRequests(did);
         const row = list.find((x) => x.id === rideRequestId) ?? null;
-        setRideDriver(row);
+        if (screenActiveRef.current) {
+          setRideDriver(row);
+        }
       } else {
         const stored = await AsyncStorage.getItem("userId");
         const uid = parseStoredUserId(stored);
         if (uid == null) {
-          setError("session");
-          setRidePassenger(null);
+          if (screenActiveRef.current) {
+            setError("session");
+            setRidePassenger(null);
+          }
           return;
         }
         const row = await getRegularLatestRideRequest(uid);
-        setRidePassenger(row);
+        if (screenActiveRef.current) {
+          setRidePassenger(row);
+        }
       }
     } catch {
-      setError("load");
+      if (screenActiveRef.current) {
+        setError("load");
+      }
     } finally {
-      setLoading(false);
+      if (screenActiveRef.current) {
+        setLoading(false);
+      }
     }
-  }, [mode, rideRequestId]);
+  }, [mode, rideRequestId, screenActiveRef]);
 
   useEffect(() => {
     void fetchRideSnapshot();
@@ -188,7 +242,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
     const tick = async () => {
       try {
         const pos = await requestCurrentPositionWithRetry();
-        if (!cancelled) {
+        if (!cancelled && screenActiveRef.current) {
           setMyDriverGps({ lat: pos.coords.latitude, lon: pos.coords.longitude });
         }
       } catch {
@@ -204,19 +258,22 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   }, [mode]);
 
   const navigateDriverOutToRequests = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigation.dispatch(
-      CommonActions.navigate({
-        name: "UserTabs",
-        params: {
-          screen: "DriverRequests",
-        },
-      })
-    );
-  }, [navigation]);
+    const go = () => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+      navigation.dispatch(
+        CommonActions.navigate({
+          name: "UserTabs",
+          params: {
+            screen: "DriverRequests",
+          },
+        })
+      );
+    };
+    exitMapScreen(go);
+  }, [navigation, exitMapScreen]);
 
   const exitDriverMapAfterArrival = useCallback(() => {
     if (exitedDriverMapAfterArrivalRef.current) return;
@@ -226,19 +283,22 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
 
   /** Passenger: leave full-screen map — prefer stack back; otherwise open transport tab (ride requests). */
   const navigatePassengerOutOfMapToRideRequests = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigation.dispatch(
-      CommonActions.navigate({
-        name: "UserTabs",
-        params: {
-          screen: "RideTracking",
-        },
-      })
-    );
-  }, [navigation]);
+    const go = () => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+      navigation.dispatch(
+        CommonActions.navigate({
+          name: "UserTabs",
+          params: {
+            screen: "RideTracking",
+          },
+        })
+      );
+    };
+    exitMapScreen(go);
+  }, [navigation, exitMapScreen]);
 
   const exitPassengerMapAfterArrival = useCallback(() => {
     if (exitedPassengerMapAfterArrivalRef.current) return;
@@ -356,17 +416,21 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   /** Live ETA line from route trim + OSRM duration (driver and passenger maps). */
   const liveEtaPrimaryLine = useMemo(() => {
     if (mode !== "passenger" && mode !== "driver") return null;
+    if (atPickupArrival) {
+      return t("ride_driver_eta_minutes_away", { minutes: 0 });
+    }
     if (etaSecondsRemaining != null && Number.isFinite(etaSecondsRemaining)) {
-      if (etaSecondsRemaining < 90) {
-        return t("ride_tracking_passenger_eta_seconds", {
-          seconds: Math.max(1, Math.round(etaSecondsRemaining)),
-        });
+      const sec = navEtaSecondsForDisplay(etaSecondsRemaining, pickupNavLockOpts);
+      if (sec != null && sec < 90) {
+        return t("ride_tracking_passenger_eta_seconds", { seconds: sec });
       }
-      const min = Math.max(1, Math.round(etaSecondsRemaining / 60));
-      if (min <= 1) {
+      const min = navEtaMinutesFromSeconds(etaSecondsRemaining, pickupNavLockOpts);
+      if (min != null && min <= 1) {
         return t("ride_driver_eta_arriving_now");
       }
-      return t("ride_driver_eta_minutes_away", { minutes: min });
+      if (min != null) {
+        return t("ride_driver_eta_minutes_away", { minutes: min });
+      }
     }
     if (apiEtaMin != null) {
       if (apiEtaMin <= 1) {
@@ -375,7 +439,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
       return t("ride_driver_eta_minutes_away", { minutes: apiEtaMin });
     }
     return null;
-  }, [mode, etaSecondsRemaining, apiEtaMin, t]);
+  }, [mode, atPickupArrival, pickupNavLockOpts, etaSecondsRemaining, apiEtaMin, t]);
 
   const onDriverCancelRidePress = useCallback(() => {
     if (driverUserId == null || driverCancellingRide) return;
@@ -408,20 +472,27 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
   }, [driverUserId, driverCancellingRide, rideRequestId, t, navigateDriverOutToRequests]);
 
   const distDisplayKm = useMemo(() => {
-    if (remainingDistanceMeters != null && Number.isFinite(remainingDistanceMeters)) {
-      return Math.round((remainingDistanceMeters / 1000) * 10) / 10;
-    }
+    const liveKm = navDistanceKmFromMeters(remainingDistanceMeters, pickupNavLockOpts);
+    if (liveKm != null) return liveKm;
     return apiDistKm;
-  }, [remainingDistanceMeters, apiDistKm]);
+  }, [remainingDistanceMeters, atPickupArrival, apiDistKm]);
 
   const legProgress01 = useMemo(() => {
+    if (atPickupArrival) return 1;
     if (osrmLegDistanceM == null || osrmLegDistanceM <= 0 || remainingDistanceMeters == null) {
       return 0;
     }
     return Math.max(0, Math.min(1, 1 - remainingDistanceMeters / osrmLegDistanceM));
-  }, [osrmLegDistanceM, remainingDistanceMeters]);
+  }, [atPickupArrival, osrmLegDistanceM, remainingDistanceMeters]);
 
   const arrivalClockLine = useMemo(() => {
+    if (atPickupArrival) {
+      const locale = i18n.language === "he" ? "he-IL" : "ar";
+      return new Date().toLocaleTimeString(locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
     if (etaSecondsRemaining != null && Number.isFinite(etaSecondsRemaining)) {
       const locale = i18n.language === "he" ? "he-IL" : "ar";
       return new Date(Date.now() + etaSecondsRemaining * 1000).toLocaleTimeString(locale, {
@@ -437,7 +508,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
       });
     }
     return null;
-  }, [etaSecondsRemaining, apiEtaMin, i18n.language]);
+  }, [atPickupArrival, etaSecondsRemaining, apiEtaMin, i18n.language]);
 
   const trackingNavStats = useMemo((): [NavInfoStat, NavInfoStat, NavInfoStat] => {
     return [
@@ -475,7 +546,9 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
       <View style={styles.header}>
         <TouchableOpacity
           onPress={
-            mode === "passenger" ? navigatePassengerOutOfMapToRideRequests : () => navigation.goBack()
+            mode === "passenger"
+              ? navigatePassengerOutOfMapToRideRequests
+              : navigateDriverOutToRequests
           }
           style={styles.backBtn}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -510,7 +583,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
       ) : (
         <>
           <View style={styles.mapWrap}>
-            <MapView
+            <FocusedMapView
               style={styles.map}
               mapStyle={MAP_STYLE_URL}
               scrollEnabled
@@ -532,7 +605,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   animationMode="flyTo"
                 />
               ) : null}
-              {routeBackdropFc ? (
+              {showOverlays && routeBackdropFc ? (
                 <ShapeSource id="rideRouteBackdrop" shape={routeBackdropFc}>
                   <LineLayer
                     id="rideRouteBackdropLayer"
@@ -546,7 +619,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   />
                 </ShapeSource>
               ) : null}
-              {routeRemainingFc ? (
+              {showOverlays && routeRemainingFc ? (
                 <ShapeSource id="rideRouteRemaining" shape={routeRemainingFc}>
                   <LineLayer
                     id="rideRouteRemainingLayer"
@@ -563,16 +636,16 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
               {/* Dotted leader line from the live driver dot to the start of
                   the trimmed remaining route — only shows when the driver is
                   visibly off the road geometry. */}
-              <OffRoutePathConnector
-                id="rideRouteConnector"
-                from={driverDot}
-                to={routeRemainingStart}
-                color={ROUTE_BLUE}
-                width={3}
-              />
-              {/* Small start dot at the road origin so the route reads as a
-                  proper path (driver → road → destination). */}
-              {routeRemainingStart ? (
+              {showOverlays ? (
+                <OffRoutePathConnector
+                  id="rideRouteConnector"
+                  from={driverDot}
+                  to={routeRemainingStart}
+                  color={ROUTE_BLUE}
+                  width={3}
+                />
+              ) : null}
+              {showOverlays && routeRemainingStart ? (
                 <PointAnnotation
                   id="rideRouteStart"
                   coordinate={routeRemainingStart}
@@ -580,13 +653,15 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   <RouteEndpointMarker variant="start" color={ROUTE_BLUE} />
                 </PointAnnotation>
               ) : null}
-              <PointAnnotation
-                id="pickup_mark"
-                coordinate={[pickup.lon, pickup.lat]}
-              >
-                <RouteEndpointMarker variant="end" iconName="navigate" />
-              </PointAnnotation>
-              {driverDot ? (
+              {showOverlays ? (
+                <PointAnnotation
+                  id="pickup_mark"
+                  coordinate={[pickup.lon, pickup.lat]}
+                >
+                  <RouteEndpointMarker variant="end" iconName="navigate" />
+                </PointAnnotation>
+              ) : null}
+              {showOverlays && driverDot ? (
                 <PointAnnotation
                   id="driver_mark"
                   coordinate={[driverDot.lon, driverDot.lat]}
@@ -598,7 +673,7 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   />
                 </PointAnnotation>
               ) : null}
-            </MapView>
+            </FocusedMapView>
             {routeLoading ? (
               <View style={styles.routeLoading}>
                 <ActivityIndicator color="#fff" />
@@ -649,13 +724,16 @@ export default function RideTrackingMapScreen({ route, navigation }: Props) {
                   )}
                 </View>
               ) : null}
-              {remainingDistanceMeters != null && remainingDistanceMeters < 5000 ? (
-                <Text style={styles.trackingSubLine}>
-                  {t("ride_tracking_remaining_meters", {
-                    meters: Math.max(0, Math.round(remainingDistanceMeters)),
-                  })}
-                </Text>
-              ) : null}
+              {(() => {
+                const remainM = navRemainingMeters(remainingDistanceMeters, pickupNavLockOpts);
+                return remainM != null && remainM < 5000 ? (
+                  <Text style={styles.trackingSubLine}>
+                    {t("ride_tracking_remaining_meters", {
+                      meters: Math.round(remainM),
+                    })}
+                  </Text>
+                ) : null;
+              })()}
               {mode === "passenger" && !driverDot ? (
                 <Text style={styles.trackingPanelHint}>{t("ride_tracking_waiting_driver_location")}</Text>
               ) : null}

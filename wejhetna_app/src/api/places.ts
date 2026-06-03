@@ -278,6 +278,7 @@ export async function createAdminPlace(data: any) {
       phone: data.phone,
       opening_hours: data.opening_hours,
       main_image_url: data.main_image_url,
+      business_images_urls: data.business_images_urls ?? null,
       social_links: data.social_links,
       owner_user_id: data.owner_user_id,
       location_id: location.id,
@@ -293,7 +294,8 @@ export async function createAdminPlace(data: any) {
     throw new Error(msg);
   }
 
-  return placeRes.json();
+  const created = await placeRes.json();
+  return normalizePlaceImageFields(created);
 }
 
 // =======================
@@ -366,7 +368,8 @@ export async function fetchPlacesByBbox(
   });
   const res = await fetch(`${BASE_URL}/places/map?${params}`);
   if (!res.ok) throw new Error("Failed to fetch places");
-  return res.json();
+  const data: PlaceForMap[] = await res.json();
+  return data.map((p) => normalizePlaceImageFields(p));
 }
 // =======================
 // GPS → OSM CHECK
@@ -403,7 +406,8 @@ export async function updatePlace(placeId: number, updateData: any): Promise<any
     throw new Error(errorData.detail || "Failed to update place");
   }
 
-  return res.json();
+  const updated = await res.json();
+  return normalizePlaceImageFields(updated);
 }
 
 // =======================

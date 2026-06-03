@@ -15,17 +15,27 @@ import {
   formatHourSlotForStorage,
 } from "../../utils/openingHours";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useIosAnnotationMount } from "../../components/map/useIosAnnotationMount";
 import { RootStackParamList } from "../../navigation/types";
 import {
   getBusinessOwnerProfile,
   BusinessOwnerProfileOut,
   BusinessPlaceOut,
 } from "../../api/businessOwnerApi";
-import { updatePlace } from "../../api/places";
+import {
+  fetchAllPlaces,
+  fetchCategories,
+  Category,
+  PlaceForMap,
+  PlaceType,
+  updatePlace,
+} from "../../api/places";
 import i18n from "../../i18n";
 import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "../MessageModal";
+import { Picker } from "@react-native-picker/picker";
 import { API_BASE_URL } from "../../../config";
 import { uploadAssetToS3Presigned } from "../../api/upload";
 import {
@@ -34,6 +44,7 @@ import {
   getValidImageUrl,
   logPlaceImageRenderDebug,
 } from "../../utils/imageUrl";
+import { sanitizeBusinessImagesForApi } from "../../utils/placeBusinessImages";
 
 const DARK_TEAL = "#0f5b63";
 const SOFT_TEAL = "#3a8d96";
@@ -48,11 +59,29 @@ type NavType = NativeStackNavigationProp<RootStackParamList>;
 type ManageMyBusinessRoute = RouteProp<RootStackParamList, "ManageMyBusiness">;
 
 export default function ManageMyBusinessScreen() {
+  const showMapPin = useIosAnnotationMount();
   const { t } = useTranslation();
   const navigation = useNavigation<NavType>();
   const route = useRoute<ManageMyBusinessRoute>();
   const fromMap = route.params?.fromMap ?? false;
+  const adminPlaceId = route.params?.adminPlaceId;
+  const adminUserId = route.params?.adminUserId;
+  const isAdminMode = typeof adminPlaceId === "number";
   const cameraRef = useRef<any>(null);
+
+  const [placeType, setPlaceType] = useState<PlaceType>("BUSINESS");
+  const isPublicPlace = placeType === "PUBLIC_SERVICE";
+
+  const [adminName, setAdminName] = useState("");
+  const [adminNameAr, setAdminNameAr] = useState("");
+  const [adminNameHe, setAdminNameHe] = useState("");
+  const [categoryId, setCategoryId] = useState<number | undefined>(undefined);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [showNamesModal, setShowNamesModal] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [nameArError, setNameArError] = useState<string | null>(null);
+  const [nameHeError, setNameHeError] = useState<string | null>(null);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -262,7 +291,130 @@ export default function ManageMyBusinessScreen() {
     );
   };
   
+  const applyPlaceFieldsToForm = React.useCallback(
+    (placeData: BusinessPlaceOut, type: PlaceType) => {
+      setPhone(placeData.phone || "");
+      setDescription(placeData.description || "");
+      setLocation(
+        placeData.city_name ? `${placeData.city_name}, Israel` : ""
+      );
+      setSocialLink(
+        type === "PUBLIC_SERVICE" ? "" : placeData.social_links || ""
+      );
+      setAnnouncement(placeData.announcement || "");
+      const uniqueImages = collectBusinessImageUrls(
+        placeData.business_images_urls,
+        placeData.main_image_url
+      );
+      setBusinessImages(uniqueImages);
+      setImageErrors({});
+      setImageLoading({});
+      if (placeData.opening_hours) {
+        setOpeningHours(parseOpeningHours(placeData.opening_hours));
+      }
+    },
+    [parseOpeningHours]
+  );
+
+  const mapPlaceForMapToBusinessPlace = (
+    found: PlaceForMap
+  ): BusinessPlaceOut => {
+    const lang = i18n.language || "ar";
+    const cityName =
+      lang === "he" && found.city?.name_he
+        ? found.city.name_he
+        : lang === "ar" && found.city?.name_ar
+        ? found.city.name_ar
+        : found.city?.name_en || found.city?.name_ar || found.city?.name_he;
+    const categoryName =
+      found.category &&
+      (lang === "he" && found.category.name_he
+        ? found.category.name_he
+        : lang === "ar" && found.category.name_ar
+        ? found.category.name_ar
+        : found.category.name_ar || found.category.name_he);
+    return {
+      id: found.id,
+      name: found.name || "",
+      name_ar: found.name_ar,
+      name_he: found.name_he,
+      city_name: cityName,
+      category_name: categoryName,
+      description: found.description,
+      phone: found.phone,
+      opening_hours: found.opening_hours,
+      main_image_url: found.main_image_url,
+      business_images_urls: found.business_images_urls,
+      lat: found.location?.lat,
+      lon: found.location?.lon,
+      social_links: found.social_links,
+      announcement: found.announcement,
+    };
+  };
+
+  const loadAdminPlaceData = React.useCallback(
+    async (forceReload: boolean = false) => {
+      if (adminPlaceId == null) return;
+      try {
+        const now = Date.now();
+        if (!forceReload && lastLoadTime > 0 && now - lastLoadTime < 5000) {
+          return;
+        }
+        setLoading(true);
+        const places = await fetchAllPlaces();
+        const found = places.find((p) => p.id === adminPlaceId);
+        if (!found) {
+          appAlert(
+            t("error") || "שגיאה",
+            t("place_not_found") || "המקום לא נמצא"
+          );
+          navigation.goBack();
+          return;
+        }
+        if (found.owner_user_id) {
+          appAlert(
+            t("error") || "שגיאה",
+            t("place_has_owner_cannot_edit") ||
+              "למקום זה יש בעל עסק - לא ניתן לערוך"
+          );
+          navigation.goBack();
+          return;
+        }
+        const mapped = mapPlaceForMapToBusinessPlace(found);
+        setPlaceType(found.place_type);
+        setPlace(mapped);
+        setAdminName(found.name || "");
+        setAdminNameAr(found.name_ar || "");
+        setAdminNameHe(found.name_he || "");
+        setCategoryId(found.category?.id);
+        applyPlaceFieldsToForm(mapped, found.place_type);
+        setLastLoadTime(now);
+      } catch (error: any) {
+        showMessage(
+          "error",
+          t("error") || "Error",
+          error.message || t("failed_to_load_place") || "Failed to load place"
+        );
+        navigation.goBack();
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      adminPlaceId,
+      applyPlaceFieldsToForm,
+      lastLoadTime,
+      navigation,
+      parseOpeningHours,
+      t,
+    ]
+  );
+
   const loadBusinessData = React.useCallback(async (forceReload: boolean = false) => {
+    if (isAdminMode) {
+      await loadAdminPlaceData(forceReload);
+      return;
+    }
     try {
       // Cache: Don't reload if data was loaded less than 5 seconds ago (unless forced)
       const now = Date.now();
@@ -291,57 +443,8 @@ export default function ManageMyBusinessScreen() {
       setLastLoadTime(now);
 
       if (profileData.place) {
-        setPhone(profileData.place.phone || "");
-        setDescription(profileData.place.description || "");
-        setLocation(
-          profileData.place.city_name
-            ? `${profileData.place.city_name}, Israel`
-            : ""
-        );
-        setSocialLink(profileData.place.social_links || "");
-        setAnnouncement(profileData.place.announcement || "");
-        const uniqueImages = collectBusinessImageUrls(
-          profileData.place.business_images_urls,
-          profileData.place.main_image_url
-        );
-        
-        // Debug logging
-        if (__DEV__) {
-          console.log("=== LOADING BUSINESS IMAGES ===");
-          console.log("Raw business_images_urls:", profileData.place.business_images_urls);
-          console.log("Raw main_image_url:", profileData.place.main_image_url);
-          console.log("Filtered unique images:", uniqueImages);
-          console.log("API_BASE_URL:", API_BASE_URL);
-          uniqueImages.forEach((img, idx) => {
-            const formatted = formatApiImageUri(img);
-            console.log(`Image ${idx}:`, {
-              original: img,
-              formatted: formatted,
-              isValid: formatted && formatted.startsWith('http')
-            });
-            // Test if URL is accessible (only in dev mode)
-            if (formatted && formatted.startsWith('http')) {
-              fetch(formatted, { method: 'HEAD' })
-                .then(res => {
-                  console.log(`✅ Image ${idx} URL accessible:`, formatted, "Status:", res.status);
-                })
-                .catch(err => {
-                  console.error(`❌ Image ${idx} URL NOT accessible:`, formatted, "Error:", err.message);
-                });
-            }
-          });
-          console.log("=============================");
-        }
-        
-        setBusinessImages(uniqueImages);
-        // Reset image errors and loading states when loading new images
-        setImageErrors({});
-        setImageLoading({});
-        // Parse and load opening hours
-        if (profileData.place.opening_hours) {
-          const parsedHours = parseOpeningHours(profileData.place.opening_hours);
-          setOpeningHours(parsedHours);
-        }
+        setPlaceType("BUSINESS");
+        applyPlaceFieldsToForm(profileData.place, "BUSINESS");
       }
     } catch (error: any) {
       const currentLanguage = i18n.language || "ar";
@@ -355,16 +458,105 @@ export default function ManageMyBusinessScreen() {
     } finally {
       setLoading(false);
     }
-  }, [navigation, lastLoadTime, parseOpeningHours]);
+  }, [navigation, lastLoadTime, parseOpeningHours, isAdminMode, applyPlaceFieldsToForm, loadAdminPlaceData]);
+
+  React.useEffect(() => {
+    if (!isAdminMode) return;
+    fetchCategories()
+      .then(setCategories)
+      .catch(() => {});
+  }, [isAdminMode]);
+
+  const PLACE_LOCATION_UPDATED_KEY = "placeLocationUpdated";
+
   useFocusEffect(
     React.useCallback(() => {
-      // Only reload if data is older than 30 seconds when screen comes into focus
-      const now = Date.now();
-      if (lastLoadTime === 0 || (now - lastLoadTime) > 30000) {
-        loadBusinessData(false);
-      }
-    }, [loadBusinessData, lastLoadTime])
+      let cancelled = false;
+      const run = async () => {
+        const flag = await AsyncStorage.getItem(PLACE_LOCATION_UPDATED_KEY);
+        const refreshParam = route.params?.refreshAfterLocationEdit;
+        const forceFromLocationEdit = !!refreshParam || flag != null;
+
+        if (flag) {
+          await AsyncStorage.removeItem(PLACE_LOCATION_UPDATED_KEY);
+        }
+
+        const now = Date.now();
+        if (
+          forceFromLocationEdit ||
+          lastLoadTime === 0 ||
+          now - lastLoadTime > 30000
+        ) {
+          if (!cancelled) {
+            await loadBusinessData(forceFromLocationEdit);
+          }
+        }
+      };
+      run();
+      return () => {
+        cancelled = true;
+      };
+    }, [
+      loadBusinessData,
+      lastLoadTime,
+      place?.id,
+      route.params?.refreshAfterLocationEdit,
+    ])
   );
+
+  const canChangeLocation =
+    !!place?.lat &&
+    !!place?.lon &&
+    (isAdminMode || !isAdminMode);
+
+  const handleChangeLocation = React.useCallback(async () => {
+    if (!place?.id || place.lat == null || place.lon == null) return;
+
+    let editorUserId = adminUserId;
+    if (!isAdminMode) {
+      const stored = await AsyncStorage.getItem("userId");
+      editorUserId = stored ? parseInt(stored, 10) : undefined;
+      if (!editorUserId) {
+        showMessage("error", t("error") || "Error", t("unknown_error") || "User not found");
+        return;
+      }
+    }
+    if (isAdminMode && !editorUserId) {
+      showMessage("error", t("error") || "Error", t("unknown_error") || "Admin not found");
+      return;
+    }
+
+    navigation.navigate("BusinessOwnerPickLocation", {
+      editMode: {
+        placeId: place.id,
+        initialLat: place.lat,
+        initialLon: place.lon,
+        editorRole: isAdminMode ? "ADMIN" : "BUSINESS_OWNER",
+        editorUserId: editorUserId!,
+        adminPlaceId: adminPlaceId,
+        adminUserId: adminUserId,
+        fromMap: fromMap,
+      },
+    });
+  }, [
+    place,
+    isAdminMode,
+    adminUserId,
+    adminPlaceId,
+    fromMap,
+    navigation,
+    t,
+  ]);
+
+  React.useEffect(() => {
+    if (place?.lat != null && place?.lon != null && cameraRef.current?.setCamera) {
+      cameraRef.current.setCamera({
+        centerCoordinate: [place.lon, place.lat],
+        zoomLevel: 16,
+        animationDuration: 300,
+      });
+    }
+  }, [place?.lat, place?.lon]);
 
   async function handleSaveField(field: string, fieldValue?: string): Promise<boolean> {
     if (!place) return false;
@@ -398,9 +590,53 @@ export default function ManageMyBusinessScreen() {
           updateData.description = descValue.length > 0 ? descValue : null;
           break;
         case "social_link":
+          if (isAdminMode && isPublicPlace) {
+            setUpdating(false);
+            return false;
+          }
           updateData.social_links = socialLink.trim() || null;
           break;
+        case "identity_names": {
+          if (!adminName.trim()) {
+            setNameError(t("name_required") || "שם חובה");
+            setUpdating(false);
+            return false;
+          }
+          if (!adminNameAr.trim()) {
+            setNameArError(t("arabic_name_required") || "שם בערבית חובה");
+            setUpdating(false);
+            return false;
+          }
+          if (!adminNameHe.trim()) {
+            setNameHeError(t("hebrew_name_required") || "שם בעברית חובה");
+            setUpdating(false);
+            return false;
+          }
+          if (!isPublicPlace && !categoryId) {
+            setCategoryError(t("please_select_category") || "אנא בחר קטגוריה");
+            setUpdating(false);
+            return false;
+          }
+          setNameError(null);
+          setNameArError(null);
+          setNameHeError(null);
+          setCategoryError(null);
+          updateData.name = adminName.trim();
+          updateData.name_ar = adminNameAr.trim();
+          updateData.name_he = adminNameHe.trim();
+          if (!isPublicPlace) {
+            updateData.category_id = categoryId ?? null;
+          } else {
+            updateData.category_id = null;
+            updateData.social_links = null;
+          }
+          break;
+        }
         case "announcement":
+          if (isAdminMode) {
+            setUpdating(false);
+            return false;
+          }
           // Use fieldValue if provided (for deletion), otherwise use current state
           const announcementValue = fieldValue !== undefined ? fieldValue : announcement;
           const trimmedAnnouncement = announcementValue.trim();
@@ -480,8 +716,16 @@ export default function ManageMyBusinessScreen() {
         return true;
       }
 
+      if (field === "identity_names") {
+        setShowNamesModal(false);
+      }
+
       // Reload data (force reload after update) for other fields
-      await loadBusinessData(true);
+      if (isAdminMode) {
+        await loadAdminPlaceData(true);
+      } else {
+        await loadBusinessData(true);
+      }
 
       setEditingField(null);
 
@@ -502,29 +746,6 @@ export default function ManageMyBusinessScreen() {
     } finally {
       setUpdating(false);
     }
-  }
-
-  /** Same sanitization as EditPlace submit: drop placeholders and invalid sentinels before PUT /admin/places */
-  function sanitizeBusinessImagesForApi(images: string[]): {
-    business_images_urls: string[] | null;
-    main_image_url: string | null;
-  } {
-    const cleaned = images
-      .filter(
-        (u) =>
-          typeof u === "string" &&
-          u.length > 0 &&
-          !u.startsWith("__uploading__")
-      )
-      .map((u) => getValidImageUrl(u))
-      .filter((u): u is string => u != null);
-    if (cleaned.length === 0) {
-      return { business_images_urls: null, main_image_url: null };
-    }
-    return {
-      business_images_urls: cleaned,
-      main_image_url: getValidImageUrl(cleaned[0]),
-    };
   }
 
   // Handle image upload
@@ -670,10 +891,23 @@ export default function ManageMyBusinessScreen() {
         main_image_url,
       };
 
-      await updatePlace(place.id, updateData);
-      
-      // Never reload to prevent scroll reset - state is already updated
-      // The backend is the source of truth, but we keep UI state in sync manually
+      const updated = await updatePlace(place.id, updateData);
+      const mergedForUi = collectBusinessImageUrls(
+        updated.business_images_urls,
+        updated.main_image_url
+      );
+      setBusinessImages(mergedForUi);
+
+      setPlace((prev) =>
+        prev
+          ? {
+              ...prev,
+              main_image_url: updated.main_image_url ?? main_image_url,
+              business_images_urls:
+                updated.business_images_urls ?? business_images_urls,
+            }
+          : prev
+      );
     } catch (error: any) {
       console.error("Error saving images:", error);
       throw error; // Re-throw so caller can handle if needed
@@ -807,9 +1041,27 @@ export default function ManageMyBusinessScreen() {
 
       {/* Header - Dark Blue */}
       <View style={styles.header}>
-        {fromMap && navigation.canGoBack() ? (
+        {(fromMap || isAdminMode) && navigation.canGoBack() ? (
           <TouchableOpacity
-            onPress={() => navigation.goBack()}
+            onPress={() => {
+              if (isAdminMode && adminUserId && adminPlaceId) {
+                navigation.reset({
+                  index: 0,
+                  routes: [
+                    {
+                      name: "AdminTabs",
+                      params: {
+                        adminUserId,
+                        role: "ADMIN",
+                        selectedPlaceId: adminPlaceId,
+                      },
+                    },
+                  ],
+                });
+              } else {
+                navigation.goBack();
+              }
+            }}
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
@@ -818,7 +1070,11 @@ export default function ManageMyBusinessScreen() {
           <View style={styles.backButton} />
         )}
         <Text style={styles.headerTitle}>
-          {t("manage_my_business") || "Manage My Business"}
+          {isAdminMode
+            ? isPublicPlace
+              ? t("edit_public_place") || "עריכת מקום ציבורי"
+              : t("edit_place_details") || "עריכת מקום"
+            : t("manage_my_business") || "Manage My Business"}
         </Text>
         <View style={styles.bellButton} />
       </View>
@@ -834,14 +1090,16 @@ export default function ManageMyBusinessScreen() {
           <View style={styles.businessNameRow}>
             <View style={styles.businessIconContainer}>
               <MaterialCommunityIcons
-                name="store"
+                name={isPublicPlace ? "map-marker" : "store"}
                 size={24}
                 color={LIGHT_BLUE}
               />
             </View>
             <View style={styles.businessNameContainer}>
               <Text style={styles.businessNameLabel}>
-                {t("business_name") || "Business Name"}
+                {isPublicPlace
+                  ? t("place_name") || "שם המקום"
+                  : t("business_name") || "Business Name"}
               </Text>
               <View style={styles.businessNameTextRow}>
                 <Text style={styles.businessName}>{getPlaceName()}</Text>
@@ -851,41 +1109,77 @@ export default function ManageMyBusinessScreen() {
                   </Text>
                 )}
               </View>
-              <View style={styles.approvedBadge}>
-                <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
-                <Text style={styles.approvedText}>
-                  {t("approved_by_admin") || "Approved by Admin"}
-                </Text>
-              </View>
+              {!isAdminMode ? (
+                <View style={styles.approvedBadge}>
+                  <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
+                  <Text style={styles.approvedText}>
+                    {t("approved_by_admin") || "Approved by Admin"}
+                  </Text>
+                </View>
+              ) : null}
             </View>
+            {isAdminMode ? (
+              <TouchableOpacity
+                onPress={() => {
+                  setAdminName(place.name || "");
+                  setAdminNameAr(place.name_ar || "");
+                  setAdminNameHe(place.name_he || "");
+                  setCategoryId(
+                    categories.find((c) => c.id === categoryId)?.id ?? categoryId
+                  );
+                  setShowNamesModal(true);
+                }}
+                style={styles.editLinkButton}
+                hitSlop={8}
+              >
+                <Ionicons name="create-outline" size={22} color={DARK_TEAL} />
+              </TouchableOpacity>
+            ) : null}
             {place.lat && place.lon && (
-              <View style={styles.mapThumbnail}>
-                <MapView
-                  style={styles.mapView}
-                  mapStyle={MAP_STYLE_URL}
-                  logoEnabled={false}
-                  attributionEnabled={false}
-                  zoomEnabled={false}
-                  scrollEnabled={false}
-                  pitchEnabled={false}
-                  rotateEnabled={false}
-                >
-                  <Camera
-                    ref={cameraRef}
-                    defaultSettings={{
-                      centerCoordinate: [place.lon, place.lat],
-                      zoomLevel: 16,
-                    }}
-                  />
-                  <PointAnnotation
-                    id="business-location"
-                    coordinate={[place.lon, place.lat]}
+              <View style={styles.mapLocationBlock}>
+                <View style={styles.mapThumbnail}>
+                  <FocusedMapView
+                    key={`place-map-${place.lat}-${place.lon}`}
+                    style={styles.mapView}
+                    mapStyle={MAP_STYLE_URL}
+                    logoEnabled={false}
+                    attributionEnabled={false}
+                    zoomEnabled={false}
+                    scrollEnabled={false}
+                    pitchEnabled={false}
+                    rotateEnabled={false}
                   >
-                    <View style={styles.markerContainer}>
-                      <Ionicons name="location" size={20} color="#FF0000" />
-                    </View>
-                  </PointAnnotation>
-                </MapView>
+                    <Camera
+                      ref={cameraRef}
+                      defaultSettings={{
+                        centerCoordinate: [place.lon, place.lat],
+                        zoomLevel: 16,
+                      }}
+                    />
+                    {showMapPin ? (
+                      <PointAnnotation
+                        id={`business-location-${place.lat}-${place.lon}`}
+                        coordinate={[place.lon, place.lat]}
+                      >
+                        <View style={styles.markerContainer} collapsable={false}>
+                          <Ionicons name="location" size={20} color="#FF0000" />
+                        </View>
+                      </PointAnnotation>
+                    ) : null}
+                  </FocusedMapView>
+                </View>
+                {canChangeLocation ? (
+                  <TouchableOpacity
+                    style={styles.changeLocationButton}
+                    onPress={handleChangeLocation}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="navigate-outline" size={14} color={DARK_TEAL} />
+                    <Text style={styles.changeLocationButtonText}>
+                      {t("change_location") || "שנה מיקום"}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             )}
           </View>
@@ -895,7 +1189,9 @@ export default function ManageMyBusinessScreen() {
         <View style={styles.section}>
           <View style={[styles.sectionHeader, I18nManager.isRTL && styles.sectionHeaderRTL]}>
             <Text style={[styles.sectionTitle, I18nManager.isRTL && styles.sectionTitleRTL]}>
-              {t("edit_business_info") || "Edit Business Info"}
+              {isAdminMode
+                ? t("edit_place_info") || "עריכת פרטי מקום"
+                : t("edit_business_info") || "Edit Business Info"}
             </Text>
           </View>
 
@@ -933,8 +1229,8 @@ export default function ManageMyBusinessScreen() {
             <Text style={styles.infoText}>{location || "Al-Qasom, Israel"}</Text>
           </View>
 
-          {/* Social Link Display or Add */}
-          {socialLink ? (
+          {/* Social Link Display or Add — not for admin public places */}
+          {!(isAdminMode && isPublicPlace) && socialLink ? (
             <View style={styles.infoRow}>
               <Ionicons name="link-outline" size={20} color={DARK_TEAL} />
               <TouchableOpacity
@@ -965,7 +1261,7 @@ export default function ManageMyBusinessScreen() {
                 <Ionicons name="create-outline" size={18} color={DARK_TEAL} />
               </TouchableOpacity>
             </View>
-          ) : (
+          ) : !(isAdminMode && isPublicPlace) ? (
             <TouchableOpacity 
               style={styles.addSocialLink}
               onPress={() => setShowSocialLinkModal(true)}
@@ -975,7 +1271,7 @@ export default function ManageMyBusinessScreen() {
                 + {t("add_social_link") || "Add social link"}
               </Text>
             </TouchableOpacity>
-          )}
+          ) : null}
 
           {/* Phone Number Modal */}
           <Modal
@@ -1203,7 +1499,8 @@ export default function ManageMyBusinessScreen() {
           </Modal>
         </View>
 
-        {/* Announcement Section */}
+        {/* Announcement — business owner only (not admin) */}
+        {!isAdminMode ? (
         <View style={styles.section}>
           <View style={[styles.sectionHeader, I18nManager.isRTL && styles.sectionHeaderRTL]}>
             <Text style={[styles.sectionTitle, I18nManager.isRTL && styles.sectionTitleRTL]}>
@@ -1341,6 +1638,7 @@ export default function ManageMyBusinessScreen() {
             </View>
           </Modal>
         </View>
+        ) : null}
 
         {/* Opening and Closing Hours Section */}
         <View style={styles.section}>
@@ -1749,6 +2047,128 @@ export default function ManageMyBusinessScreen() {
           message={messageModalMessage}
           onClose={closeMessage}
         />
+
+        {isAdminMode ? (
+          <Modal
+            visible={showNamesModal}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setShowNamesModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>
+                    {t("edit_place_names") || "עריכת שמות המקום"}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setShowNamesModal(false)}
+                    style={styles.modalCloseButton}
+                  >
+                    <Ionicons name="close" size={24} color={DARK_TEAL} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.modalFieldLabel}>
+                  {t("name_en") || "Name (English)"}
+                </Text>
+                <TextInput
+                  style={[styles.modalInput, nameError && styles.modalInputError]}
+                  value={adminName}
+                  onChangeText={(v) => {
+                    setAdminName(v);
+                    setNameError(null);
+                  }}
+                  placeholderTextColor="#9ab8bd"
+                />
+                {nameError ? <Text style={styles.errorText}>{nameError}</Text> : null}
+                <Text style={styles.modalFieldLabel}>
+                  {t("name_ar") || "שם בערבית"}
+                </Text>
+                <TextInput
+                  style={[styles.modalInput, nameArError && styles.modalInputError]}
+                  value={adminNameAr}
+                  onChangeText={(v) => {
+                    setAdminNameAr(v);
+                    setNameArError(null);
+                  }}
+                  placeholderTextColor="#9ab8bd"
+                />
+                {nameArError ? <Text style={styles.errorText}>{nameArError}</Text> : null}
+                <Text style={styles.modalFieldLabel}>
+                  {t("name_he") || "שם בעברית"}
+                </Text>
+                <TextInput
+                  style={[styles.modalInput, nameHeError && styles.modalInputError]}
+                  value={adminNameHe}
+                  onChangeText={(v) => {
+                    setAdminNameHe(v);
+                    setNameHeError(null);
+                  }}
+                  placeholderTextColor="#9ab8bd"
+                />
+                {nameHeError ? <Text style={styles.errorText}>{nameHeError}</Text> : null}
+                {!isPublicPlace && categories.length > 0 ? (
+                  <>
+                    <Text style={styles.modalFieldLabel}>
+                      {t("category") || "קטגוריה"}
+                    </Text>
+                    <View style={styles.pickerWrap}>
+                      <Picker
+                        selectedValue={categoryId}
+                        onValueChange={(v) => {
+                          setCategoryId(v);
+                          setCategoryError(null);
+                        }}
+                      >
+                        <Picker.Item
+                          label={t("select_category") || "בחר קטגוריה"}
+                          value={undefined}
+                        />
+                        {categories.map((c) => (
+                          <Picker.Item
+                            key={c.id}
+                            label={
+                              i18n.language === "he" && c.name_he
+                                ? c.name_he
+                                : c.name_ar || c.name_en || String(c.id)
+                            }
+                            value={c.id}
+                          />
+                        ))}
+                      </Picker>
+                    </View>
+                    {categoryError ? (
+                      <Text style={styles.errorText}>{categoryError}</Text>
+                    ) : null}
+                  </>
+                ) : null}
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalCancelButton]}
+                    onPress={() => setShowNamesModal(false)}
+                  >
+                    <Text style={styles.modalCancelText}>
+                      {t("cancel") || "Cancel"}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.modalSaveButton]}
+                    onPress={() => void handleSaveField("identity_names")}
+                    disabled={updating}
+                  >
+                    {updating ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.modalSaveText}>
+                        {t("save") || "Save"}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -1863,15 +2283,35 @@ const styles = StyleSheet.create({
     color: "#4CAF50",
     marginLeft: 4,
   },
+  mapLocationBlock: {
+    marginLeft: 12,
+    alignItems: "center",
+  },
   mapThumbnail: {
     width: 80,
     height: 60,
     borderRadius: 8,
     overflow: "hidden",
-    marginLeft: 12,
     backgroundColor: "#e0e0e0",
     borderWidth: 1,
     borderColor: "#d0d0d0",
+  },
+  changeLocationButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: "rgba(155, 211, 216, 0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.2)",
+    gap: 4,
+  },
+  changeLocationButtonText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: DARK_TEAL,
   },
   mapView: {
     width: "100%",
@@ -2275,6 +2715,19 @@ const styles = StyleSheet.create({
   modalCloseButton: {
     padding: 4,
   },
+  modalFieldLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: DARK_TEAL,
+    marginBottom: 6,
+  },
+  pickerWrap: {
+    borderWidth: 1,
+    borderColor: "#d6ebee",
+    borderRadius: 8,
+    marginBottom: 12,
+    overflow: "hidden",
+  },
   modalInput: {
     backgroundColor: "#f5fdff",
     borderRadius: 8,
@@ -2284,7 +2737,7 @@ const styles = StyleSheet.create({
     borderColor: "#d6ebee",
     fontSize: 14,
     color: "#000",
-    marginBottom: 20,
+    marginBottom: 12,
   },
   modalButtons: {
     flexDirection: "row",

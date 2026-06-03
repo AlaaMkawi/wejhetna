@@ -1,67 +1,61 @@
-import React, { memo } from "react";
+import React from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 
-export type RouteEtaOnMapLabelProps = {
-  /** Remaining time label (already localized). */
+type Props = {
   label: string;
-  /** Match active route line color. */
   accentColor?: string;
 };
 
 /**
- * Compact speech-bubble chip + tail for remaining ETA on the route polyline
- * (active navigation only). Parent supplies a MapLibre `PointAnnotation` with
- * `anchor={{ x: 0.5, y: 1 }}` so the tail lands on the road line.
+ * ETA chip rendered on the route polyline during active navigation.
  */
-function RouteEtaOnMapLabelInner({ label, accentColor = "#4285F4" }: RouteEtaOnMapLabelProps) {
+export function RouteEtaOnMapLabel({ label, accentColor = "#4285F4" }: Props) {
   return (
-    <View style={styles.wrapper} pointerEvents="none">
-      <View style={[styles.bubble, { backgroundColor: accentColor }]}>
-        <Text style={styles.bubbleText} numberOfLines={1}>
+    <View style={styles.hit} pointerEvents="none">
+      <View style={[styles.bubble, { borderColor: accentColor }]}>
+        <View style={[styles.dot, { backgroundColor: accentColor }]} />
+        <Text style={styles.label} numberOfLines={1}>
           {label}
         </Text>
       </View>
-      <View style={[styles.tail, { borderTopColor: accentColor }]} />
     </View>
   );
 }
 
-export const RouteEtaOnMapLabel = memo(RouteEtaOnMapLabelInner);
-
 const styles = StyleSheet.create({
-  wrapper: {
+  hit: {
     alignItems: "center",
+    justifyContent: "center",
   },
   bubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    maxWidth: 168,
     paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 10,
-    maxWidth: 152,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    backgroundColor: "#ffffff",
     ...Platform.select({
       ios: {
         shadowColor: "#000",
+        shadowOpacity: 0.14,
+        shadowRadius: 6,
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.28,
-        shadowRadius: 3,
       },
-      android: { elevation: 5 },
-      default: {},
+      android: { elevation: 4 },
     }),
   },
-  bubbleText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-    textAlign: "center",
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    marginRight: 6,
   },
-  tail: {
-    width: 0,
-    height: 0,
-    marginTop: -1,
-    borderLeftWidth: 7,
-    borderRightWidth: 7,
-    borderTopWidth: 8,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
+  label: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0f172a",
   },
 });

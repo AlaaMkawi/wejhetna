@@ -1,6 +1,6 @@
 // src/screens/AdminHomeScreen.tsx
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import { appAlert } from "../../utils/appAlert";
 import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar, Dimensions, ScrollView, Image, PanResponder, Modal, ActivityIndicator, Linking, DeviceEventEmitter } from "react-native";
 import Animated, {
@@ -9,7 +9,12 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { RegularHomeMapCamera } from "../../components/map/RegularHomeMapCamera";
+import HomeMapPlaceMarkers from "../../components/map/HomeMapPlaceMarkers";
+import { UserLocationDot } from "../../components/map/UserLocationDot";
+import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { fetchAllPlaces, PlaceForMap, savePlace, unsavePlace, checkIfPlaceSaved, translateText, Category } from "../../api/places";
@@ -23,10 +28,26 @@ import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { useInitialMapGeolocation } from "../../hooks/useInitialMapGeolocation";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
-import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
-import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
-import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
+import { useHomeMapDraftNavigationCleanup } from "../../hooks/useHomeMapDraftNavigationCleanup";
+import { useRegularHomeMapCamera } from "../../hooks/useRegularHomeMapCamera";
+import { getCurrentPositionReliable } from "../../utils/locationPermission";
+import {
+  destinationAfterClosingPlaceDetails,
+  shouldShowCustomMapPin,
+  shouldShowDestinationMapPin,
+} from "../../utils/placeDetailsMapPin";
+import { zoomInTargetForCluster } from "../../utils/nearbyDriverClustering";
+import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsActionButtons";
+import { PlaceDetailsManageActions } from "../../components/place/PlaceDetailsManageActions";
+import { useSyncPlaceDetailsDestination } from "../../hooks/useSyncPlaceDetailsDestination";
+import { MapPickedDestinationPanel } from "../../components/map/MapPickedDestinationPanel";
+import {
+  getOpeningHoursStatusText,
+  isBusinessOpenNow,
+  parseOpeningHoursForDisplay,
+} from "../../utils/placeDetailsOpeningHoursDisplay";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -41,19 +62,7 @@ const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי
 const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
 const MAP_PICK_DEST_FAB_BOTTOM = 124;
 const MAP_PICK_DEST_BANNER_BOTTOM = MAP_PICK_DEST_FAB_BOTTOM + 56 + 12;
-
-// Zoom thresholds for displaying different types of places
-// At zoom < 13: Only roads and city outlines (handled by MapTiler style)
-// At zoom 13-14: Road names appear (handled by MapTiler style)
-// At zoom 15-16.4: Only PUBLIC_SERVICE places appear with icons
-// At zoom 16.5+: All places (PUBLIC_SERVICE + BUSINESS) appear with icons
-const PUBLIC_SERVICE_ZOOM_THRESHOLD = 15; // Show public services (mosques, schools, clinics) at zoom 15+
-const BUSINESS_ZOOM_THRESHOLD = 16.5; // Show businesses at zoom 16.5+ (only after public services are already visible)
-
-const NEGEV_BOUNDS = {
-  ne: [35.10, 31.42],
-  sw: [34.72, 31.18],
-};
+const MAP_LOCATE_ME_FAB_BOTTOM = 124;
 
 // Helper function to get place name based on current language
 const getPlaceName = (place: PlaceForMap): string => {
@@ -143,54 +152,16 @@ const getCategoryName = (category: Category): string => {
   return category.name_ar || category.name_he || category.name_en || "";
 };
 
-// Helper function to check if business is currently open
-const isBusinessCurrentlyOpen = (openingHours: string | null | undefined): boolean => {
-  if (!openingHours) return false;
-
-  const now = new Date();
-  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const currentDayName = dayNames[currentDay];
-
-  // Parse format like "Sunday: 8:00 AM - 8:00 PM, Monday: 9:00 AM - 5:00 PM"
-  const dayEntries = openingHours.split(",").map(s => s.trim());
-  
-  for (const entry of dayEntries) {
-    const match = entry.match(new RegExp(`${currentDayName}:\\s*(\\d+):(\\d+)\\s*(AM|PM)\\s*-\\s*(\\d+):(\\d+)\\s*(AM|PM)`, "i"));
-    if (match) {
-      const [, startH, startM, startP, endH, endM, endP] = match;
-      
-      const startHour = parseInt(startH, 10);
-      const startMin = parseInt(startM, 10);
-      const endHour = parseInt(endH, 10);
-      const endMin = parseInt(endM, 10);
-      
-      // Convert to 24-hour format
-      let startMinutes = startHour * 60 + startMin;
-      let endMinutes = endHour * 60 + endMin;
-      
-      if (startP.toUpperCase() === "PM" && startHour !== 12) startMinutes += 12 * 60;
-      if (startP.toUpperCase() === "AM" && startHour === 12) startMinutes -= 12 * 60;
-      if (endP.toUpperCase() === "PM" && endHour !== 12) endMinutes += 12 * 60;
-      if (endP.toUpperCase() === "AM" && endHour === 12) endMinutes -= 12 * 60;
-      
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      
-      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
-    }
-  }
-  
-  return false;
-};
-
 export default function AdminHomeScreen() {
   const { t } = useTranslation();
   const mapPickFabBottom = useOverlayBottomOffset(MAP_PICK_DEST_FAB_BOTTOM);
   const mapPickBannerBottom = useOverlayBottomOffset(MAP_PICK_DEST_BANNER_BOTTOM);
+  const mapLocateMeFabBottom = useOverlayBottomOffset(MAP_LOCATE_ME_FAB_BOTTOM);
   const route = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<any>>();
   const cameraRef = useRef<any>(null);
-  
+  const placeCameraFocusedIdRef = useRef<number | null>(null);
+
   // Get selectedPlaceId from route params (if navigating from SavedPlacesScreen)
   const selectedPlaceIdFromParams = (route.params as any)?.selectedPlaceId as number | undefined;
 
@@ -203,7 +174,7 @@ export default function AdminHomeScreen() {
   const [savingPlace, setSavingPlace] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
 
-  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
+  const [markerZoom, setMarkerZoom] = useState(INITIAL_ZOOM);
   
   // Photo gallery modal
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
@@ -231,6 +202,7 @@ export default function AdminHomeScreen() {
   // Image error handling states
   const [imageErrors, setImageErrors] = useState<{ [key: number]: boolean }>({});
   const [imageLoading, setImageLoading] = useState<{ [key: number]: boolean }>({});
+  const [openingHoursExpanded, setOpeningHoursExpanded] = useState(false);
 
   // GPS Location
   const [userLocation, setUserLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -240,6 +212,8 @@ export default function AdminHomeScreen() {
 
   // Destination
   const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
+
+  useSyncPlaceDetailsDestination(selectedPlace, destination, setDestination, getPlaceName);
   const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
 
   // Route
@@ -253,6 +227,18 @@ export default function AdminHomeScreen() {
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+
+  const { showAnnotations, mapShellMounted } = useHomeMapScreen({
+    onPrepareLeaveForRoute: () => {
+      selectedPlaceIdRef.current = null;
+      setSelectedPlace(null);
+      setDestination(null);
+      setCustomPin(null);
+      setSearchResults([]);
+      setPickPreviewCoords(null);
+      setIsPickingMapDestination(false);
+    },
+  });
 
   // Handle image load error
   const handleImageError = (error: any, index: number, allImages: string[]) => {
@@ -299,15 +285,14 @@ export default function AdminHomeScreen() {
     loadUserId();
   }, []);
 
-  useEffect(() => {
-    const sub = DeviceEventEmitter.addListener(LIVE_NAVIGATION_EXIT_EVENT, () => {
-      setDestination(null);
-      setCustomPin(null);
-      setIsPickingMapDestination(false);
-      setPickPreviewCoords(null);
-    });
-    return () => sub.remove();
-  }, []);
+  useHomeMapDraftNavigationCleanup({
+    setRouteLoading,
+    setDestination,
+    setCustomPin,
+    setIsPickingMapDestination,
+    setPickPreviewCoords,
+    pickMapTapInFlightRef,
+  });
 
   useInitialMapGeolocation(
     setUserLocation,
@@ -315,6 +300,39 @@ export default function AdminHomeScreen() {
     hasShownLocationPermissionMessage,
     setHasShownLocationPermissionMessage
   );
+
+  const {
+    onRegionWillChange,
+    onRegionDidChange,
+    requestCameraMove,
+    centerOnUserLocation,
+  } = useRegularHomeMapCamera({
+    cameraRef,
+    setMarkerZoom,
+  });
+
+  const [locateMeLoading, setLocateMeLoading] = useState(false);
+
+  const handleLocateMePress = useCallback(async () => {
+    if (locateMeLoading) return;
+
+    let loc = userLocation;
+    if (!loc) {
+      setLocateMeLoading(true);
+      try {
+        loc = await getCurrentPositionReliable();
+        setUserLocation(loc);
+      } catch {
+        appAlert(t("error"), t("ride_location_unavailable_hint"));
+        return;
+      } finally {
+        setLocateMeLoading(false);
+      }
+    }
+
+    if (!loc) return;
+    centerOnUserLocation(loc, { zoomLevel: 15.5, animationDuration: 720 });
+  }, [locateMeLoading, userLocation, centerOnUserLocation, t]);
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -348,6 +366,7 @@ export default function AdminHomeScreen() {
     // Reset image errors and loading states when place changes
     setImageErrors({});
     setImageLoading({});
+    setOpeningHoursExpanded(false);
   }, [selectedPlace]);
 
   // Open language selector for announcement
@@ -496,18 +515,25 @@ export default function AdminHomeScreen() {
 
   const dismissPlaceDetailsPanel = React.useCallback(() => {
     selectedPlaceIdRef.current = null;
+    placeCameraFocusedIdRef.current = null;
     setSelectedPlace((prev) => {
       setDestination((d) => destinationAfterClosingPlaceDetails(d, prev));
       return null;
     });
   }, []);
 
-  // Handle place marker tap - set as destination
-  const handlePlaceTap = async (place: PlaceForMap) => {
+  const dismissPickedDestinationPanel = useCallback(() => {
+    setCustomPin(null);
+    setDestination(null);
+  }, []);
+
+  const isPickedDestinationActive =
+    !!customPin && !selectedPlace && !!destination;
+
+  const handlePlaceTap = useCallback((place: PlaceForMap) => {
     if (!place.location) return;
-    
-    // Places from database are already validated, so we can use them directly
-    // Only check boundary for custom pins (long press on map)
+
+    selectedPlaceIdRef.current = place.id;
     setSelectedPlace(place);
     setDestination({
       lat: place.location.lat,
@@ -516,14 +542,43 @@ export default function AdminHomeScreen() {
     });
     setCustomPin(null);
     setSearchResults([]);
-    if (cameraRef.current) {
-      cameraRef.current.setCamera({
-        centerCoordinate: [place.location.lon, place.location.lat],
-        zoomLevel: 16.5,
-        animationDuration: 700,
-      });
+  }, []);
+
+  const handlePlaceMarkerPress = useCallback(
+    (place: PlaceForMap) => {
+      if (selectedPlace?.id === place.id) return;
+
+      handlePlaceTap(place);
+
+      if (!place.location) return;
+      requestCameraMove(
+        {
+          centerCoordinate: [place.location.lon, place.location.lat],
+          zoomLevel: 16.5,
+          animationDuration: 700,
+        },
+        { userInitiated: true, reason: "place-marker-press-once" }
+      );
+      placeCameraFocusedIdRef.current = place.id;
+    },
+    [selectedPlace?.id, handlePlaceTap, requestCameraMove]
+  );
+
+  useEffect(() => {
+    if (selectedPlaceIdFromParams && places.length > 0) {
+      const place = places.find((p) => p.id === selectedPlaceIdFromParams);
+      if (place?.location) {
+        handlePlaceMarkerPress(place);
+      }
     }
-  };
+  }, [selectedPlaceIdFromParams, places, handlePlaceMarkerPress]);
+
+  const showCustomPinOnMap = shouldShowCustomMapPin(customPin, selectedPlace);
+  const showDestinationPinOnMap = shouldShowDestinationMapPin(
+    destination,
+    customPin,
+    selectedPlace
+  );
 
   // Search places - comprehensive search across all fields
   const handleSearch = (query: string) => {
@@ -593,7 +648,7 @@ export default function AdminHomeScreen() {
   };
 
   const getRoute = async () => {
-    await openDrivingRoutePreview({
+    await runOpenDrivingRoutePreviewFromHome({
       navigation,
       destination,
       t,
@@ -620,7 +675,7 @@ export default function AdminHomeScreen() {
       const dest = { lat, lon, name: t("map_selected_destination_label") };
       setCustomPin(null);
       setDestination(dest);
-      await openDrivingRoutePreview({
+      await runOpenDrivingRoutePreviewFromHome({
         navigation,
         destination: dest,
         t,
@@ -739,17 +794,13 @@ export default function AdminHomeScreen() {
           
           // Find and select the place
           if (placeIdToSelect) {
-            const place = data.find(p => p.id === placeIdToSelect);
+            const place = data.find((p) => p.id === placeIdToSelect);
             if (place) {
               selectedPlaceIdRef.current = place.id;
-              setSelectedPlace(place);
-              // Center map on place location
-              if (cameraRef.current) {
-                cameraRef.current.setCamera({
-                  centerCoordinate: [place.location.lon, place.location.lat],
-                  zoomLevel: 16,
-                  animationDuration: 1000,
-                });
+              if (selectedPlaceIdFromParams && place.location) {
+                handlePlaceMarkerPress(place);
+              } else {
+                setSelectedPlace(place);
               }
             }
           }
@@ -770,19 +821,6 @@ export default function AdminHomeScreen() {
   );
 
   // Note: selectedPlaceId handling is now done in useFocusEffect above
-
-  const onRegionDidChange = async (feature: any) => {
-    const [lon, lat] = feature.geometry.coordinates;
-    const newZoom = feature.properties.zoomLevel;
-    setCurrentZoom(newZoom);
-
-    if (lon < 34.72 || lat > 31.43) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: [34.75, 31.39],
-        animationDuration: 600,
-      });
-    }
-  };
 
   const handleDeletePlace = async () => {
     if (!selectedPlace) return;
@@ -836,9 +874,11 @@ export default function AdminHomeScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      <MapView
+      {mapShellMounted ? (
+      <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
+        onRegionWillChange={onRegionWillChange}
         onRegionDidChange={onRegionDidChange}
         onLongPress={handleMapLongPress}
         onPress={(e: any) => {
@@ -858,7 +898,7 @@ export default function AdminHomeScreen() {
               return distance < 0.001;
             });
             if (nearestPlace) {
-              handlePlaceTap(nearestPlace);
+              handlePlaceMarkerPress(nearestPlace);
             }
           } catch {
             /* ignore */
@@ -877,27 +917,9 @@ export default function AdminHomeScreen() {
           }
         }}
       >
-        <Camera
-          ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: INITIAL_CENTER,
-            zoomLevel: INITIAL_ZOOM,
-          }}
-          maxBounds={NEGEV_BOUNDS}
-          minZoomLevel={10}
-          maxZoomLevel={18}
-          animationMode="flyTo"
-        />
+        <RegularHomeMapCamera cameraRef={cameraRef} />
 
-        {userLocation && !isPickingMapDestination && (
-          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
-              <View style={styles.userLocationDot} />
-            </View>
-          </PointAnnotation>
-        )}
-
-        {isPickingMapDestination && pickPreviewCoords && (
+        {showAnnotations && isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
             id="map_pick_preview"
             coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
@@ -908,165 +930,54 @@ export default function AdminHomeScreen() {
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (long-press) */}
-        {customPin && (
+        {showAnnotations && showCustomPinOnMap && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
+            <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Destination Marker (from place selection) */}
-        {destination && !customPin && (
+        {showAnnotations && showDestinationPinOnMap && destination && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
+            <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
             </View>
           </PointAnnotation>
         )}
 
-        {!isPickingMapDestination &&
-          places.map((place) => {
-          if (!place.location) return null;
-          
-          const isSelected = selectedPlace?.id === place.id;
-          const placeIcon = getPlaceIcon(place);
-          
-          // Determine visibility based on zoom level and place type
-          let shouldShow = false;
-          let shouldShowLabel = false;
-          
-          if (place.place_type === 'PUBLIC_SERVICE') {
-            shouldShow = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
-            shouldShowLabel = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
-          } else if (place.place_type === 'BUSINESS') {
-            shouldShow = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
-            shouldShowLabel = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
-          }
-          
-          if (!shouldShow) return null;
+        {showAnnotations && !isPickingMapDestination ? (
+          <HomeMapPlaceMarkers
+            places={places}
+            currentZoom={markerZoom}
+            anchorLatitude={userLocation?.lat ?? INITIAL_CENTER[1]}
+            selectedPlace={selectedPlace}
+            getPlaceIcon={getPlaceIcon}
+            getPlaceName={getPlaceName}
+            onPlaceTap={handlePlaceMarkerPress}
+            onClusterTap={(lat, lon) =>
+              requestCameraMove(
+                {
+                  centerCoordinate: [lon, lat],
+                  zoomLevel: zoomInTargetForCluster(markerZoom),
+                  animationDuration: 500,
+                },
+                { userInitiated: true, reason: "place-cluster-tap" }
+              )
+            }
+            useRegularHomeTapSplit
+          />
+        ) : null}
 
-          return (
-            <PointAnnotation
-              key={place.id}
-              id={String(place.id)}
-              coordinate={[place.location.lon, place.location.lat]}
-              onSelected={() => {
-                console.log("Place selected:", place.id, place.name);
-                handlePlaceTap(place);
-              }}
-            >
-              <View style={styles.nativeMarkerContainer}>
-                {/* Icon/Marker based on place type - Google Maps style */}
-                {place.place_type === 'PUBLIC_SERVICE' ? (
-                  <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
-                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
-                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
-                      {/* Icon circle - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.iconContainer, 
-                        isSelected && styles.iconContainerSelected,
-                        { backgroundColor: placeIcon.color }
-                      ]}>
-                        {placeIcon.type === 'mosque' && (
-                          <MaterialCommunityIcons name="mosque" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'school' && (
-                          <Ionicons name="school" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'clinic' && (
-                          <MaterialCommunityIcons name="hospital-building" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'kindergarten' && (
-                          <MaterialCommunityIcons name="baby-face-outline" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'community' && (
-                          <MaterialCommunityIcons name="account-group" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'home' && (
-                          <Ionicons name="home" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'public' && (
-                          <Ionicons name="location" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                </View>
-                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.pinPoint, 
-                        isSelected && styles.pinPointSelected,
-                        { borderTopColor: placeIcon.color }
-                      ]} />
-                    </View>
-                  </View>
-                ) : (
-                  <View style={[styles.businessMarker, isSelected && styles.markerSelected]}>
-                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
-                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
-                      {/* Icon circle - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.iconContainer, 
-                        isSelected && styles.iconContainerSelected,
-                        { backgroundColor: placeIcon.color }
-                      ]}>
-                        <Ionicons name="business" size={isSelected ? 24 : 16} color="#FFFFFF" />
-                      </View>
-                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.pinPoint, 
-                        isSelected && styles.pinPointSelected,
-                        { borderTopColor: placeIcon.color }
-                      ]} />
-                    </View>
-                </View>
-                )}
-
-                {/* Label with icon - Google Maps style */}
-                {shouldShowLabel && (
-                  <View style={[styles.labelWrapper, isSelected && styles.labelSelected]}>
-                    <View style={styles.labelContent}>
-                      {/* Small icon next to text */}
-                      <View style={[styles.labelIconContainer, { backgroundColor: placeIcon.color }]}>
-                        {place.place_type === 'PUBLIC_SERVICE' && (
-                          <>
-                            {placeIcon.type === 'mosque' && (
-                              <MaterialCommunityIcons name="mosque" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'school' && (
-                              <Ionicons name="school" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'clinic' && (
-                              <MaterialCommunityIcons name="hospital-building" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'kindergarten' && (
-                              <MaterialCommunityIcons name="baby-face-outline" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'community' && (
-                              <MaterialCommunityIcons name="account-group" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'home' && (
-                              <Ionicons name="home" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'public' && (
-                              <Ionicons name="location" size={12} color="#FFFFFF" />
-                            )}
-                          </>
-                        )}
-                        {place.place_type === 'BUSINESS' && (
-                          <Ionicons name="business" size={12} color="#FFFFFF" />
-                        )}
-                      </View>
-                    <Text style={styles.nativeMapLabel} numberOfLines={1}>
-                        {getPlaceName(place)}
-                    </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            </PointAnnotation>
-          );
-        })}
-      </MapView>
+        {showAnnotations && userLocation && !isPickingMapDestination && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <UserLocationDot zoom={markerZoom} />
+          </PointAnnotation>
+        )}
+      </FocusedMapView>
+      ) : (
+        <View style={styles.map} />
+      )}
 
       <MapInlineSearch
         value={searchQuery}
@@ -1088,7 +999,7 @@ export default function AdminHomeScreen() {
           return city || cat || undefined;
         }}
         onSelectPlace={(place) => {
-          handlePlaceTap(place);
+          handlePlaceMarkerPress(place);
           setSearchQuery("");
         }}
         emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
@@ -1096,6 +1007,21 @@ export default function AdminHomeScreen() {
         topOffset={Platform.OS === "ios" ? 132 : 108}
         onSearchFocus={dismissPlaceDetailsPanel}
       />
+
+      <TouchableOpacity
+        style={[styles.locateMeFab, { bottom: mapLocateMeFabBottom }]}
+        onPress={() => void handleLocateMePress()}
+        disabled={locateMeLoading}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={t("my_location")}
+      >
+        {locateMeLoading ? (
+          <ActivityIndicator size="small" color="#0f5b63" />
+        ) : (
+          <Ionicons name="locate" size={22} color="#0f5b63" />
+        )}
+      </TouchableOpacity>
 
       <View style={styles.topGlassBar}>
         <View>
@@ -1278,17 +1204,17 @@ export default function AdminHomeScreen() {
                   {selectedPlace.opening_hours ? (
                     <View style={[
                       styles.statusBadge,
-                      isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                      isBusinessOpenNow(selectedPlace.opening_hours) 
                         ? styles.statusBadgeOpen 
                         : styles.statusBadgeClosed
                     ]}>
                       <Text style={[
                         styles.statusText,
-                        isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                        isBusinessOpenNow(selectedPlace.opening_hours) 
                           ? styles.statusTextOpen 
                           : styles.statusTextClosed
                       ]}>
-                        {isBusinessCurrentlyOpen(selectedPlace.opening_hours) 
+                        {isBusinessOpenNow(selectedPlace.opening_hours) 
                           ? (t("open") || (i18n.language === "ar" ? "مفتوح" : "פתוח"))
                           : (t("closed") || (i18n.language === "ar" ? "مغلق" : "סגור"))}
                       </Text>
@@ -1304,65 +1230,16 @@ export default function AdminHomeScreen() {
               )}
             </View>
 
-            {/* Action buttons: share/save row, then full-width primary CTA */}
-            <View style={styles.actionButtonsBlock}>
-              <View style={styles.actionButtonsRowTop}>
-                <TouchableOpacity style={styles.actionButtonSecondary}>
-                  <Ionicons name="share-outline" size={20} color="#0f5b63" />
-                  <Text style={styles.actionButtonSecondaryText}>
-                    {t("share") || "שיתוף"}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionButtonSecondary}
-                  onPress={handleToggleSave}
-                  disabled={savingPlace || !userId}
-                >
-                  <Ionicons
-                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"}
-                    size={20}
-                    color={isPlaceSaved ? "#0f5b63" : "#0f5b63"}
-                  />
-                  <Text style={styles.actionButtonSecondaryText}>
-                    {isPlaceSaved ? t("saved") || "שמור" : t("save") || "שמירה"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              {destination && (
-                <TouchableOpacity
-                  style={styles.actionButtonPrimaryFull}
-                  onPress={getRoute}
-                  disabled={routeLoading}
-                >
-                  {routeLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
-                      <Text style={styles.actionButtonPrimaryText}>
-                        {t("start_navigation") || "Start Navigation"}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              )}
-
-              {!destination && (
-                <TouchableOpacity
-                  style={styles.actionButtonPrimaryFull}
-                  onPress={() => {
-                    if (selectedPlace && selectedPlace.location) {
-                      handlePlaceTap(selectedPlace);
-                    }
-                  }}
-                >
-                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.actionButtonPrimaryText}>
-                    {t("set_destination") || "Set Destination"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            <PlaceDetailsActionButtons
+              hasDestination={!!destination}
+              showRideWithDriver={false}
+              routeLoading={routeLoading}
+              isPlaceSaved={isPlaceSaved}
+              savingPlace={savingPlace}
+              canSave={!!userId}
+              onToggleSave={() => void handleToggleSave()}
+              onStartNavigation={() => void getRoute()}
+            />
 
             {/* Announcement Banner */}
             {selectedPlace.announcement && (
@@ -1553,6 +1430,71 @@ export default function AdminHomeScreen() {
 
             {/* Details Section - Card Style */}
             <View style={styles.detailsSection}>
+              {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
+                <TouchableOpacity
+                  style={styles.detailCard}
+                  onPress={() => setOpeningHoursExpanded(!openingHoursExpanded)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.detailCardContent}>
+                    <Ionicons name="time-outline" size={20} color="#000" />
+                    <View style={styles.detailCardTextContainer}>
+                      <Text
+                        style={[
+                          styles.detailCardStatus,
+                          !isBusinessOpenNow(selectedPlace.opening_hours) &&
+                            styles.detailCardStatusClosed,
+                        ]}
+                      >
+                        {isBusinessOpenNow(selectedPlace.opening_hours)
+                          ? i18n.language === "ar"
+                            ? "مفتوح"
+                            : "פתוח"
+                          : getOpeningHoursStatusText(selectedPlace.opening_hours)}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={openingHoursExpanded ? "chevron-up" : "chevron-down"}
+                      size={20}
+                      color="#666"
+                    />
+                  </View>
+                  {openingHoursExpanded && (
+                    <View style={styles.openingHoursTable}>
+                      {parseOpeningHoursForDisplay(selectedPlace.opening_hours).map(
+                        (dayInfo, index) => (
+                          <View
+                            key={index}
+                            style={[
+                              styles.openingHoursRow,
+                              dayInfo.isToday && styles.openingHoursRowToday,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.openingHoursDay,
+                                dayInfo.isToday && styles.openingHoursDayToday,
+                              ]}
+                            >
+                              {dayInfo.day}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.openingHoursTime,
+                                !dayInfo.hours && styles.openingHoursClosed,
+                              ]}
+                            >
+                              {dayInfo.hours ||
+                                (i18n.language === "ar" ? "مغلق" : "סגור")}
+                            </Text>
+                          </View>
+                        )
+                      )}
+                    </View>
+                  )}
+                </TouchableOpacity>
+              )}
+
               {/* Location Card */}
               <View style={styles.detailCard}>
                 <View style={styles.detailCardContent}>
@@ -1639,51 +1581,39 @@ export default function AdminHomeScreen() {
               )}
             </View>
 
-            {/* Admin Actions - Only show edit/delete if place doesn't have an owner */}
-            {!selectedPlace.owner_user_id && (
-              <View style={styles.adminActionsSection}>
-                <TouchableOpacity 
-                  style={styles.editButton}
-                  onPress={() => {
-                    if (selectedPlace && userId) {
-                      navigation.navigate("EditPlace", {
-                        placeId: selectedPlace.id,
-                        userRole: "ADMIN",
-                        userId: userId,
-                      });
-                    }
-                  }}
-                >
-                  <Ionicons name="create-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.editButtonText}>
-                    {t("edit_place_details") || "ערוך פרטי מקום"}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.deleteButton}
-                  onPress={handleDeletePlace}
-                >
-                  <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.deleteButtonText}>
-                    {t("delete_place") || "מחק מקום"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            
-            {/* Message if place has an owner */}
-            {selectedPlace.owner_user_id && (
-              <View style={styles.ownerInfoSection}>
-                <Ionicons name="information-circle-outline" size={20} color="#0f5b63" />
-                <Text style={styles.ownerInfoText}>
-                  {t("place_has_owner_cannot_edit") || "למקום זה יש בעל עסק - לא ניתן לערוך"}
-                </Text>
-              </View>
-            )}
+            <PlaceDetailsManageActions
+              showEdit={!selectedPlace.owner_user_id}
+              showDelete={!selectedPlace.owner_user_id}
+              onEdit={() => {
+                if (selectedPlace && userId) {
+                  navigation.navigate("ManageMyBusiness", {
+                    fromMap: true,
+                    adminPlaceId: selectedPlace.id,
+                    adminUserId: userId ?? undefined,
+                  });
+                }
+              }}
+              onDelete={handleDeletePlace}
+              infoMessage={
+                selectedPlace.owner_user_id
+                  ? t("place_has_owner_cannot_edit") ||
+                    "למקום זה יש בעל עסק - לא ניתן לערוך"
+                  : null
+              }
+            />
             </ScrollView>
           </>
       )}
       </Animated.View>
+
+      <MapPickedDestinationPanel
+        visible={isPickedDestinationActive}
+        onDismiss={dismissPickedDestinationPanel}
+        onStartNavigation={() => void getRoute()}
+        onRideWithDriver={() => {}}
+        showRideWithDriver={false}
+        navigationLoading={routeLoading}
+      />
 
       {/* Language Selector Modal */}
       <Modal
@@ -1953,6 +1883,24 @@ const styles = StyleSheet.create({
   },
 
   // --- שאר הסגנונות ללא שינוי ---
+  locateMeFab: {
+    position: "absolute",
+    right: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1100,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.14)",
+  },
   pickDestinationFab: {
     position: "absolute",
     left: 20,
@@ -2515,59 +2463,6 @@ const styles = StyleSheet.create({
     color: "#000",
     lineHeight: 22,
     fontWeight: "400",
-  },
-  adminActionsSection: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 16,
-    gap: 12,
-  },
-  editButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#0f5b63",
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 8,
-  },
-  editButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#FFFFFF",
-  },
-  deleteButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#DC3545",
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 8,
-  },
-  deleteButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#FFFFFF",
-  },
-  ownerInfoSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#e8f4f6",
-    padding: 12,
-    borderRadius: 12,
-    marginTop: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: "#0f5b63",
-  },
-  ownerInfoText: {
-    fontSize: 14,
-    color: "#0f5b63",
-    marginLeft: 8,
-    flex: 1,
-    textAlign: "right",
   },
   closeButton: {
     width: 36,

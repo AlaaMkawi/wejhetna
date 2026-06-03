@@ -23,11 +23,13 @@ export type RideDriverClusterMarkerProps = {
   count: number;
   /** Optional: renders a slightly bigger badge when the user is actively exploring clusters. */
   emphasized?: boolean;
+  accessibilityLabel?: string;
 };
 
 export function RideDriverClusterMarker({
   count,
   emphasized = false,
+  accessibilityLabel,
 }: RideDriverClusterMarkerProps) {
   const pin = emphasized ? 56 : 50;
   const plate = emphasized ? 30 : 27;
@@ -35,7 +37,12 @@ export function RideDriverClusterMarker({
   const plateTop = pin * 0.16;
 
   return (
-    <View style={[styles.hit, { width: pin, height: pin }]}>
+    <View
+      style={[styles.hit, { width: pin, height: pin }]}
+      collapsable={false}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+    >
       <View style={styles.shadowPlate}>
         <Ionicons
           name="location"

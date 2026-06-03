@@ -1,41 +1,28 @@
-import type { RouteLineStringCoords } from "../types/navigation";
-import { kvDelete, kvGet, kvSet } from "./offlineKv";
+import { kvDelete, kvSet } from "./offlineKv";
 
-const KEY = "nav_route_snapshot_v1";
+const NAV_ROUTE_KEY = "navigation_route_snapshot";
 
-export interface NavigationRouteSnapshotV1 {
-  version: 1;
-  routeLine: RouteLineStringCoords;
+export type NavigationRouteSnapshot = {
+  version: number;
+  routeLine: [number, number][];
   destination: { lat: number; lon: number; name?: string };
   legDistanceMeters: number;
   legDurationSeconds: number;
   updatedAt: number;
-}
+};
 
-export function saveNavigationRouteSnapshot(payload: NavigationRouteSnapshotV1): void {
+export function saveNavigationRouteSnapshot(snapshot: NavigationRouteSnapshot): void {
   try {
-    kvSet(KEY, JSON.stringify(payload));
-  } catch (e) {
-    console.warn("[offline] saveNavigationRouteSnapshot failed", e);
-  }
-}
-
-export function loadNavigationRouteSnapshot(): NavigationRouteSnapshotV1 | null {
-  try {
-    const raw = kvGet(KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as NavigationRouteSnapshotV1;
-    if (parsed?.version !== 1 || !Array.isArray(parsed.routeLine)) return null;
-    return parsed;
+    kvSet(NAV_ROUTE_KEY, JSON.stringify(snapshot));
   } catch {
-    return null;
+    // best-effort crash / recovery persistence
   }
 }
 
 export function clearNavigationRouteSnapshot(): void {
   try {
-    kvDelete(KEY);
-  } catch (e) {
-    console.warn("[offline] clearNavigationRouteSnapshot failed", e);
+    kvDelete(NAV_ROUTE_KEY);
+  } catch {
+    // best-effort
   }
 }

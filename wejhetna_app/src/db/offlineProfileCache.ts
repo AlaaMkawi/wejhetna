@@ -3,51 +3,32 @@ import type {
   DriverProfileInfo,
   UserProfile,
 } from "../api/profileApi";
-import { kvGet, kvSet, kvDelete } from "./offlineKv";
+import { kvGet, kvSet } from "./offlineKv";
 
-export interface ProfileCachePayloadV1 {
-  version: 1;
+export type ProfileCacheEntry = {
   user: UserProfile;
-  driver?: DriverProfileInfo | null;
-  business?: BusinessOwnerProfileInfo | null;
-  cachedAt: number;
+  driver: DriverProfileInfo | null;
+  business: BusinessOwnerProfileInfo | null;
+};
+
+function cacheKey(userId: number): string {
+  return `profile_cache:${userId}`;
 }
 
-function keyForUser(userId: number): string {
-  return `profile_cache_v1_${userId}`;
-}
-
-export function saveProfileCache(userId: number, payload: Omit<ProfileCachePayloadV1, "version" | "cachedAt">): void {
+export function saveProfileCache(userId: number, entry: ProfileCacheEntry): void {
   try {
-    const body: ProfileCachePayloadV1 = {
-      version: 1,
-      cachedAt: Date.now(),
-      user: payload.user,
-      driver: payload.driver,
-      business: payload.business,
-    };
-    kvSet(keyForUser(userId), JSON.stringify(body));
-  } catch (e) {
-    console.warn("[offline] saveProfileCache failed", e);
+    kvSet(cacheKey(userId), JSON.stringify(entry));
+  } catch {
+    // best-effort offline mirror
   }
 }
 
-export function loadProfileCache(userId: number): ProfileCachePayloadV1 | null {
+export function loadProfileCache(userId: number): ProfileCacheEntry | null {
   try {
-    const raw = kvGet(keyForUser(userId));
+    const raw = kvGet(cacheKey(userId));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as ProfileCachePayloadV1;
-    if (parsed?.version !== 1 || !parsed.user) return null;
-    return parsed;
+    return JSON.parse(raw) as ProfileCacheEntry;
   } catch {
     return null;
-  }
-}
-
-export function clearProfileCacheForUser(userId: number): void {
-  try {
-    kvDelete(keyForUser(userId));
-  } catch (e) {
-    console.warn("[offline] clearProfileCacheForUser failed", e);
   }
 }

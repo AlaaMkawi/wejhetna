@@ -21,6 +21,8 @@ import { RootStackParamList } from "../../navigation/types";
 import i18n from "../../i18n";
 import MessageModal from "../MessageModal";
 import FullscreenImageViewer from "../../components/FullscreenImageViewer";
+import AttachmentPreview from "../../components/driver/AttachmentPreview";
+import { isImageAttachmentUrl } from "../../utils/attachmentDisplay";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import {
   DriverRatingAdmin,
@@ -261,14 +263,15 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
           {/* Check if it's a URL (image) or just a number string */}
           {driver.id_card_image_url.startsWith("http://") || driver.id_card_image_url.startsWith("https://") ? (
             <View style={styles.imageRow}>
-              <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.id_card_image_url], 0)}>
-                <Image
-                  source={{ uri: driver.id_card_image_url }}
-                  style={styles.documentImage}
-                  resizeMode="contain"
-                  onError={(e) => console.log("ID card image error:", e.nativeEvent.error)}
-                />
-              </TouchableOpacity>
+              <AttachmentPreview
+                url={driver.id_card_image_url}
+                imageStyle={styles.documentImage}
+                onPress={
+                  isImageAttachmentUrl(driver.id_card_image_url)
+                    ? () => openViewer([driver.id_card_image_url], 0)
+                    : undefined
+                }
+              />
             </View>
           ) : (
             <Text style={styles.infoValue}>{driver.id_card_image_url}</Text>
@@ -278,14 +281,15 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
       {driver.driver_license_image_url && (
         <View style={styles.imageRow}>
           <Text style={styles.imageLabel}>{t("driver_license")}</Text>
-          <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.driver_license_image_url], 0)}>
-            <Image
-              source={{ uri: driver.driver_license_image_url }}
-              style={styles.documentImage}
-              resizeMode="contain"
-              onError={(e) => console.log("Driver license image error:", e.nativeEvent.error)}
-            />
-          </TouchableOpacity>
+          <AttachmentPreview
+            url={driver.driver_license_image_url}
+            imageStyle={styles.documentImage}
+            onPress={
+              isImageAttachmentUrl(driver.driver_license_image_url)
+                ? () => openViewer([driver.driver_license_image_url], 0)
+                : undefined
+            }
+          />
         </View>
       )}
     </View>
@@ -312,27 +316,29 @@ export default function AdminDriverDetailsScreen({ route, navigation }: Props) {
         {driver.car_license_image_url && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_license")}</Text>
-            <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.car_license_image_url], 0)}>
-              <Image
-                source={{ uri: driver.car_license_image_url }}
-                style={styles.documentImage}
-                resizeMode="contain"
-                onError={(e) => console.log("Car license image error:", e.nativeEvent.error)}
-              />
-            </TouchableOpacity>
+            <AttachmentPreview
+              url={driver.car_license_image_url}
+              imageStyle={styles.documentImage}
+              onPress={
+                isImageAttachmentUrl(driver.car_license_image_url)
+                  ? () => openViewer([driver.car_license_image_url], 0)
+                  : undefined
+              }
+            />
           </View>
         )}
         {driver.car_insurance_image_url && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_insurance")}</Text>
-            <TouchableOpacity activeOpacity={0.9} onPress={() => openViewer([driver.car_insurance_image_url], 0)}>
-              <Image
-                source={{ uri: driver.car_insurance_image_url }}
-                style={styles.documentImage}
-                resizeMode="contain"
-                onError={(e) => console.log("Car insurance image error:", e.nativeEvent.error)}
-              />
-            </TouchableOpacity>
+            <AttachmentPreview
+              url={driver.car_insurance_image_url}
+              imageStyle={styles.documentImage}
+              onPress={
+                isImageAttachmentUrl(driver.car_insurance_image_url)
+                  ? () => openViewer([driver.car_insurance_image_url], 0)
+                  : undefined
+              }
+            />
           </View>
         )}
         {carPhotos.length > 0 && (

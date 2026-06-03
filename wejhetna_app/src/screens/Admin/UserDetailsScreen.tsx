@@ -8,6 +8,7 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
 import { API_BASE_URL } from "../../../config";
 import { formatApiImageUri } from "../../utils/imageUrl";
+import AttachmentPreview from "../../components/driver/AttachmentPreview";
 
 const DARK_TEAL = "#0f5b63";
 
@@ -292,18 +293,18 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
           {driverData.id_card_image_url && (
             <View style={styles.imageRow}>
               <Text style={styles.imageLabel}>{t("id_card") || "ID Card"}</Text>
-              <Image
-                source={{ uri: driverData.id_card_image_url }}
-                style={styles.documentImage}
+              <AttachmentPreview
+                url={driverData.id_card_image_url}
+                imageStyle={styles.documentImage}
               />
             </View>
           )}
           {driverData.driver_license_image_url && (
             <View style={styles.imageRow}>
               <Text style={styles.imageLabel}>{t("driver_license") || "Driver License"}</Text>
-              <Image
-                source={{ uri: driverData.driver_license_image_url }}
-                style={styles.documentImage}
+              <AttachmentPreview
+                url={driverData.driver_license_image_url}
+                imageStyle={styles.documentImage}
               />
             </View>
           )}
@@ -367,18 +368,18 @@ export default function UserDetailsScreen({ route, navigation }: Props) {
         {vehicle.car_license_image_url && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_license") || "Car License"}</Text>
-            <Image
-              source={{ uri: vehicle.car_license_image_url }}
-              style={styles.documentImage}
+            <AttachmentPreview
+              url={vehicle.car_license_image_url}
+              imageStyle={styles.documentImage}
             />
           </View>
         )}
         {vehicle.car_insurance_image_url && (
           <View style={styles.imageRow}>
             <Text style={styles.imageLabel}>{t("car_insurance") || "Car Insurance"}</Text>
-            <Image
-              source={{ uri: vehicle.car_insurance_image_url }}
-              style={styles.documentImage}
+            <AttachmentPreview
+              url={vehicle.car_insurance_image_url}
+              imageStyle={styles.documentImage}
             />
           </View>
         )}

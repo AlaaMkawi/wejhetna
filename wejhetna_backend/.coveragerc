@@ -1,0 +1,29 @@
+[run]
+source = .
+branch = True
+omit =
+    tests/*
+    */__pycache__/*
+    .venv/*
+    venv/*
+    add_*.py
+    fix_*.py
+    seed_*.py
+    check_*.py
+    ensure_*.py
+    create_admin.py
+    init_db.py
+    newplaces.py
+    search_laqiya.py
+    celery_app.py
+    email_settings.py
+    email_settings_loader.py
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 1
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError

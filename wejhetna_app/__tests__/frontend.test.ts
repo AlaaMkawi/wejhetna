@@ -1636,3 +1636,57 @@ describe("File: RegularRideStatusScreen (helpers)", () => {
     });
   });
 });
+
+describe("File: navMetricsAtArrival", () => {
+  const {
+    zeroNavMetricsIfForced,
+    navEtaMinutesFromSeconds,
+    navEtaSecondsForDisplay,
+    navDistanceKmFromMeters,
+    navRemainingMinutesFromSeconds,
+    isPickupArrivalStatus,
+    formatNavRemainingDistanceMeters,
+    shouldLockNavMetricsForProximity,
+  } = require("../src/utils/navMetricsAtArrival");
+
+  it("zeroNavMetricsIfForced returns zeros when forced", () => {
+    expect(zeroNavMetricsIfForced(120, 90, true)).toEqual({
+      remainingDistanceMeters: 0,
+      etaSecondsRemaining: 0,
+    });
+    expect(zeroNavMetricsIfForced(120, 90, false)).toEqual({
+      remainingDistanceMeters: 120,
+      etaSecondsRemaining: 90,
+    });
+  });
+
+  it("nav helpers return 0 at arrival", () => {
+    expect(navEtaMinutesFromSeconds(180, { atArrival: true })).toBe(0);
+    expect(navEtaSecondsForDisplay(45, { atArrival: true })).toBe(0);
+    expect(navDistanceKmFromMeters(500, { atArrival: true })).toBe(0);
+    expect(navRemainingMinutesFromSeconds(120, { atArrival: true })).toBe(0);
+  });
+
+  it("nav helpers keep en-route floor when not at arrival", () => {
+    expect(navEtaMinutesFromSeconds(180)).toBe(3);
+    expect(navEtaMinutesFromSeconds(60)).toBe(1);
+    expect(navRemainingMinutesFromSeconds(30)).toBe(1);
+    expect(navRemainingMinutesFromSeconds(0)).toBe(0);
+  });
+
+  it("isPickupArrivalStatus recognizes arrived", () => {
+    expect(isPickupArrivalStatus("arrived")).toBe(true);
+    expect(isPickupArrivalStatus("on_the_way")).toBe(false);
+  });
+
+  it("formatNavRemainingDistanceMeters shows 0 m when locked", () => {
+    expect(formatNavRemainingDistanceMeters(120, { atArrival: true })).toBe("0 m");
+    expect(formatNavRemainingDistanceMeters(2)).toBe("2 m");
+  });
+
+  it("shouldLockNavMetricsForProximity matches destination radius", () => {
+    expect(shouldLockNavMetricsForProximity(2, 40)).toBe(true);
+    expect(shouldLockNavMetricsForProximity(200, 40)).toBe(true);
+    expect(shouldLockNavMetricsForProximity(200, 80)).toBe(false);
+  });
+});

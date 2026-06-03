@@ -1,13 +1,11 @@
 // src/screens/Admin/AdminPlaceMapPickerScreen.tsx
 
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useState, useEffect } from "react";
 import { appAlert } from "../../utils/appAlert";
 import { View, StyleSheet, Text, TouchableOpacity, Platform, StatusBar } from "react-native";
-import {
-  MapView,
-  Camera,
-  PointAnnotation,
-} from "@maplibre/maplibre-react-native";
+import { Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { useMapScreenOverlays } from "../../components/map/useMapScreenOverlays";
 
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -110,9 +108,17 @@ type AdminPlaceMapPickerRoute = RouteProp<
 type SourceType = "MAP_PICK" | "GPS_NO_OSM" | "GPS_WITH_OSM";
 
 export default function AdminPlaceMapPickerScreen() {
+  const { showOverlays, exitMapScreen } = useMapScreenOverlays();
   const { t } = useTranslation();
   const navigation = useNavigation<NavType>();
   const route = useRoute<AdminPlaceMapPickerRoute>();
+
+  const navigateAway = useCallback(
+    (params: RootStackParamList["AdminPlaceForm"]) => {
+      exitMapScreen(() => navigation.navigate("AdminPlaceForm", params));
+    },
+    [exitMapScreen, navigation]
+  );
 
   const { initialLat, initialLon, adminUserId, role } = route.params;
 
@@ -320,7 +326,7 @@ export default function AdminPlaceMapPickerScreen() {
         return;
       }
 
-    navigation.navigate("AdminPlaceForm", {
+    navigateAway({
       pickedLat: selectedLat,
       pickedLon: selectedLon,
       pickedSource: selectedSource,
@@ -340,7 +346,7 @@ export default function AdminPlaceMapPickerScreen() {
             text: t("continue_anyway") || "המשך בכל זאת",
             onPress: () => {
               // ממשיכים גם אם יש שגיאה (ללא city_id)
-              navigation.navigate("AdminPlaceForm", {
+              navigateAway({
                 pickedLat: selectedLat,
                 pickedLon: selectedLon,
                 pickedSource: selectedSource,
@@ -368,7 +374,7 @@ export default function AdminPlaceMapPickerScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => exitMapScreen(() => navigation.goBack())}
         >
           <Ionicons name="arrow-forward" size={24} color="#000" />
         </TouchableOpacity>
@@ -377,7 +383,7 @@ export default function AdminPlaceMapPickerScreen() {
       </View>
 
       <View style={styles.mapContainer}>
-        <MapView
+        <FocusedMapView
           style={StyleSheet.absoluteFill}
           mapStyle={MAP_STYLE_URL}
           onPress={handleMapPress}
@@ -405,7 +411,8 @@ export default function AdminPlaceMapPickerScreen() {
             }}
           />
 
-          {existingPlaces.map((place) => {
+          {showOverlays &&
+            existingPlaces.map((place) => {
             if (!place.location) return null;
             
             const placeIcon = getPlaceIcon(place);
@@ -514,15 +521,15 @@ export default function AdminPlaceMapPickerScreen() {
             );
           })}
 
-          {selectedLat != null && selectedLon != null && (
+          {showOverlays && selectedLat != null && selectedLon != null && (
             <PointAnnotation
               id="selected_point"
               coordinate={[selectedLon, selectedLat]}
             >
-              <View style={styles.selectedDot} />
+              <View style={styles.selectedDot} collapsable={false} />
             </PointAnnotation>
           )}
-        </MapView>
+        </FocusedMapView>
       </View>
 
       <View style={styles.bottomPanel}>

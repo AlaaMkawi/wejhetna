@@ -1,4 +1,5 @@
 import React from "react";
+import { Platform } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import HomeScreen from "../screens/HomeScreen";
 import SignUpScreen from "../screens/SignUpScreen";
@@ -16,6 +17,10 @@ import LoginScreen from "../screens/LoginScreen";
 import AdminHomeScreen from "../screens/Admin/AdminHomeScreen";
 import RegularHomeScreen from "../screens/RegularAccount/RegularHomeScreen";
 import AdminDriverDetailsScreen from "../screens/Admin/AdminDriverDetailsScreen";
+import AdminVehicleUpdateRequestDetailsScreen from "../screens/Admin/AdminVehicleUpdateRequestDetailsScreen";
+import DriverVehicleUpdateRequestScreen from "../screens/DriverAccount/DriverVehicleUpdateRequestScreen";
+import DriverVehicleRequestsListScreen from "../screens/DriverAccount/DriverVehicleRequestsListScreen";
+import DriverVehicleRequestDetailScreen from "../screens/DriverAccount/DriverVehicleRequestDetailScreen";
 import AdminBusinessOwnerRequestsScreen from "../screens/Admin/AdminBusinessOwnerRequestsScreen";
 import AdminBusinessOwnerRequestDetailsScreen from "../screens/Admin/AdminBusinessOwnerRequestDetailsScreen";
 import BusinessOwnerSignupScreen from "../screens/businessOwner/BusinessOwnerSignupScreen";
@@ -254,9 +259,34 @@ export default function AppNavigator() {
   options={{ headerShown: false }}
 />
 <Stack.Screen
+  name="DriverVehicleUpdateRequest"
+  component={DriverVehicleUpdateRequestScreen}
+  options={{ headerShown: false }}
+/>
+<Stack.Screen
+  name="DriverVehicleRequestsList"
+  component={DriverVehicleRequestsListScreen}
+  options={{ headerShown: false }}
+/>
+<Stack.Screen
+  name="DriverVehicleRequestDetail"
+  component={DriverVehicleRequestDetailScreen}
+  options={{ headerShown: false }}
+/>
+<Stack.Screen
+  name="AdminVehicleUpdateRequestDetails"
+  component={AdminVehicleUpdateRequestDetailsScreen}
+  options={{ headerShown: false }}
+/>
+<Stack.Screen
   name="RouteDetails"
   component={RouteDetailsScreen}
-  options={{ headerShown: false }}
+  options={{
+    headerShown: false,
+    ...(Platform.OS === "ios"
+      ? { animation: "none" as const, gestureEnabled: false }
+      : {}),
+  }}
 />
       <Stack.Screen
         name="RideTrackingMap"

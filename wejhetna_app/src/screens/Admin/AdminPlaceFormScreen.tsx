@@ -17,6 +17,13 @@ import {
   Category,
   PlaceType,
 } from "../../api/places";
+import {
+  PlaceOpeningHoursEditor,
+  useOpeningHoursEditor,
+} from "../../components/place/PlaceOpeningHoursEditor";
+import { PlacePhotoGalleryEditor } from "../../components/place/PlacePhotoGalleryEditor";
+import { PlaceLocationMapPreview } from "../../components/place/PlaceLocationMapPreview";
+import { sanitizeBusinessImagesForApi } from "../../utils/placeBusinessImages";
 
 type AdminPlaceFormRoute = RouteProp<RootStackParamList, "AdminPlaceForm">;
 
@@ -46,7 +53,8 @@ export default function AdminPlaceFormScreen() {
 
   const [description, setDescription] = useState("");
   const [phone, setPhone] = useState("");
-  const [openingHours, setOpeningHours] = useState("");
+  const [businessImages, setBusinessImages] = useState<string[]>([]);
+  const hoursEditor = useOpeningHoursEditor();
 
   const [lat, setLat] = useState<number | undefined>(undefined);
   const [lon, setLon] = useState<number | undefined>(undefined);
@@ -148,6 +156,10 @@ export default function AdminPlaceFormScreen() {
   const isCategoryValid =
     placeType !== "BUSINESS" || (placeType === "BUSINESS" && !!categoryId);
 
+  const hasUploadingPhotos = businessImages.some((u) =>
+    u.startsWith("__uploading__")
+  );
+
   const isFormValid =
     isNameValid &&
     isNameArValid &&
@@ -155,7 +167,8 @@ export default function AdminPlaceFormScreen() {
     isCityValid &&
     isLocationValid &&
     isCategoryValid &&
-    isPhoneValid;
+    isPhoneValid &&
+    !hasUploadingPhotos;
 
   const canSubmit = isFormValid && !creating;
 
@@ -203,6 +216,9 @@ export default function AdminPlaceFormScreen() {
     try {
       setCreating(true);
 
+      const imagePayload = sanitizeBusinessImagesForApi(businessImages);
+      const openingHoursStored = hoursEditor.toStorageString();
+
       await createAdminPlace({
         name,
         name_ar: nameAr,
@@ -211,10 +227,11 @@ export default function AdminPlaceFormScreen() {
         city_id: cityId!,
         category_id: categoryId ?? null,
         can_be_claimed: placeType === "BUSINESS",
-        description: description || null,
+        description: description.trim() ? description.trim() : null,
         phone: hasPhone ? phone : null,
-        opening_hours: openingHours || null,
-        main_image_url: null,
+        opening_hours: openingHoursStored,
+        main_image_url: imagePayload.main_image_url,
+        business_images_urls: imagePayload.business_images_urls,
         social_links: null,
         owner_user_id: null,
         created_by_admin_id: adminUserId,
@@ -249,7 +266,8 @@ export default function AdminPlaceFormScreen() {
       setNameHe("");
       setDescription("");
       setPhone("");
-      setOpeningHours("");
+      setBusinessImages([]);
+      hoursEditor.resetFromString(null);
       setLat(undefined);
       setLon(undefined);
       setPhoneTouched(false);
@@ -407,31 +425,41 @@ export default function AdminPlaceFormScreen() {
           </View>
         )}
 
-        {placeType === "BUSINESS" && (
-          <>
-            <Text style={styles.label}>
-              {t("category_for_business") || "קטגוריה (לעסק)"} <Text style={styles.required}>*</Text>
-            </Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={categoryId}
-                onValueChange={(val) => setCategoryId(val as number)}
-                style={styles.picker}
-              >
-                <Picker.Item label={t("select_category") || "בחרי קטגוריה..."} value={undefined as any} />
-                {categories.map((cat) => (
-                  <Picker.Item
-                    key={cat.id}
-                    label={`${String(cat.name_ar)} ${
-                      cat.name_he ? `(${String(cat.name_he)})` : ""
-                    }`}
-                    value={cat.id}
-                  />
-                ))}
-              </Picker>
-            </View>
-          </>
-        )}
+        <Text style={styles.label}>
+          {placeType === "BUSINESS"
+            ? `${t("category_for_business") || "קטגוריה (לעסק)"}`
+            : `${t("category_optional") || "קטגוריה (אופציונלי)"}`}
+          {placeType === "BUSINESS" ? (
+            <Text style={styles.required}> *</Text>
+          ) : null}
+        </Text>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={categoryId ?? 0}
+            onValueChange={(val) => {
+              if (val === 0) {
+                setCategoryId(undefined);
+              } else {
+                setCategoryId(val as number);
+              }
+            }}
+            style={styles.picker}
+          >
+            <Picker.Item
+              label={t("select_category") || "בחר קטגוריה..."}
+              value={0}
+            />
+            {categories.map((cat) => (
+              <Picker.Item
+                key={cat.id}
+                label={`${String(cat.name_ar)} ${
+                  cat.name_he ? `(${String(cat.name_he)})` : ""
+                }`}
+                value={cat.id}
+              />
+            ))}
+          </Picker>
+        </View>
 
         <Text style={styles.label}>{t("description") || "תיאור"}</Text>
         <TextInput
@@ -505,12 +533,7 @@ export default function AdminPlaceFormScreen() {
             {t("location_on_map") || "מיקום על המפה"} <Text style={styles.required}>*</Text>
           </Text>
           {lat !== undefined && lon !== undefined ? (
-            <View style={styles.locationInfoBox}>
-              <Ionicons name="location" size={20} color="#0f5b63" />
-              <Text style={styles.locationText}>
-                lat: {lat.toFixed(5)}, lon: {lon.toFixed(5)}
-              </Text>
-            </View>
+            <PlaceLocationMapPreview lat={lat} lon={lon} height={150} />
           ) : (
             <View style={styles.locationErrorBox}>
               <Ionicons name="alert-circle" size={20} color="#dc3545" />
@@ -520,6 +543,14 @@ export default function AdminPlaceFormScreen() {
             </View>
           )}
         </View>
+
+        <PlaceOpeningHoursEditor alwaysEditing editor={hoursEditor} />
+
+        <PlacePhotoGalleryEditor
+          images={businessImages}
+          onChange={setBusinessImages}
+          disabled={creating}
+        />
 
         <View style={styles.buttonContainer}>
           {creating && (

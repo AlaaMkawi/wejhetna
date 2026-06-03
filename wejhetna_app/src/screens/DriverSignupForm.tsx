@@ -11,11 +11,10 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
-import { launchImageLibrary } from "react-native-image-picker";
 import MessageModal from "./MessageModal"; // 👈 pretty popup
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { API_BASE_URL } from "../../config";
-import { uploadAssetToS3Presigned } from "../api/upload";
+import DriverDocumentUploadField from "../components/driver/DriverDocumentUploadField";
 
 const MINT = "#9bd3d8";
 const DARK_TEAL = "#0f5b63";
@@ -165,75 +164,16 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
     return trimmed.length >= 5 && /\d/.test(trimmed);
   };
 
-  // ----- IMAGE UPLOAD HELPER -----
-  const pickAndUpload = async (
-    setUrl: (url: string) => void,
-    setUploading: (loading: boolean) => void
-  ) => {
-    if (
-      uploadingDriverLicense ||
-      uploadingCarLicense ||
-      uploadingCarInsurance ||
-      uploadingCarPhoto1 ||
-      uploadingCarPhoto2
-    ) {
-      console.log("[UPLOAD] blocked: already uploading");
-      return;
-    }
-    launchImageLibrary({ 
-      mediaType: "photo",
-      quality: 0.7, // Reduce image quality to save memory
-      maxWidth: 1920, // Limit max width
-      maxHeight: 1920, // Limit max height
-      includeBase64: true,
-    }, async (res) => {
-      console.log("[UPLOAD] picker response:", res);
-      if (res.didCancel || res.errorCode) {
-        console.log("[UPLOAD] picker cancelled/error:", res.errorCode, res.errorMessage);
-        return;
-      }
-
-      const asset = res.assets?.[0];
-      if (!asset || !asset.uri) {
-        console.log("[UPLOAD] invalid picker asset:", asset);
-        showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: invalid picker asset");
-        return;
-      }
-
-      setUploading(true);
-      try {
-        console.log("[UPLOAD] selected asset uri:", asset.uri);
-        // Small defer to avoid immediate-select race
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        await new Promise<void>((resolve) => setTimeout(resolve, 150));
-        const formData = new FormData();
-        formData.append("file", {
-          uri: asset.uri,
-          name: asset.fileName || "upload.jpg",
-          type: asset.type || "image/jpeg",
-        } as any);
-        const fileUrl = await uploadAssetToS3Presigned({
-          uri: asset.uri,
-          fileName: asset.fileName,
-          type: asset.type,
-          base64: (asset as any).base64,
-        });
-        setUrl(fileUrl);
-        console.log("[UPLOAD] success file_url:", fileUrl);
-      } catch (e: any) {
-        console.log("Upload error", e?.message || e);
-        showModal("error", t("error") || "Error", t("upload_failed") || "Failed to upload image: " + (e?.message || "Unknown error"));
-      } finally {
-        setUploading(false);
-      }
-    });
+  const onUploadError = (message: string) => {
+    showModal("error", t("error") || "Error", t("upload_failed") || message);
   };
 
-  const uploadDriverLicense = () => pickAndUpload(setDriverLicenseUrl, setUploadingDriverLicense);
-  const uploadCarLicense = () => pickAndUpload(setCarLicenseUrl, setUploadingCarLicense);
-  const uploadCarInsurance = () => pickAndUpload(setCarInsuranceUrl, setUploadingCarInsurance);
-  const uploadCarPhoto1 = () => pickAndUpload(setCarPhoto1Url, setUploadingCarPhoto1);
-  const uploadCarPhoto2 = () => pickAndUpload(setCarPhoto2Url, setUploadingCarPhoto2);
+  const anyUploading =
+    uploadingDriverLicense ||
+    uploadingCarLicense ||
+    uploadingCarInsurance ||
+    uploadingCarPhoto1 ||
+    uploadingCarPhoto2;
 
   // Handle field changes with validation
   const handleFullNameChange = (text: string) => {
@@ -830,119 +770,69 @@ export default function DriverSignupForm({ onBack, verifiedEmail, route, navigat
           />
           {idNumberError && <Text style={styles.fieldError}>{idNumberError}</Text>}
 
-          <Text style={styles.uploadLabel}>{t("driver_license") || "Driver License"}</Text>
-          <TouchableOpacity
-            style={styles.uploadButton}
-            onPress={uploadDriverLicense}
-            disabled={uploadingDriverLicense}
-          >
-            {uploadingDriverLicense ? (
-              <ActivityIndicator color={DARK_TEAL} />
-            ) : driverLicenseUrl ? (
-              <View style={styles.imagePreviewContainer}>
-                <Image 
-                  source={{ uri: driverLicenseUrl }} 
-                  style={styles.imagePreview}
-                  resizeMode="cover"
-                  onError={(e) => console.log("Image load error:", e.nativeEvent.error)}
-                />
-                <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
-              </View>
-            ) : (
-              <Text style={styles.uploadButtonText}>{t("upload_driver_license") || "Upload driver license"}</Text>
-            )}
-          </TouchableOpacity>
+          <DriverDocumentUploadField
+            label={t("driver_license") || "Driver License"}
+            url={driverLicenseUrl}
+            uploading={uploadingDriverLicense}
+            disabled={anyUploading && !uploadingDriverLicense}
+            placeholderText={t("upload_driver_license") || "Upload driver license"}
+            mode="document_or_photo"
+            onUrlChange={setDriverLicenseUrl}
+            onUploadingChange={setUploadingDriverLicense}
+            onError={onUploadError}
+          />
 
           <Text style={styles.sectionTitle}>{t("car_documents") || "Car documents"}</Text>
 
-          <Text style={styles.uploadLabel}>{t("car_license") || t("upload_car_license") || "Car License"}</Text>
-          <TouchableOpacity
-            style={styles.uploadButton}
-            onPress={uploadCarLicense}
-            disabled={uploadingCarLicense}
-          >
-            {uploadingCarLicense ? (
-              <ActivityIndicator color={DARK_TEAL} />
-            ) : carLicenseUrl ? (
-              <View style={styles.imagePreviewContainer}>
-                <Image 
-                  source={{ uri: carLicenseUrl }} 
-                  style={styles.imagePreview}
-                  resizeMode="cover"
-                  onError={(e) => console.log("Image load error:", e.nativeEvent.error)}
-                />
-                <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
-              </View>
-            ) : (
-              <Text style={styles.uploadButtonText}>{t("upload_car_license") || "Upload car license"}</Text>
-            )}
-          </TouchableOpacity>
+          <DriverDocumentUploadField
+            label={t("car_license") || t("upload_car_license") || "Car License"}
+            url={carLicenseUrl}
+            uploading={uploadingCarLicense}
+            disabled={anyUploading && !uploadingCarLicense}
+            placeholderText={t("upload_car_license") || "Upload car license"}
+            mode="document_or_photo"
+            onUrlChange={setCarLicenseUrl}
+            onUploadingChange={setUploadingCarLicense}
+            onError={onUploadError}
+          />
 
-          <Text style={styles.uploadLabel}>{t("car_insurance") || t("upload_car_insurance") || "Car Insurance"}</Text>
-          <TouchableOpacity
-            style={styles.uploadButton}
-            onPress={uploadCarInsurance}
-            disabled={uploadingCarInsurance}
-          >
-            {uploadingCarInsurance ? (
-              <ActivityIndicator color={DARK_TEAL} />
-            ) : carInsuranceUrl ? (
-              <View style={styles.imagePreviewContainer}>
-                <Image 
-                  source={{ uri: carInsuranceUrl }} 
-                  style={styles.imagePreview}
-                  resizeMode="cover"
-                  onError={(e) => console.log("Image load error:", e.nativeEvent.error)}
-                />
-                <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
-              </View>
-            ) : (
-              <Text style={styles.uploadButtonText}>{t("upload_car_insurance") || "Upload car insurance"}</Text>
-            )}
-          </TouchableOpacity>
+          <DriverDocumentUploadField
+            label={t("car_insurance") || t("upload_car_insurance") || "Car Insurance"}
+            url={carInsuranceUrl}
+            uploading={uploadingCarInsurance}
+            disabled={anyUploading && !uploadingCarInsurance}
+            placeholderText={t("upload_car_insurance") || "Upload car insurance"}
+            mode="document_or_photo"
+            onUrlChange={setCarInsuranceUrl}
+            onUploadingChange={setUploadingCarInsurance}
+            onError={onUploadError}
+          />
 
           <Text style={styles.sectionTitle}>{t("car_photos_optional") || "Car photos (optional)"}</Text>
 
-          <Text style={styles.uploadLabel}>{t("car_photo") || t("upload_car_photo") || "Car Photo"} 1</Text>
-          <TouchableOpacity
-            style={styles.uploadButton}
-            onPress={uploadCarPhoto1}
-            disabled={uploadingCarPhoto1}
-          >
-            {uploadingCarPhoto1 ? (
-              <ActivityIndicator color={DARK_TEAL} />
-            ) : carPhoto1Url ? (
-              <View style={styles.imagePreviewContainer}>
-                <Image 
-                  source={{ uri: carPhoto1Url }} 
-                  style={styles.imagePreview}
-                  resizeMode="cover"
-                  onError={(e) => console.log("Image load error:", e.nativeEvent.error)}
-                />
-                <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
-              </View>
-            ) : (
-              <Text style={styles.uploadButtonText}>{t("upload_car_photo") || "Upload car photo"} 1</Text>
-            )}
-          </TouchableOpacity>
+          <DriverDocumentUploadField
+            label={`${t("car_photo") || "Car Photo"} 1`}
+            url={carPhoto1Url}
+            uploading={uploadingCarPhoto1}
+            disabled={anyUploading && !uploadingCarPhoto1}
+            placeholderText={`${t("upload_car_photo") || "Upload car photo"} 1`}
+            mode="photo_only"
+            onUrlChange={setCarPhoto1Url}
+            onUploadingChange={setUploadingCarPhoto1}
+            onError={onUploadError}
+          />
 
-          <Text style={styles.uploadLabel}>{t("car_photo") || t("upload_car_photo") || "Car Photo"} 2</Text>
-          <TouchableOpacity
-            style={styles.uploadButton}
-            onPress={uploadCarPhoto2}
-            disabled={uploadingCarPhoto2}
-          >
-            {uploadingCarPhoto2 ? (
-              <ActivityIndicator color={DARK_TEAL} />
-            ) : carPhoto2Url ? (
-              <View style={styles.imagePreviewContainer}>
-                <Image source={{ uri: carPhoto2Url }} style={styles.imagePreview} />
-                <Text style={styles.imagePreviewText}>{t("uploaded") || "Uploaded"} ✓</Text>
-              </View>
-            ) : (
-              <Text style={styles.uploadButtonText}>{t("upload_car_photo") || "Upload car photo"} 2</Text>
-            )}
-          </TouchableOpacity>
+          <DriverDocumentUploadField
+            label={`${t("car_photo") || "Car Photo"} 2`}
+            url={carPhoto2Url}
+            uploading={uploadingCarPhoto2}
+            disabled={anyUploading && !uploadingCarPhoto2}
+            placeholderText={`${t("upload_car_photo") || "Upload car photo"} 2`}
+            mode="photo_only"
+            onUrlChange={setCarPhoto2Url}
+            onUploadingChange={setUploadingCarPhoto2}
+            onError={onUploadError}
+          />
 
           <TouchableOpacity
             style={[styles.primaryButton, { marginTop: 16 }]}

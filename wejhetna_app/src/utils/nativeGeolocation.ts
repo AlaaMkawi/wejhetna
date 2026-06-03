@@ -33,13 +33,24 @@ const { FusedLocation } = NativeModules as {
   };
 };
 
-const emitter = new NativeEventEmitter(Platform.OS === "android" ? (FusedLocation as any) : undefined);
+// FusedLocation watch events are Android-only; never pass null/undefined to NativeEventEmitter (crashes iOS at import).
+const fusedLocationEmitter: NativeEventEmitter | null =
+  Platform.OS === "android" && FusedLocation
+    ? new NativeEventEmitter(FusedLocation as any)
+    : null;
+
+type AuthorizationLevel = "whenInUse" | "always";
+type AuthorizationResult = "disabled" | "granted" | "denied" | "restricted";
 
 export const NativeGeolocation = {
-  requestAuthorization: (...args: any[]) => {
-    // iOS-only; keep compatibility
-    // @ts-expect-error
-    return GeolocationIOS.requestAuthorization?.(...args);
+  /** iOS only — react-native-geolocation-service expects "whenInUse" | "always", not a callback. */
+  requestAuthorization: (
+    authorizationLevel: AuthorizationLevel = "whenInUse"
+  ): Promise<AuthorizationResult> => {
+    if (Platform.OS !== "ios") {
+      return Promise.reject(new Error("requestAuthorization is only for iOS"));
+    }
+    return GeolocationIOS.requestAuthorization(authorizationLevel);
   },
 
   getCurrentPosition: (
@@ -93,7 +104,7 @@ export const NativeGeolocation = {
       }
       let watchId = -1;
       // Subscribe first (so we don't miss the first event)
-      const sub = emitter.addListener("FusedLocationUpdate", (payload: any) => {
+      const sub = fusedLocationEmitter!.addListener("FusedLocationUpdate", (payload: any) => {
         if (payload?.watchId !== watchId) return;
         const p: GeoPosition = { coords: payload.coords, timestamp: payload.timestamp };
         success(p);

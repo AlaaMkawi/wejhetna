@@ -10,6 +10,7 @@ import {
 import { fetchOsrmDrivingRoute } from "../services/navigation/osrmRoute";
 import { lineStringToFeatureCollection } from "../types/navigation";
 import type { TranslateFn } from "../utils/destinationBoundaryValidation";
+import { runMapSafeNavigation } from "../utils/mapSafeNavigation";
 
 export type DrivingRouteDestination = { lat: number; lon: number; name?: string };
 
@@ -39,6 +40,8 @@ export type OpenDrivingRoutePreviewParams = {
    * driver heading to the passenger) must opt out of the boundary check.
    */
   skipDestinationBoundaryCheck?: boolean;
+  /** iOS Home already ran map teardown before this call. */
+  skipHomePrep?: boolean;
 };
 
 /**
@@ -55,6 +58,7 @@ export async function openDrivingRoutePreview({
   navigationPhase,
   routeDetailsExtras,
   skipDestinationBoundaryCheck,
+  skipHomePrep,
 }: OpenDrivingRoutePreviewParams): Promise<void> {
   if (!destination) {
     appAlert(t("error"), t("please_select_destination"));
@@ -63,6 +67,7 @@ export async function openDrivingRoutePreview({
 
   setRouteLoading(true);
 
+  let navigated = false;
   try {
     const permissionOk = await ensureForegroundLocationForNavigation();
     console.log("[GPS][routePreview] permissionOk", permissionOk);
@@ -74,9 +79,18 @@ export async function openDrivingRoutePreview({
       return;
     }
 
-    const freshLocation = await getCurrentPositionForRoute();
-    console.log("[GPS][routePreview] freshLocation", freshLocation);
-    setUserLocation?.(freshLocation);
+    const routeOrigin = await getCurrentPositionForRoute();
+    console.log("[GPS][routePreview] routeOrigin", routeOrigin);
+
+    // Home map dot is updated only by useInitialMapGeolocation / refreshHomeMapUserLocation.
+    // Never copy route-origin reads into userLocation — network/cell fixes can be far from GPS.
+    const hasOriginOverride =
+      originOverride != null &&
+      Number.isFinite(originOverride.lat) &&
+      Number.isFinite(originOverride.lon);
+    const osrmOrigin = hasOriginOverride
+      ? { lat: originOverride!.lat, lon: originOverride!.lon }
+      : routeOrigin;
 
     // Destination boundary rule applies to the FINAL ride destination only.
     // Pickup-oriented flows (driver heading to passenger, passenger viewing
@@ -98,11 +112,6 @@ export async function openDrivingRoutePreview({
     } else {
       console.log("[GPS][routePreview] boundaryCheck skipped (pickup-mode)");
     }
-
-    const osrmOrigin =
-      originOverride && Number.isFinite(originOverride.lat) && Number.isFinite(originOverride.lon)
-        ? { lat: originOverride.lat, lon: originOverride.lon }
-        : freshLocation;
 
     console.log("[GPS][routePreview] osrm start", {
       origin: osrmOrigin,
@@ -131,14 +140,20 @@ export async function openDrivingRoutePreview({
       destination: { lat: destination.lat, lon: destination.lon },
       navigationPhase: phase,
     });
-    navigation.navigate("RouteDetails", {
-      routeInfo: routeInfoData,
-      destination,
-      userLocation: osrmOrigin,
-      routeCoordinates: routeCoords,
-      navigationPhase: phase,
-      ...(routeDetailsExtras ?? {}),
-    });
+    runMapSafeNavigation(
+      () => {
+        navigated = true;
+        navigation.navigate("RouteDetails", {
+          routeInfo: routeInfoData,
+          destination,
+          userLocation: osrmOrigin,
+          routeCoordinates: routeCoords,
+          navigationPhase: phase,
+          ...(routeDetailsExtras ?? {}),
+        });
+      },
+      { skipHomePrep: skipHomePrep === true }
+    );
   } catch (error: unknown) {
     const err = error as { code?: number; message?: string };
     console.error("Route error:", err?.message || String(error));
@@ -155,6 +170,8 @@ export async function openDrivingRoutePreview({
       );
     }
   } finally {
+    // Always release Home CTA loading — on success the Home screen stays mounted underneath
+    // and `navigated === true` previously left routeLoading stuck true on Android.
     setRouteLoading(false);
   }
 }

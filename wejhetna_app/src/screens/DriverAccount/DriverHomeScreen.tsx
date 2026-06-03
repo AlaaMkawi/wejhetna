@@ -9,7 +9,12 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { MapView, Camera, PointAnnotation } from "@maplibre/maplibre-react-native";
+import { PointAnnotation } from "@maplibre/maplibre-react-native";
+import { FocusedMapView } from "../../components/map/FocusedMapView";
+import { RegularHomeMapCamera } from "../../components/map/RegularHomeMapCamera";
+import HomeMapPlaceMarkers from "../../components/map/HomeMapPlaceMarkers";
+import { UserLocationDot } from "../../components/map/UserLocationDot";
+import { useHomeMapScreen } from "../../components/map/useHomeMapScreen";
 import { useRoute, RouteProp, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
@@ -24,24 +29,36 @@ import { useOverlayBottomOffset } from "../../theme/safeArea";
 import { collectBusinessImageUrls, formatApiImageUri } from "../../utils/imageUrl";
 import { isOpenNow } from "../../utils/openingHours";
 import MapInlineSearch from "../../components/map/MapInlineSearch";
-import { openDrivingRoutePreview } from "../../navigation/openDrivingRoutePreview";
+import { runOpenDrivingRoutePreviewFromHome } from "../../utils/homeMapRoutePreview";
 import { assertDestinationInServiceCities } from "../../utils/destinationBoundaryValidation";
-import { LIVE_NAVIGATION_EXIT_EVENT } from "../../navigation/navigationEvents";
-import { destinationAfterClosingPlaceDetails } from "../../utils/placeDetailsMapPin";
+import { useHomeMapDraftNavigationCleanup } from "../../hooks/useHomeMapDraftNavigationCleanup";
+import { useRegularHomeMapCamera } from "../../hooks/useRegularHomeMapCamera";
+import { getCurrentPositionReliable } from "../../utils/locationPermission";
+import {
+  destinationAfterClosingPlaceDetails,
+  shouldShowCustomMapPin,
+  shouldShowDestinationMapPin,
+} from "../../utils/placeDetailsMapPin";
+import {
+  clusterNearbyDrivers,
+  zoomInTargetForCluster,
+} from "../../utils/nearbyDriverClustering";
+import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsActionButtons";
+import DriverInfoPopup from "../../components/ride/DriverInfoPopup";
+import { MapPickedDestinationPanel } from "../../components/map/MapPickedDestinationPanel";
+import { NearbyDriverTaxiMarker } from "../../components/map/NearbyDriverTaxiMarker";
+import { RideDriverClusterMarker } from "../../components/map/RideDriverClusterMarker";
+import { usePlaceDetailsRideCtaState } from "../../hooks/usePlaceDetailsRideCtaState";
+import { useSyncPlaceDetailsDestination } from "../../hooks/useSyncPlaceDetailsDestination";
+import { useHomeMapPassengerRideFlow } from "../../hooks/useHomeMapPassengerRideFlow";
+import { getUserProfile } from "../../api/profileApi";
+import { parseStoredUserId } from "../../api/rides";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
 
 const INITIAL_CENTER: [number, number] = [34.83, 31.24];
 const INITIAL_ZOOM = 12.5;
-
-// Zoom thresholds for displaying different types of places
-// At zoom < 13: Only roads and city outlines (handled by MapTiler style)
-// At zoom 13-14: Road names appear (handled by MapTiler style)
-// At zoom 15-16.4: Only PUBLIC_SERVICE places appear with icons
-// At zoom 16.5+: All places (PUBLIC_SERVICE + BUSINESS) appear with icons
-const PUBLIC_SERVICE_ZOOM_THRESHOLD = 15; // Show public services (mosques, schools, clinics) at zoom 15+
-const BUSINESS_ZOOM_THRESHOLD = 16.5; // Show businesses at zoom 16.5+ (only after public services are already visible)
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const BOTTOM_TAB_HEIGHT = 80; // גובה הבאנל התחתון (עם ה-rounded corners)
@@ -50,11 +67,7 @@ const BOTTOM_SHEET_MAX_HEIGHT = SCREEN_HEIGHT * 0.75; // גובה מקסימלי
 const BOTTOM_SHEET_OFFSET = 25; // מרחק נוסף מעל ה-tab bar (ללא חפיפה)
 const MAP_PICK_DEST_FAB_BOTTOM = 124;
 const MAP_PICK_DEST_BANNER_BOTTOM = MAP_PICK_DEST_FAB_BOTTOM + 56 + 12;
-
-const NEGEV_BOUNDS = {
-  ne: [35.10, 31.42],
-  sw: [34.72, 31.18],
-};
+const MAP_LOCATE_ME_FAB_BOTTOM = 124;
 
 // Helper function to get place name based on current language
 const getPlaceName = (place: PlaceForMap): string => {
@@ -277,20 +290,28 @@ export default function DriverHomeScreen({ }: Props) {
   const { t } = useTranslation();
   const mapPickFabBottom = useOverlayBottomOffset(MAP_PICK_DEST_FAB_BOTTOM);
   const mapPickBannerBottom = useOverlayBottomOffset(MAP_PICK_DEST_BANNER_BOTTOM);
+  const mapLocateMeFabBottom = useOverlayBottomOffset(MAP_LOCATE_ME_FAB_BOTTOM);
   const routeParams = useRoute();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const selectedPlaceIdFromParams = (routeParams.params as any)?.selectedPlaceId as number | undefined;
   const cameraRef = useRef<any>(null);
+  const placeCameraFocusedIdRef = useRef<number | null>(null);
 
   // Places
   const [places, setPlaces] = useState<PlaceForMap[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<PlaceForMap | null>(null);
-  const [currentZoom, setCurrentZoom] = useState(INITIAL_ZOOM);
+  const [markerZoom, setMarkerZoom] = useState(INITIAL_ZOOM);
 
   // Save/Unsave place
   const [isPlaceSaved, setIsPlaceSaved] = useState(false);
   const [savingPlace, setSavingPlace] = useState(false);
   const [userId, setUserId] = useState<number | null>(null);
+  const [userPhone, setUserPhone] = useState("");
+
+  const { rideWithDriverMuted, alertIfCannotBookRide } = usePlaceDetailsRideCtaState(
+    userId,
+    "DRIVER"
+  );
 
   // Photo gallery modal
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
@@ -327,6 +348,8 @@ export default function DriverHomeScreen({ }: Props) {
   const [destination, setDestination] = useState<{ lat: number; lon: number; name?: string } | null>(null);
   const [customPin, setCustomPin] = useState<{ lat: number; lon: number } | null>(null);
 
+  useSyncPlaceDetailsDestination(selectedPlace, destination, setDestination, getPlaceName);
+
   // Route
   const [routeLoading, setRouteLoading] = useState(false);
   const [isPickingMapDestination, setIsPickingMapDestination] = useState(false);
@@ -335,17 +358,109 @@ export default function DriverHomeScreen({ }: Props) {
   );
   const pickMapTapInFlightRef = useRef(false);
 
+  const {
+    onRegionWillChange,
+    onRegionDidChange,
+    requestCameraMove,
+    centerOnUserLocation,
+  } = useRegularHomeMapCamera({
+    cameraRef,
+    setMarkerZoom,
+  });
+
+  const [locateMeLoading, setLocateMeLoading] = useState(false);
+
+  const handleLocateMePress = useCallback(async () => {
+    if (locateMeLoading) return;
+
+    let loc = userLocation;
+    if (!loc) {
+      setLocateMeLoading(true);
+      try {
+        loc = await getCurrentPositionReliable();
+        setUserLocation(loc);
+      } catch {
+        appAlert(t("error"), t("ride_location_unavailable_hint"));
+        return;
+      } finally {
+        setLocateMeLoading(false);
+      }
+    }
+
+    if (!loc) return;
+    centerOnUserLocation(loc, { zoomLevel: 15.5, animationDuration: 720 });
+  }, [locateMeLoading, userLocation, centerOnUserLocation, t]);
+
+  const rideFlow = useHomeMapPassengerRideFlow({
+    userId,
+    userPhone,
+    userLocation,
+    destination,
+    customPin,
+    selectedPlace,
+    cameraRef,
+    currentZoom: markerZoom,
+    requestCameraMove,
+    centerOnUserLocation,
+    onBeforeBookRide: alertIfCannotBookRide,
+    setCustomPin,
+    setDestination,
+  });
+
+  const {
+    selectedDriver,
+    setSelectedDriver,
+    ridePassengers,
+    rideDestinationInput,
+    creatingRideRequest,
+    rideSendErrorHint,
+    setRideSendErrorHint,
+    rideWithDriverLoading,
+    driverMapItems,
+    handleClusterTap,
+    handleCreateRideRequest,
+    handleRideWithDriverFromPlaceDetails,
+    dismissPickedDestinationPanel,
+    isPickedDestinationActive,
+    trySelectDriverFromMapTap,
+    haversineDistanceKm,
+  } = rideFlow;
+
   // Search
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<PlaceForMap[]>([]);
+
+  const { showAnnotations, mapShellMounted } = useHomeMapScreen({
+    onPrepareLeaveForRoute: () => {
+      setSelectedPlace(null);
+      setDestination(null);
+      setCustomPin(null);
+      setSearchResults([]);
+      setPickPreviewCoords(null);
+      setIsPickingMapDestination(false);
+    },
+  });
 
   // Load user ID from AsyncStorage
   useEffect(() => {
     async function loadUserId() {
       try {
         const storedUserId = await AsyncStorage.getItem("userId");
-        if (storedUserId) {
-          setUserId(parseInt(storedUserId, 10));
+        const parsedUserId = parseStoredUserId(storedUserId);
+        if (parsedUserId != null) {
+          setUserId(parsedUserId);
+          try {
+            const profile = await getUserProfile(parsedUserId);
+            if (profile.phone) {
+              setUserPhone(profile.phone);
+            }
+          } catch {
+            /* profile optional */
+          }
+        }
+        const storedPhone = await AsyncStorage.getItem("userPhone");
+        if (storedPhone) {
+          setUserPhone(storedPhone);
         }
       } catch (error) {
         console.error("Error loading user ID:", error);
@@ -371,15 +486,14 @@ export default function DriverHomeScreen({ }: Props) {
     }, [])
   );
 
-  useEffect(() => {
-    const sub = DeviceEventEmitter.addListener(LIVE_NAVIGATION_EXIT_EVENT, () => {
-      setDestination(null);
-      setCustomPin(null);
-      setIsPickingMapDestination(false);
-      setPickPreviewCoords(null);
-    });
-    return () => sub.remove();
-  }, []);
+  useHomeMapDraftNavigationCleanup({
+    setRouteLoading,
+    setDestination,
+    setCustomPin,
+    setIsPickingMapDestination,
+    setPickPreviewCoords,
+    pickMapTapInFlightRef,
+  });
 
   // Fetch all places on mount
   useEffect(() => {
@@ -393,24 +507,6 @@ export default function DriverHomeScreen({ }: Props) {
     }
     load();
   }, []);
-
-  // Handle selectedPlaceId from navigation params (from SavedPlacesScreen)
-  useEffect(() => {
-    if (selectedPlaceIdFromParams && places.length > 0) {
-      const place = places.find(p => p.id === selectedPlaceIdFromParams);
-      if (place) {
-        setSelectedPlace(place);
-        // Center camera on the place location
-        if (place.location && cameraRef.current) {
-          cameraRef.current.setCamera({
-            centerCoordinate: [place.location.lon, place.location.lat],
-            zoomLevel: 16.5,
-            animationDuration: 1000,
-          });
-        }
-      }
-    }
-  }, [selectedPlaceIdFromParams, places]);
 
   // Check if place is saved when selected
   useEffect(() => {
@@ -573,16 +669,16 @@ export default function DriverHomeScreen({ }: Props) {
   };
 
   const dismissPlaceDetailsPanel = useCallback(() => {
+    placeCameraFocusedIdRef.current = null;
     setSelectedPlace((prev) => {
       setDestination((d) => destinationAfterClosingPlaceDetails(d, prev));
       return null;
     });
   }, []);
 
-  // Handle place marker tap - set as destination
-  const handlePlaceTap = async (place: PlaceForMap) => {
+  const handlePlaceTap = useCallback((place: PlaceForMap) => {
     if (!place.location) return;
-    
+
     setSelectedPlace(place);
     setDestination({
       lat: place.location.lat,
@@ -591,14 +687,43 @@ export default function DriverHomeScreen({ }: Props) {
     });
     setCustomPin(null);
     setSearchResults([]);
-    if (cameraRef.current) {
-      cameraRef.current.setCamera({
-        centerCoordinate: [place.location.lon, place.location.lat],
-        zoomLevel: 16.5,
-        animationDuration: 700,
-      });
+  }, []);
+
+  const handlePlaceMarkerPress = useCallback(
+    (place: PlaceForMap) => {
+      if (selectedPlace?.id === place.id) return;
+
+      handlePlaceTap(place);
+
+      if (!place.location) return;
+      requestCameraMove(
+        {
+          centerCoordinate: [place.location.lon, place.location.lat],
+          zoomLevel: 16.5,
+          animationDuration: 700,
+        },
+        { userInitiated: true, reason: "place-marker-press-once" }
+      );
+      placeCameraFocusedIdRef.current = place.id;
+    },
+    [selectedPlace?.id, handlePlaceTap, requestCameraMove]
+  );
+
+  useEffect(() => {
+    if (selectedPlaceIdFromParams && places.length > 0) {
+      const place = places.find((p) => p.id === selectedPlaceIdFromParams);
+      if (place?.location) {
+        handlePlaceMarkerPress(place);
+      }
     }
-  };
+  }, [selectedPlaceIdFromParams, places, handlePlaceMarkerPress]);
+
+  const showCustomPinOnMap = shouldShowCustomMapPin(customPin, selectedPlace);
+  const showDestinationPinOnMap = shouldShowDestinationMapPin(
+    destination,
+    customPin,
+    selectedPlace
+  );
 
   // Search places - comprehensive search across all fields
   const handleSearch = (query: string) => {
@@ -668,7 +793,7 @@ export default function DriverHomeScreen({ }: Props) {
   };
 
   const getRoute = async () => {
-    await openDrivingRoutePreview({
+    await runOpenDrivingRoutePreviewFromHome({
       navigation,
       destination,
       t,
@@ -694,7 +819,7 @@ export default function DriverHomeScreen({ }: Props) {
       const dest = { lat, lon, name: t("map_selected_destination_label") };
       setCustomPin(null);
       setDestination(dest);
-      await openDrivingRoutePreview({
+      await runOpenDrivingRoutePreviewFromHome({
         navigation,
         destination: dest,
         t,
@@ -793,26 +918,15 @@ export default function DriverHomeScreen({ }: Props) {
     };
   });
 
-  const onRegionDidChange = async (feature: any) => {
-    const [lon, lat] = feature.geometry.coordinates;
-    const newZoom = feature.properties.zoomLevel;
-    setCurrentZoom(newZoom);
-
-    if (lon < 34.72 || lat > 31.43) {
-      cameraRef.current?.setCamera({
-        centerCoordinate: [34.75, 31.39],
-        animationDuration: 600,
-      });
-    }
-  };
-
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      <MapView
+      {mapShellMounted ? (
+      <FocusedMapView
         style={styles.map}
         mapStyle={MAP_STYLE_URL}
+        onRegionWillChange={onRegionWillChange}
         onRegionDidChange={onRegionDidChange}
         onLongPress={handleMapLongPress}
         onPress={(e: any) => {
@@ -832,7 +946,11 @@ export default function DriverHomeScreen({ }: Props) {
               return distance < 0.001;
             });
             if (nearestPlace) {
-              handlePlaceTap(nearestPlace);
+              handlePlaceMarkerPress(nearestPlace);
+              return;
+            }
+            if (trySelectDriverFromMapTap(lat, lon)) {
+              return;
             }
           } catch {
             /* ignore */
@@ -851,27 +969,9 @@ export default function DriverHomeScreen({ }: Props) {
           }
         }}
       >
-        <Camera
-          ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: INITIAL_CENTER,
-            zoomLevel: INITIAL_ZOOM,
-          }}
-          maxBounds={NEGEV_BOUNDS}
-          minZoomLevel={10}
-          maxZoomLevel={18}
-          animationMode="flyTo"
-        />
+        <RegularHomeMapCamera cameraRef={cameraRef} />
 
-        {userLocation && !isPickingMapDestination && (
-          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
-            <View style={styles.userLocationMarker}>
-              <View style={styles.userLocationDot} />
-            </View>
-          </PointAnnotation>
-        )}
-
-        {isPickingMapDestination && pickPreviewCoords && (
+        {showAnnotations && isPickingMapDestination && pickPreviewCoords && (
           <PointAnnotation
             id="map_pick_preview"
             coordinate={[pickPreviewCoords.lon, pickPreviewCoords.lat]}
@@ -882,165 +982,99 @@ export default function DriverHomeScreen({ }: Props) {
           </PointAnnotation>
         )}
 
-        {/* Custom Pin Marker (long-press) */}
-        {customPin && (
+        {showAnnotations && showCustomPinOnMap && customPin && (
           <PointAnnotation id="custom_pin" coordinate={[customPin.lon, customPin.lat]}>
-            <View style={styles.customPinMarker}>
+            <View style={styles.customPinMarker} collapsable={false}>
               <View style={styles.customPinDot} />
             </View>
           </PointAnnotation>
         )}
 
-        {/* Destination Marker (from place selection) */}
-        {destination && !customPin && (
+        {showAnnotations && showDestinationPinOnMap && destination && (
           <PointAnnotation id="destination" coordinate={[destination.lon, destination.lat]}>
-            <View style={styles.destinationMarker}>
+            <View style={styles.destinationMarker} collapsable={false}>
               <Text style={styles.destinationMarkerText}>📍</Text>
             </View>
           </PointAnnotation>
         )}
 
-        {!isPickingMapDestination &&
-          places.map((place) => {
-          if (!place.location) return null;
-          
-          const isSelected = selectedPlace?.id === place.id;
-          const placeIcon = getPlaceIcon(place);
-          
-          // Determine visibility based on zoom level and place type
-          let shouldShow = false;
-          let shouldShowLabel = false;
-          
-          if (place.place_type === 'PUBLIC_SERVICE') {
-            shouldShow = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
-            shouldShowLabel = currentZoom >= PUBLIC_SERVICE_ZOOM_THRESHOLD || isSelected;
-          } else if (place.place_type === 'BUSINESS') {
-            shouldShow = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
-            shouldShowLabel = currentZoom >= BUSINESS_ZOOM_THRESHOLD || isSelected;
-          }
-          
-          if (!shouldShow) return null;
+        {showAnnotations && !isPickingMapDestination ? (
+          <HomeMapPlaceMarkers
+            places={places}
+            currentZoom={markerZoom}
+            anchorLatitude={userLocation?.lat ?? INITIAL_CENTER[1]}
+            selectedPlace={selectedPlace}
+            getPlaceIcon={getPlaceIcon}
+            getPlaceName={getPlaceName}
+            onPlaceTap={handlePlaceMarkerPress}
+            onClusterTap={(lat, lon) =>
+              requestCameraMove(
+                {
+                  centerCoordinate: [lon, lat],
+                  zoomLevel: zoomInTargetForCluster(markerZoom),
+                  animationDuration: 500,
+                },
+                { userInitiated: true, reason: "place-cluster-tap" }
+              )
+            }
+            useRegularHomeTapSplit
+          />
+        ) : null}
 
-          return (
-            <PointAnnotation
-              key={place.id}
-              id={String(place.id)}
-              coordinate={[place.location.lon, place.location.lat]}
-              onSelected={() => {
-                console.log("Place selected:", place.id, place.name);
-                handlePlaceTap(place);
-              }}
-            >
-              <View style={styles.nativeMarkerContainer}>
-                {/* Icon/Marker based on place type - Google Maps style */}
-                {place.place_type === 'PUBLIC_SERVICE' ? (
-                  <View style={[styles.publicServiceMarker, isSelected && styles.markerSelected]}>
-                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
-                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
-                      {/* Icon circle - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.iconContainer, 
-                        isSelected && styles.iconContainerSelected,
-                        { backgroundColor: placeIcon.color }
-                      ]}>
-                        {placeIcon.type === 'mosque' && (
-                          <MaterialCommunityIcons name="mosque" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'school' && (
-                          <Ionicons name="school" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'clinic' && (
-                          <MaterialCommunityIcons name="hospital-building" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'kindergarten' && (
-                          <MaterialCommunityIcons name="baby-face-outline" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'community' && (
-                          <MaterialCommunityIcons name="account-group" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'home' && (
-                          <Ionicons name="home" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                        {placeIcon.type === 'public' && (
-                          <Ionicons name="location" size={isSelected ? 26 : 18} color="#FFFFFF" />
-                        )}
-                      </View>
-                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.pinPoint, 
-                        isSelected && styles.pinPointSelected,
-                        { borderTopColor: placeIcon.color }
-                      ]} />
-                    </View>
-                  </View>
-                ) : (
-                  <View style={[styles.businessMarker, isSelected && styles.markerSelected]}>
-                    {/* Pin container with shadow - צל חזק יותר אם נבחר */}
-                    <View style={[styles.pinContainer, isSelected && styles.pinContainerSelected]}>
-                      {/* Icon circle - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.iconContainer, 
-                        isSelected && styles.iconContainerSelected,
-                        { backgroundColor: placeIcon.color }
-                      ]}>
-                        <Ionicons name="business" size={isSelected ? 24 : 16} color="#FFFFFF" />
-                      </View>
-                      {/* Pin point (triangle pointing down) - גדול יותר אם נבחר */}
-                      <View style={[
-                        styles.pinPoint, 
-                        isSelected && styles.pinPointSelected,
-                        { borderTopColor: placeIcon.color }
-                      ]} />
-                    </View>
-                </View>
-                )}
+        {showAnnotations && userLocation && !isPickingMapDestination && (
+          <PointAnnotation id="user_location" coordinate={[userLocation.lon, userLocation.lat]}>
+            <UserLocationDot zoom={markerZoom} />
+          </PointAnnotation>
+        )}
 
-                {/* Label with icon - Google Maps style */}
-                {shouldShowLabel && (
-                  <View style={[styles.labelWrapper, isSelected && styles.labelSelected]}>
-                    <View style={styles.labelContent}>
-                      {/* Small icon next to text */}
-                      <View style={[styles.labelIconContainer, { backgroundColor: placeIcon.color }]}>
-                        {place.place_type === 'PUBLIC_SERVICE' && (
-                          <>
-                            {placeIcon.type === 'mosque' && (
-                              <MaterialCommunityIcons name="mosque" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'school' && (
-                              <Ionicons name="school" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'clinic' && (
-                              <MaterialCommunityIcons name="hospital-building" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'kindergarten' && (
-                              <MaterialCommunityIcons name="baby-face-outline" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'community' && (
-                              <MaterialCommunityIcons name="account-group" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'home' && (
-                              <Ionicons name="home" size={12} color="#FFFFFF" />
-                            )}
-                            {placeIcon.type === 'public' && (
-                              <Ionicons name="location" size={12} color="#FFFFFF" />
-                            )}
-                          </>
-                        )}
-                        {place.place_type === 'BUSINESS' && (
-                          <Ionicons name="business" size={12} color="#FFFFFF" />
-                        )}
-                      </View>
-                    <Text style={styles.nativeMapLabel} numberOfLines={1}>
-                        {getPlaceName(place)}
-                    </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            </PointAnnotation>
-          );
-        })}
-      </MapView>
+        {showAnnotations &&
+          driverMapItems.map((item) => {
+            if (item.type === "cluster") {
+              const emphasized = item.drivers.some(
+                (d) => d.driver_user_id === selectedDriver?.driver_user_id
+              );
+              return (
+                <PointAnnotation
+                  key={item.id}
+                  id={item.id}
+                  coordinate={[item.lon, item.lat]}
+                  anchor={{ x: 0.5, y: 1 }}
+                  onSelected={() => handleClusterTap(item.lat, item.lon)}
+                >
+                  <RideDriverClusterMarker
+                    count={item.drivers.length}
+                    emphasized={emphasized}
+                    accessibilityLabel={
+                      t("map_driver_cluster_label", { count: item.drivers.length }) ||
+                      `${item.drivers.length} nearby drivers`
+                    }
+                  />
+                </PointAnnotation>
+              );
+            }
+
+            const driver = item.driver;
+            const isDriverSelected =
+              selectedDriver?.driver_user_id === driver.driver_user_id;
+            return (
+              <PointAnnotation
+                key={item.id}
+                id={item.id}
+                coordinate={[item.lon, item.lat]}
+                anchor={{ x: 0.5, y: 1 }}
+                onSelected={() => setSelectedDriver(driver)}
+              >
+                <NearbyDriverTaxiMarker
+                  selected={isDriverSelected}
+                  accessibilityLabel={t("ride_driver_info")}
+                />
+              </PointAnnotation>
+            );
+          })}
+      </FocusedMapView>
+      ) : (
+        <View style={styles.map} />
+      )}
 
       <MapInlineSearch
         value={searchQuery}
@@ -1062,13 +1096,28 @@ export default function DriverHomeScreen({ }: Props) {
           return city || cat || undefined;
         }}
         onSelectPlace={(place) => {
-          handlePlaceTap(place);
+          handlePlaceMarkerPress(place);
           setSearchQuery("");
         }}
         emptyHint={t("start_typing_to_search") || "Start typing to search places..."}
         noResultsText={t("no_places_found") || "No places found"}
         onSearchFocus={dismissPlaceDetailsPanel}
       />
+
+      <TouchableOpacity
+        style={[styles.locateMeFab, { bottom: mapLocateMeFabBottom }]}
+        onPress={() => void handleLocateMePress()}
+        disabled={locateMeLoading}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={t("my_location")}
+      >
+        {locateMeLoading ? (
+          <ActivityIndicator size="small" color="#0f5b63" />
+        ) : (
+          <Ionicons name="locate" size={22} color="#0f5b63" />
+        )}
+      </TouchableOpacity>
 
       <TouchableOpacity
         style={[
@@ -1271,65 +1320,16 @@ export default function DriverHomeScreen({ }: Props) {
               )}
             </View>
 
-            {/* Action buttons: share/save row, then full-width primary CTA */}
-            <View style={styles.actionButtonsBlock}>
-              <View style={styles.actionButtonsRowTop}>
-                <TouchableOpacity style={styles.actionButtonSecondary}>
-                  <Ionicons name="share-outline" size={20} color="#0f5b63" />
-                  <Text style={styles.actionButtonSecondaryText}>
-                    {t("share") || "שיתוף"}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionButtonSecondary}
-                  onPress={handleToggleSave}
-                  disabled={savingPlace || !userId}
-                >
-                  <Ionicons
-                    name={isPlaceSaved ? "bookmark" : "bookmark-outline"}
-                    size={20}
-                    color={isPlaceSaved ? "#0f5b63" : "#0f5b63"}
-                  />
-                  <Text style={styles.actionButtonSecondaryText}>
-                    {isPlaceSaved ? t("saved") || "שמור" : t("save") || "שמירה"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              {destination && (
-                <TouchableOpacity
-                  style={styles.actionButtonPrimaryFull}
-                  onPress={getRoute}
-                  disabled={routeLoading}
-                >
-                  {routeLoading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="navigate-outline" size={20} color="#FFFFFF" />
-                      <Text style={styles.actionButtonPrimaryText}>
-                        {t("start_navigation") || "Start Navigation"}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              )}
-
-              {!destination && (
-                <TouchableOpacity
-                  style={styles.actionButtonPrimaryFull}
-                  onPress={() => {
-                    if (selectedPlace && selectedPlace.location) {
-                      handlePlaceTap(selectedPlace);
-                    }
-                  }}
-                >
-                  <Ionicons name="map-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.actionButtonPrimaryText}>
-                    {t("set_destination") || "Set Destination"}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            <PlaceDetailsActionButtons
+              hasDestination={!!destination}
+              showRideWithDriver={false}
+              routeLoading={routeLoading}
+              isPlaceSaved={isPlaceSaved}
+              savingPlace={savingPlace}
+              canSave={!!userId}
+              onToggleSave={() => void handleToggleSave()}
+              onStartNavigation={() => void getRoute()}
+            />
 
             {/* Announcement Banner */}
             {selectedPlace.announcement && (
@@ -1569,6 +1569,49 @@ export default function DriverHomeScreen({ }: Props) {
           </>
         </Animated.View>
       )}
+
+      <MapPickedDestinationPanel
+        visible={isPickedDestinationActive && !selectedDriver}
+        onDismiss={dismissPickedDestinationPanel}
+        onStartNavigation={() => void getRoute()}
+        onRideWithDriver={() => {}}
+        showRideWithDriver={false}
+        navigationLoading={routeLoading}
+      />
+
+      <DriverInfoPopup
+        visible={!!selectedDriver}
+        driver={selectedDriver}
+        destinationText={
+          rideDestinationInput?.trim() ||
+          destination?.name?.trim() ||
+          (destination
+            ? `${destination.lat.toFixed(5)}, ${destination.lon.toFixed(5)}`
+            : null)
+        }
+        distanceKm={
+          selectedDriver && userLocation
+            ? Number(
+                haversineDistanceKm(
+                  userLocation.lat,
+                  userLocation.lon,
+                  selectedDriver.lat,
+                  selectedDriver.lon
+                )
+              )
+            : selectedDriver?.distance_km ?? null
+        }
+        sending={creatingRideRequest}
+        errorHint={rideSendErrorHint}
+        initialPassengers={ridePassengers}
+        onClose={() => {
+          setSelectedDriver(null);
+          setRideSendErrorHint(null);
+        }}
+        onSendRequest={({ passengers }) => {
+          void handleCreateRideRequest({ passengers });
+        }}
+      />
 
       {/* Language Selector Modal */}
       <Modal
@@ -1818,6 +1861,24 @@ const styles = StyleSheet.create({
     textAlign: 'left',
     letterSpacing: -0.1,
     flex: 1,
+  },
+  locateMeFab: {
+    position: "absolute",
+    right: 20,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1100,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: "rgba(15, 91, 99, 0.14)",
   },
   pickDestinationFab: {
     position: "absolute",

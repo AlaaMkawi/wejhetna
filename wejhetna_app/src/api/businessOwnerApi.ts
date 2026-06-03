@@ -89,12 +89,18 @@ export async function signupBusinessOwner(
 export async function checkNearbyForOwner(
   lat: number,
   lon: number,
-  radius_m = 50
+  radius_m = 50,
+  exclude_place_id?: number
 ): Promise<BusinessOwnerNearbyCheckResponse> {
   const res = await axios.get(
     `${API_BASE_URL}/business-owner/places/nearby`,
     {
-      params: { lat, lon, radius_m },
+      params: {
+        lat,
+        lon,
+        radius_m,
+        ...(exclude_place_id != null ? { exclude_place_id } : {}),
+      },
     }
   );
   return res.data;

@@ -24,14 +24,33 @@ export type RootStackParamList = {
   RegularHome: undefined;
   AdminTabs: { adminUserId: number; role: "ADMIN"; selectedPlaceId?: number };
   AdminDriverDetails: { adminUserId: number; role: "ADMIN"; driver: DriverApplication };
+  AdminVehicleUpdateRequestDetails: {
+    adminUserId: number;
+    role: "ADMIN";
+    requestId: number;
+  };
+  DriverVehicleUpdateRequest: undefined;
+  DriverVehicleRequestsList: undefined;
+  DriverVehicleRequestDetail: { requestId: number };
   BusinessOwnerSignup: { email?: string };
   BusinessOwnerPickLocation: {
-    personalInfo: {
+    personalInfo?: {
       full_name: string;
       username: string;
       email: string;
       phone: string;
       password: string;
+    };
+    /** עדכון מיקום מקום קיים (ניהול עסק / אדמין) */
+    editMode?: {
+      placeId: number;
+      initialLat: number;
+      initialLon: number;
+      editorRole: "ADMIN" | "BUSINESS_OWNER";
+      editorUserId: number;
+      adminPlaceId?: number;
+      adminUserId?: number;
+      fromMap?: boolean;
     };
   };
   BusinessOwnerDetailsForm: {
@@ -100,7 +119,16 @@ export type RootStackParamList = {
     userRole: "ADMIN" | "BUSINESS_OWNER";
     userId: number;
   };
-  ManageMyBusiness: { fromMap?: boolean } | undefined;
+  ManageMyBusiness:
+    | {
+        fromMap?: boolean;
+        /** Admin editing an unowned place — same UX as business owner manage screen. */
+        adminPlaceId?: number;
+        adminUserId?: number;
+        /** נקבע אחרי עדכון מיקום — מכריח רענון מיידי */
+        refreshAfterLocationEdit?: number;
+      }
+    | undefined;
   CreateAdvertisement: undefined;
   Advertisements: undefined;
   AdvertisementDetails: {

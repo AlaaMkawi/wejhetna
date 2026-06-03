@@ -283,6 +283,7 @@ export function rideApiDetailToTranslationKey(detail: string): string | null {
     "Ride is not waiting for verification unlock": "ride_error_verify_unlock_wrong_state",
     "Destination is outside supported service cities":
       "destination_must_be_in_service_cities",
+    vehicle_update_blocked: "driver_vehicle_update_blocked",
   };
   return map[d] ?? null;
 }
@@ -305,7 +306,10 @@ export async function updateDriverAvailability(payload: {
   return parseOrThrow(res, "Failed to update availability");
 }
 
-export async function getDriverAvailability(driver_user_id: number): Promise<{ is_available: boolean }> {
+export async function getDriverAvailability(driver_user_id: number): Promise<{
+  is_available: boolean;
+  vehicle_update_blocked?: boolean;
+}> {
   const id = Math.trunc(Number(driver_user_id));
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Invalid ride request");

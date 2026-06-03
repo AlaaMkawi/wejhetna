@@ -30,5 +30,18 @@ target 'wejhetna_app' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # Link MapLibre Native iOS SDK via Swift Package Manager (required by maplibre-react-native).
+    $MLRN.post_install(installer)
+
+    # Fix for Xcode 26.x fmt consteval build error.
+    # This affects iOS Pods only and does not change Android or package versions.
+    installer.pods_project.targets.each do |target|
+      if target.name == 'fmt'
+        target.build_configurations.each do |config|
+          config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+        end
+      end
+    end
   end
 end

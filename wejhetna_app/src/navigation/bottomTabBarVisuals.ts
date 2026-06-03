@@ -1,9 +1,10 @@
 import { Dimensions, Platform, StyleSheet, TextStyle } from "react-native";
+import { Colors } from "../theme";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
-/** Reference: terracotta active state */
-export const TAB_ACTIVE = "#C65C3D";
+/** Active tab icon + label — brand teal (shared across all role tab bars) */
+export const TAB_ACTIVE = Colors.primary;
 /** Reference: iOS-style inactive gray */
 export const TAB_INACTIVE = "#8E8E93";
 

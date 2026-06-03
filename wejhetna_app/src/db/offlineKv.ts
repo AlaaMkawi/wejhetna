@@ -1,44 +1,46 @@
 /**
- * Typed key-value storage in the offline SQLite DB (single table).
- * Used for small JSON snapshots (navigation route, profile cache).
+ * Simple key-value persistence in offline SQLite (`kv_store` table).
  */
 import { getOfflineSQLite } from "./sqlite";
 
+const KV_TABLE = "kv_store";
 let schemaReady = false;
 
-function ensureSchema(): void {
+function ensureKvSchema(): void {
   if (schemaReady) return;
-  const db = getOfflineSQLite();
-  db.execute(
-    "CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)"
+  getOfflineSQLite().execute(
+    `CREATE TABLE IF NOT EXISTS ${KV_TABLE} (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    )`
   );
   schemaReady = true;
 }
 
 export function kvGet(key: string): string | null {
-  ensureSchema();
-  const r = getOfflineSQLite().execute("SELECT value FROM kv_store WHERE key = ?", [key]);
-  if (r.rows.length === 0) return null;
-  const row = r.rows.item(0);
-  if (!row || row.value == null) return null;
-  return String(row.value);
+  ensureKvSchema();
+  const result = getOfflineSQLite().execute<{ value: string }>(
+    `SELECT value FROM ${KV_TABLE} WHERE key = ? LIMIT 1`,
+    [key]
+  );
+  return result.rows.item(0)?.value ?? null;
 }
 
 export function kvSet(key: string, value: string): void {
-  ensureSchema();
+  ensureKvSchema();
   getOfflineSQLite().execute(
-    "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
+    `INSERT INTO ${KV_TABLE} (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, value]
   );
 }
 
 export function kvDelete(key: string): void {
-  ensureSchema();
-  getOfflineSQLite().execute("DELETE FROM kv_store WHERE key = ?", [key]);
+  ensureKvSchema();
+  getOfflineSQLite().execute(`DELETE FROM ${KV_TABLE} WHERE key = ?`, [key]);
 }
 
-/** Clears all offline KV data (call on logout). */
 export function kvClearAll(): void {
-  ensureSchema();
-  getOfflineSQLite().execute("DELETE FROM kv_store");
+  ensureKvSchema();
+  getOfflineSQLite().execute(`DELETE FROM ${KV_TABLE}`);
 }
