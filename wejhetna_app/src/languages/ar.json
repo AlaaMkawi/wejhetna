@@ -1063,5 +1063,10 @@
       "failed": "تعذّر حذف الإعلان: {{message}}"
     }
   },
-  "city_online_business": "أعمال عبر الإنترنت"
+  "city_online_business": "أعمال عبر الإنترنت",
+  "place_clalit_pharmacy": "صيدلية كلاليت",
+  "place_paz_tel_sheva": "محطة وقود",
+  "place_paz": "محطة وقود",
+  "category_other": "أخرى",
+  "category_test": "روضة"
 }

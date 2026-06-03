@@ -1063,5 +1063,10 @@
       "failed": "מחיקת המודעה נכשלה: {{message}}"
     }
   },
-  "city_online_business": "עסק אונליין"
+  "city_online_business": "עסק אונליין",
+  "place_clalit_pharmacy": "בית מרקחת כללית",
+  "place_paz_tel_sheva": "פז תחנת דלק",
+  "place_paz": "תחנת דלק פז",
+  "category_other": "אחר",
+  "category_test": "גן"
 }

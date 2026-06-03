@@ -30,7 +30,7 @@ class CityResponse(CityBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # =========================
@@ -56,7 +56,7 @@ class CategoryResponse(CategoryBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # =========================
@@ -90,7 +90,7 @@ class LocationResponse(LocationBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # =========================
@@ -173,7 +173,7 @@ class PlaceResponse(PlaceBase):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class AdminPlaceCreate(BaseModel):
@@ -274,7 +274,7 @@ class AdvertisementUserPublicOut(BaseModel):
     full_name: str
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class AdvertisementCreateResponse(BaseModel):
@@ -305,7 +305,7 @@ class AdvertisementPublicOut(BaseModel):
     expires_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class MyAdvertisementOut(BaseModel):
@@ -322,7 +322,7 @@ class MyAdvertisementOut(BaseModel):
     expires_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class AdminPendingAdvertisementOut(BaseModel):
@@ -337,7 +337,7 @@ class AdminPendingAdvertisementOut(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class AdvertisementAdminRequest(BaseModel):
@@ -472,7 +472,7 @@ class DriverRatingOut(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class DriverReportCreateRequest(BaseModel):

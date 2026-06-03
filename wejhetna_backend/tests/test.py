@@ -8,8 +8,15 @@ Set env before importing the app (must run before `main` import):
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+# Allow `python tests/test.py` (IDE) to import `models`, `main`, etc. like pytest does via pytest.ini pythonpath.
+_backend_root = Path(__file__).resolve().parent.parent
+if str(_backend_root) not in sys.path:
+    sys.path.insert(0, str(_backend_root))
 
 # noqa: E402 — env must be set before backend imports
 os.environ["WEJHETNA_SKIP_DB_CREATE_ALL"] = "1"
@@ -2454,3 +2461,7 @@ def test_list_business_owner_requests_invalid_status_filter_400(
     r = client.get("/admin/business-owner/requests?status=NOT_A_STATUS")
     assert r.status_code == 400
     assert r.json()["detail"] == "Invalid status filter"
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v", "--tb=short"]))
