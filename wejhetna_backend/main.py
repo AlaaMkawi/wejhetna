@@ -521,7 +521,7 @@ class UserOut(BaseModel):
 
 class UserListOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     full_name: str
     username: str
@@ -531,6 +531,10 @@ class UserListOut(BaseModel):
     status: str
     rejection_reason: Optional[str] = None
     created_at: datetime
+    # Only populated for DRIVER rows so the existing-users screen can show
+    # the same rating chip that used to live on the new-driver-requests screen.
+    rating_avg: Optional[float] = None
+    rating_count: Optional[int] = None
 
 
 class DriverSignupRequest(BaseModel):
@@ -4502,7 +4506,37 @@ def list_all_users(
                 raise HTTPException(status_code=400, detail="Invalid role filter")
 
         users = q.all()
-        return users
+
+        # Aggregate driver ratings in a single query (avoids N+1) and attach
+        # them to DRIVER rows so the existing-users screen can show the chip.
+        driver_user_ids = [u.id for u in users if u.role == UserRole.DRIVER]
+        rating_map: Dict[int, Tuple[float, int]] = {}
+        if driver_user_ids:
+            agg_rows = (
+                db.query(
+                    DriverRating.driver_user_id,
+                    func.avg(DriverRating.stars),
+                    func.count(DriverRating.id),
+                )
+                .filter(DriverRating.driver_user_id.in_(driver_user_ids))
+                .group_by(DriverRating.driver_user_id)
+                .all()
+            )
+            for driver_user_id, avg_stars, total in agg_rows:
+                rating_map[int(driver_user_id)] = (
+                    float(avg_stars) if avg_stars is not None else 0.0,
+                    int(total or 0),
+                )
+
+        result: List[UserListOut] = []
+        for u in users:
+            out = UserListOut.model_validate(u)
+            if u.role == UserRole.DRIVER:
+                avg, count = rating_map.get(u.id, (0.0, 0))
+                out.rating_avg = round(avg, 2) if count > 0 else None
+                out.rating_count = count
+            result.append(out)
+        return result
     except Exception as e:
         print(f"Error in list_all_users: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching users: {str(e)}")

@@ -150,26 +150,6 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
                 <Ionicons name="mail-outline" size={14} color="#6B7280" style={styles.emailIcon} />
                 <Text style={styles.infoValue} numberOfLines={1}>{item.email}</Text>
               </View>
-
-              {/* ★ average (count) chip — only shown once the driver has at least one rating */}
-              {item.rating_count != null && item.rating_count > 0 ? (
-                <View style={styles.ratingChip}>
-                  <Ionicons name="star" size={12} color="#F59E0B" />
-                  <Text style={styles.ratingChipText}>
-                    {Number(item.rating_avg ?? 0).toFixed(1)}
-                    <Text style={styles.ratingChipCount}>
-                      {"  "}({item.rating_count})
-                    </Text>
-                  </Text>
-                </View>
-              ) : (
-                <View style={[styles.ratingChip, styles.ratingChipMuted]}>
-                  <Ionicons name="star-outline" size={12} color="#9CA3AF" />
-                  <Text style={styles.ratingChipTextMuted}>
-                    {t("admin_driver_no_ratings_short") || "No ratings yet"}
-                  </Text>
-                </View>
-              )}
             </View>
           </View>
         </View>
@@ -225,26 +205,6 @@ export default function AdminDriversScreen({ route, navigation }: Props) {
           </Text>
         </TouchableOpacity>
       </View>
-
-      <TouchableOpacity
-        style={styles.reportsEntry}
-        activeOpacity={0.85}
-        onPress={() => navigation.navigate("AdminDriverReports", { adminUserId, role })}
-      >
-        <View style={styles.reportsEntryIconWrap}>
-          <Ionicons name="flag" size={20} color="#fff" />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.reportsEntryTitle}>
-            {t("admin_reports_entry_title") || "Driver reports"}
-          </Text>
-          <Text style={styles.reportsEntrySubtitle}>
-            {t("admin_reports_entry_subtitle") ||
-              "Review complaints submitted by passengers"}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-      </TouchableOpacity>
 
       {/* Search + sort */}
       <View style={styles.filtersContainer}>
@@ -380,38 +340,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
   },
-  reportsEntry: {
-    marginTop: 12,
-    marginHorizontal: 20,
-    marginBottom: 4,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 14,
-    backgroundColor: "#F8F9FA",
-    borderWidth: 1,
-    borderColor: "rgba(15,91,99,0.2)",
-  },
-  reportsEntryIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#c5322a",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  reportsEntryTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  reportsEntrySubtitle: {
-    marginTop: 2,
-    fontSize: 12,
-    color: "#6B7280",
-  },
   filtersContainer: {
     paddingHorizontal: 20,
     paddingTop: 4,
@@ -545,37 +473,6 @@ const styles = StyleSheet.create({
   emailRow: {
     flexDirection: "row",
     alignItems: "center",
-  },
-  ratingChip: {
-    marginTop: 8,
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    backgroundColor: "#FFF8E6",
-    borderWidth: 1,
-    borderColor: "#F7D67A",
-  },
-  ratingChipMuted: {
-    backgroundColor: "#F3F4F6",
-    borderColor: "#E5E7EB",
-  },
-  ratingChipText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#92400E",
-  },
-  ratingChipTextMuted: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#6B7280",
-  },
-  ratingChipCount: {
-    fontWeight: "600",
-    color: "#92400E",
   },
   emailIcon: {
     marginRight: 6,

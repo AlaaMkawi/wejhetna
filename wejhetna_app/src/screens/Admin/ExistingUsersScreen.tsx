@@ -15,6 +15,7 @@ import {
 import { useTranslation } from "react-i18next";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { RootStackParamList } from "../../navigation/types";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 import { API_BASE_URL } from "../../../config";
 const DARK_TEAL = "#0f5b63";
@@ -28,6 +29,9 @@ export type UserListItem = {
   role: string;
   status: string;
   created_at: string;
+  /** Aggregated from DriverRating — only populated for DRIVER rows. */
+  rating_avg?: number | null;
+  rating_count?: number | null;
 };
 
 type Props = NativeStackScreenProps<RootStackParamList, "ExistingUsers">;
@@ -149,25 +153,53 @@ const loadUsers = useCallback(async () => {
     });
   };
 
-  const renderItem = ({ item }: { item: UserListItem }) => (
-    <TouchableOpacity
-      onPress={() => handleOpenDetails(item)}
-      activeOpacity={0.9}
-    >
-      <View style={styles.card}>
-        <View style={styles.cardContent}>
-          <View style={styles.nameRow}>
-            <Text style={styles.cardTitle}>{item.full_name}</Text>
-            <View style={[styles.roleBadge, { backgroundColor: getRoleColor(item.role) + "20", borderColor: getRoleColor(item.role) }]}>
-              <Text style={[styles.roleText, { color: getRoleColor(item.role) }]}>
-                {getRoleTranslation(item.role)}
-              </Text>
+  const renderItem = ({ item }: { item: UserListItem }) => {
+    const isDriver = item.role === "DRIVER";
+    const ratingCount = item.rating_count ?? 0;
+
+    return (
+      <TouchableOpacity
+        onPress={() => handleOpenDetails(item)}
+        activeOpacity={0.9}
+      >
+        <View style={styles.card}>
+          <View style={styles.cardContent}>
+            <View style={styles.nameRow}>
+              <Text style={styles.cardTitle}>{item.full_name}</Text>
+              <View style={[styles.roleBadge, { backgroundColor: getRoleColor(item.role) + "20", borderColor: getRoleColor(item.role) }]}>
+                <Text style={[styles.roleText, { color: getRoleColor(item.role) }]}>
+                  {getRoleTranslation(item.role)}
+                </Text>
+              </View>
             </View>
+
+            {isDriver && (
+              ratingCount > 0 ? (
+                <View style={styles.ratingChip}>
+                  <Ionicons name="star" size={12} color="#F59E0B" />
+                  <Text style={styles.ratingChipText}>
+                    {Number(item.rating_avg ?? 0).toFixed(1)}
+                    <Text style={styles.ratingChipCount}>
+                      {"  "}({ratingCount})
+                    </Text>
+                  </Text>
+                </View>
+              ) : (
+                <View style={[styles.ratingChip, styles.ratingChipMuted]}>
+                  <Ionicons name="star-outline" size={12} color="#9CA3AF" />
+                  <Text style={styles.ratingChipTextMuted}>
+                    {t("admin_driver_no_ratings_short") || "No ratings yet"}
+                  </Text>
+                </View>
+              )
+            )}
           </View>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
+
+  const showReportsEntry = roleFilter === "ALL" || roleFilter === "DRIVER";
 
   if (loading) {
     return (
@@ -194,6 +226,28 @@ const loadUsers = useCallback(async () => {
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error}</Text>
         </View>
+      )}
+
+      {showReportsEntry && (
+        <TouchableOpacity
+          style={styles.reportsEntry}
+          activeOpacity={0.85}
+          onPress={() => navigation.navigate("AdminDriverReports", { adminUserId, role })}
+        >
+          <View style={styles.reportsEntryIconWrap}>
+            <Ionicons name="flag" size={20} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.reportsEntryTitle}>
+              {t("admin_reports_entry_title") || "Driver reports"}
+            </Text>
+            <Text style={styles.reportsEntrySubtitle}>
+              {t("admin_reports_entry_subtitle") ||
+                "Review complaints submitted by passengers"}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+        </TouchableOpacity>
       )}
 
       {/* Search + Filter */}
@@ -458,6 +512,69 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     lineHeight: 24,
     fontFamily: Platform.OS === "ios" ? "System" : "Roboto",
+  },
+  reportsEntry: {
+    marginTop: 12,
+    marginHorizontal: 20,
+    marginBottom: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 14,
+    backgroundColor: "#F8F9FA",
+    borderWidth: 1,
+    borderColor: "rgba(15,91,99,0.2)",
+  },
+  reportsEntryIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#c5322a",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  reportsEntryTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  reportsEntrySubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  ratingChip: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: "#FFF8E6",
+    borderWidth: 1,
+    borderColor: "#F7D67A",
+  },
+  ratingChipMuted: {
+    backgroundColor: "#F3F4F6",
+    borderColor: "#E5E7EB",
+  },
+  ratingChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#92400E",
+  },
+  ratingChipTextMuted: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#6B7280",
+  },
+  ratingChipCount: {
+    fontWeight: "600",
+    color: "#92400E",
   },
 });
 
