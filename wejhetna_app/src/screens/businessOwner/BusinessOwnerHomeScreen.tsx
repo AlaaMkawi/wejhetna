@@ -71,6 +71,7 @@ import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsAc
 import { PlaceDetailsManageActions } from "../../components/place/PlaceDetailsManageActions";
 import { usePlaceDetailsRideCtaState } from "../../hooks/usePlaceDetailsRideCtaState";
 import { useSyncPlaceDetailsDestination } from "../../hooks/useSyncPlaceDetailsDestination";
+import { sharePlace } from "../../utils/sharePlace";
 
 const MAP_STYLE_URL =
   "https://api.maptiler.com/maps/019b0319-f856-79df-b13b-917c4a28f9a8/style.json?key=Js2mV1WY15ayeXH6ceQP";
@@ -605,6 +606,18 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
       );
     } finally {
       setSavingPlace(false);
+    }
+  };
+
+  const handleSharePlace = async () => {
+    if (!selectedPlace) return;
+    try {
+      await sharePlace(selectedPlace);
+    } catch {
+      appAlert(
+        t("error") || "שגיאה",
+        t("share_failed") || "לא ניתן לשתף את המקום"
+      );
     }
   };
 
@@ -1759,7 +1772,10 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
             </TouchableOpacity>
           </View>
               <View style={styles.bottomSheetHeaderRight}>
-                <TouchableOpacity style={styles.headerIconButton}>
+                <TouchableOpacity
+                  style={styles.headerIconButton}
+                  onPress={() => void handleSharePlace()}
+                >
                   <Ionicons name="share-outline" size={24} color="#000" />
                 </TouchableOpacity>
                 <TouchableOpacity 
@@ -1841,8 +1857,8 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
                 </View>
               )}
 
-              {/* Open/Closed Status (for all businesses) */}
-              {selectedPlace.place_type === "BUSINESS" && (
+              {/* Open/Closed Status */}
+              {(selectedPlace.place_type === "BUSINESS" || selectedPlace.opening_hours) && (
                 <View style={styles.statusRow}>
                   {selectedPlace.opening_hours ? (
                     <View style={[
@@ -1882,6 +1898,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
               isPlaceSaved={isPlaceSaved}
               savingPlace={savingPlace}
               canSave={!!userId}
+              onShare={() => void handleSharePlace()}
               onToggleSave={() => void handleToggleSave()}
               onStartNavigation={() => void getRoute()}
               onRideWithDriver={() => void handleRideWithDriverFromPlaceDetails()}
@@ -1994,7 +2011,7 @@ export default function BusinessOwnerHomeScreen({ navigation }: Props) {
             {/* Details Section - Card Style */}
             <View style={styles.detailsSection}>
               {/* Opening Hours Card - Expandable */}
-              {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
+              {selectedPlace.opening_hours && (
                 <TouchableOpacity
                   style={styles.detailCard}
                   onPress={() => setOpeningHoursExpanded(!openingHoursExpanded)}

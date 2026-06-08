@@ -42,6 +42,7 @@ import { zoomInTargetForCluster } from "../../utils/nearbyDriverClustering";
 import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsActionButtons";
 import { PlaceDetailsManageActions } from "../../components/place/PlaceDetailsManageActions";
 import { useSyncPlaceDetailsDestination } from "../../hooks/useSyncPlaceDetailsDestination";
+import { sharePlace } from "../../utils/sharePlace";
 import { MapPickedDestinationPanel } from "../../components/map/MapPickedDestinationPanel";
 import {
   getOpeningHoursStatusText,
@@ -492,6 +493,18 @@ export default function AdminHomeScreen() {
       );
     } finally {
       setSavingPlace(false);
+    }
+  };
+
+  const handleSharePlace = async () => {
+    if (!selectedPlace) return;
+    try {
+      await sharePlace(selectedPlace);
+    } catch {
+      appAlert(
+        t("error") || "שגיאה",
+        t("share_failed") || "לא ניתן לשתף את המקום"
+      );
     }
   };
 
@@ -1116,7 +1129,10 @@ export default function AdminHomeScreen() {
             </TouchableOpacity>
           </View>
               <View style={styles.bottomSheetHeaderRight}>
-                <TouchableOpacity style={styles.headerIconButton}>
+                <TouchableOpacity
+                  style={styles.headerIconButton}
+                  onPress={() => void handleSharePlace()}
+                >
                   <Ionicons name="share-outline" size={24} color="#000" />
                 </TouchableOpacity>
                 <TouchableOpacity 
@@ -1198,8 +1214,8 @@ export default function AdminHomeScreen() {
                 </View>
               )}
 
-              {/* Open/Closed Status (for all businesses) */}
-              {selectedPlace.place_type === "BUSINESS" && (
+              {/* Open/Closed Status */}
+              {(selectedPlace.place_type === "BUSINESS" || selectedPlace.opening_hours) && (
                 <View style={styles.statusRow}>
                   {selectedPlace.opening_hours ? (
                     <View style={[
@@ -1237,6 +1253,7 @@ export default function AdminHomeScreen() {
               isPlaceSaved={isPlaceSaved}
               savingPlace={savingPlace}
               canSave={!!userId}
+              onShare={() => void handleSharePlace()}
               onToggleSave={() => void handleToggleSave()}
               onStartNavigation={() => void getRoute()}
             />
@@ -1430,7 +1447,7 @@ export default function AdminHomeScreen() {
 
             {/* Details Section - Card Style */}
             <View style={styles.detailsSection}>
-              {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
+              {selectedPlace.opening_hours && (
                 <TouchableOpacity
                   style={styles.detailCard}
                   onPress={() => setOpeningHoursExpanded(!openingHoursExpanded)}

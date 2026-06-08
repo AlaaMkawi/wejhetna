@@ -44,6 +44,7 @@ import {
   zoomInTargetForCluster,
 } from "../../utils/nearbyDriverClustering";
 import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsActionButtons";
+import { sharePlace } from "../../utils/sharePlace";
 import DriverInfoPopup from "../../components/ride/DriverInfoPopup";
 import { MapPickedDestinationPanel } from "../../components/map/MapPickedDestinationPanel";
 import { NearbyDriverTaxiMarker } from "../../components/map/NearbyDriverTaxiMarker";
@@ -650,6 +651,18 @@ export default function DriverHomeScreen({ }: Props) {
     }
   };
 
+  const handleSharePlace = async () => {
+    if (!selectedPlace) return;
+    try {
+      await sharePlace(selectedPlace);
+    } catch {
+      appAlert(
+        t("error") || "שגיאה",
+        t("share_failed") || "לא ניתן לשתף את המקום"
+      );
+    }
+  };
+
   const handleMapLongPress = async (e: any) => {
     try {
       const coords = e?.geometry?.coordinates;
@@ -1204,7 +1217,10 @@ export default function DriverHomeScreen({ }: Props) {
             </TouchableOpacity>
           </View>
               <View style={styles.bottomSheetHeaderRight}>
-                <TouchableOpacity style={styles.headerIconButton}>
+                <TouchableOpacity
+                  style={styles.headerIconButton}
+                  onPress={() => void handleSharePlace()}
+                >
                   <Ionicons name="share-outline" size={24} color="#000" />
                 </TouchableOpacity>
                 <TouchableOpacity 
@@ -1288,8 +1304,8 @@ export default function DriverHomeScreen({ }: Props) {
                 </View>
               )}
 
-              {/* Open/Closed Status (for all businesses) */}
-              {selectedPlace.place_type === "BUSINESS" && (
+              {/* Open/Closed Status */}
+              {(selectedPlace.place_type === "BUSINESS" || selectedPlace.opening_hours) && (
                 <View style={styles.statusRow}>
                   {selectedPlace.opening_hours ? (
                     <View style={[
@@ -1327,6 +1343,7 @@ export default function DriverHomeScreen({ }: Props) {
               isPlaceSaved={isPlaceSaved}
               savingPlace={savingPlace}
               canSave={!!userId}
+              onShare={() => void handleSharePlace()}
               onToggleSave={() => void handleToggleSave()}
               onStartNavigation={() => void getRoute()}
             />
@@ -1427,7 +1444,7 @@ export default function DriverHomeScreen({ }: Props) {
             {/* Details Section - Card Style */}
             <View style={styles.detailsSection}>
               {/* Opening Hours Card - Expandable */}
-              {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
+              {selectedPlace.opening_hours && (
                 <TouchableOpacity
                   style={styles.detailCard}
                   onPress={() => setOpeningHoursExpanded(!openingHoursExpanded)}

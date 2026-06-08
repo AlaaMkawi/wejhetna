@@ -48,7 +48,12 @@ export function PlaceDetailsActionButtons({
   return (
     <View style={styles.actionButtonsBlock}>
       <View style={styles.actionButtonsRowTop}>
-        <TouchableOpacity style={styles.actionButtonSecondary} onPress={onShare} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={styles.actionButtonSecondary}
+          onPress={() => onShare?.()}
+          activeOpacity={0.85}
+          disabled={!onShare}
+        >
           <Ionicons name="share-outline" size={20} color="#0f5b63" />
           <Text style={styles.actionButtonSecondaryText}>
             {t("share") || "שיתוף"}

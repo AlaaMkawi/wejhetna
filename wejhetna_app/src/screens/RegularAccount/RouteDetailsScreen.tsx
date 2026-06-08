@@ -2084,7 +2084,10 @@ export default function RouteDetailsScreen({ route, navigation }: RouteDetailsRo
 
         {isActive && userLocation && (
           <TouchableOpacity
-            style={styles.recenterButton}
+            style={[
+              styles.recenterButton,
+              !isOnline && styles.recenterButtonOffline,
+            ]}
             onPress={() => {
               if (!mapCallbacksAllowed() || !userLocation || !cameraRef.current) return;
               setIsFollowingUser(true);
@@ -2695,6 +2698,11 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
     zIndex: 1000,
+  },
+  // Push the recenter button up when the yellow offline banner is shown above
+  // the route info card so it no longer covers the banner text.
+  recenterButtonOffline: {
+    bottom: 264,
   },
   recenterButtonText: {
     marginLeft: 6,

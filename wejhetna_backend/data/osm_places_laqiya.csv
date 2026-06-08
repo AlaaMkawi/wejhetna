@@ -1,0 +1,13 @@
+@id,@type,name,name:ar,name:he,amenity,shop,office,healthcare,tourism,leisure,craft,opening_hours,phone,contact:phone,website,addr:street,addr:housenumber,@lat,@lon
+laqiya_001,node,Desert Embroidery Visitor Center,مركز زوار نسج الصحراء,מרכז מבקרים רקמת המדבר,,,,,,museum,,,Mo-Su 09:30-16:00,0546734621,,,,31.32051870255038,34.85929560770351
+laqiya_002,node,Laqiya Grand Mosque,مسجد اللقية الكبير,מסגד לקיה הגדול,place_of_worship,,,,,,,,24/7,,,,,31.31898199122325,34.858438157403405
+laqiya_003,node,Al Itisam Mosque,مسجد الاعتصام,מסגד אלאעתסאם,place_of_worship,,,,,,,,24/7,,,,,31.323333781826786,34.862310527827916
+laqiya_004,node,Al Zaytoun Restaurant,مطعم الزيتون,מסעדת אלזיתון,fast_food,,,,,,,,Mo-Su 18:00-23:59,,,,,31.32416776296698,34.859195728412196
+laqiya_005,node,Mexicani,مكسيكاني,מקסיקני,fast_food,,,,,,,,Mo-Su 09:30-23:30,089550401,,,,31.325438577165244,34.86141172998657
+laqiya_006,node,Laqiya Community Center Downtown,المركز الجماهيري اللقية وسط البلد,המרכז הקהילתי לקיה מרכז היישוב,community_centre,,,,,,,,Mo-Fr 08:00-20:00,,,,,31.324876359931697,34.87243591389874
+laqiya_007,node,The Rock Gym,ذا روك جيم,דה רוק ג׳ים,,,,,,sports_centre,,,Mo-Su 09:00-21:00,0506565236,,,,31.323239465542542,34.87378176916721
+laqiya_008,node,Al Sharq Restaurant,مطعم الشرق,מסעדת אלשרק,fast_food,,,,,,,,Mo-Su 09:00-23:00,,,,,31.327459795089293,34.876968748410576
+laqiya_009,node,Hekaya Cafe,حكاية كافية,קפה חקאיה,cafe,,,,,,,,Mo-Su 05:00-23:00,0528610656,,,,31.32524860378187,34.868910840341464
+laqiya_010,node,Sidreh Negev Weaving Laqiya,سدرة نسيج النقب اللقية,אריגת הנגב לקיה Sidreh,,,,,,,,craft,Mo-Fr 08:00-14:00,086519883,,,,31.326401758414463,34.86683721604866
+laqiya_011,node,Iqraa School,مدرسة اقرأ,בית ספר אקראא,school,,,,,,,,Mo-Fr 08:00-15:00,,,,,31.316664885049846,34.86422083115421
+laqiya_012,node,Top Med Pharm,توب ميد فارم أدوية وتجميل,טופ מיד פארם תרופות וקוסמטיקה,,,,clinic,,,,,Mo-Su 08:00-22:00,086162010,,,,31.327189477400587,34.875654685188046

@@ -36,6 +36,7 @@ import { MapPickedDestinationChoiceModal } from "../../components/map/MapPickedD
 import { PlaceDetailsActionButtons } from "../../components/place/PlaceDetailsActionButtons";
 import { usePlaceDetailsRideCtaState } from "../../hooks/usePlaceDetailsRideCtaState";
 import { useSyncPlaceDetailsDestination } from "../../hooks/useSyncPlaceDetailsDestination";
+import { sharePlace } from "../../utils/sharePlace";
 import {
   clusterNearbyDrivers,
   zoomInTargetForCluster,
@@ -742,6 +743,18 @@ export default function RegularHomeScreen({}: Props) {
       );
     } finally {
       setSavingPlace(false);
+    }
+  };
+
+  const handleSharePlace = async () => {
+    if (!selectedPlace) return;
+    try {
+      await sharePlace(selectedPlace);
+    } catch {
+      appAlert(
+        t("error") || "שגיאה",
+        t("share_failed") || "לא ניתן לשתף את המקום"
+      );
     }
   };
 
@@ -1595,7 +1608,10 @@ export default function RegularHomeScreen({}: Props) {
                 </TouchableOpacity>
               </View>
               <View style={styles.bottomSheetHeaderRight}>
-                <TouchableOpacity style={styles.headerIconButton}>
+                <TouchableOpacity
+                  style={styles.headerIconButton}
+                  onPress={() => void handleSharePlace()}
+                >
                   <Ionicons name="share-outline" size={24} color="#000" />
                 </TouchableOpacity>
                 <TouchableOpacity 
@@ -1677,8 +1693,8 @@ export default function RegularHomeScreen({}: Props) {
                 </View>
               )}
 
-              {/* Open/Closed Status (for all businesses) */}
-              {selectedPlace.place_type === "BUSINESS" && (
+              {/* Open/Closed Status */}
+              {(selectedPlace.place_type === "BUSINESS" || selectedPlace.opening_hours) && (
                 <View style={styles.statusRow}>
                   {selectedPlace.opening_hours ? (
                     <View style={[
@@ -1717,6 +1733,7 @@ export default function RegularHomeScreen({}: Props) {
               isPlaceSaved={isPlaceSaved}
               savingPlace={savingPlace}
               canSave={!!userId}
+              onShare={() => void handleSharePlace()}
               onToggleSave={() => void handleToggleSave()}
               onStartNavigation={() => void getRoute()}
               onRideWithDriver={() => void handleRideWithDriverFromPlaceDetails()}
@@ -1819,7 +1836,7 @@ export default function RegularHomeScreen({}: Props) {
             {/* Details Section - Card Style */}
             <View style={styles.detailsSection}>
               {/* Opening Hours Card - Expandable */}
-              {selectedPlace.place_type === "BUSINESS" && selectedPlace.opening_hours && (
+              {selectedPlace.opening_hours && (
                 <TouchableOpacity
                   style={styles.detailCard}
                   onPress={() => setOpeningHoursExpanded(!openingHoursExpanded)}
